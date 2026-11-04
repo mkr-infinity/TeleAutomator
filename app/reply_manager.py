@@ -32,6 +32,7 @@ class ReplyManager:
         self.privacy = privacy_manager
         self.generator = reply_generator
         self._client: Any = None
+        self.typing_delay: float = getattr(config, "typing_delay_seconds", 2.0)
 
         # Restore saved style if stored in DB
         saved_style = self.db.get_state("reply_style")
@@ -508,12 +509,23 @@ class ReplyManager:
         return None
 
     async def _send_reply(self, chat_id: int, reply_to_msg_id: int, text: str) -> bool:
-        """Send message using Telethon client with error handling."""
+        """Send message using Telethon client with human typing delay and error handling."""
         if not self._client:
             logger.error("Cannot send reply: Telegram client is not attached.")
             return False
 
         try:
+            # Natural human typing delay before sending message
+            if self.typing_delay > 0:
+                try:
+                    if hasattr(self._client, "action") and callable(self._client.action):
+                        async with self._client.action(chat_id, "typing"):
+                            await asyncio.sleep(self.typing_delay)
+                    else:
+                        await asyncio.sleep(self.typing_delay)
+                except Exception:
+                    await asyncio.sleep(self.typing_delay)
+
             await self._client.send_message(chat_id, text, reply_to=reply_to_msg_id)
             self.safety.mark_reply_sent(chat_id)
             logger.info(f"Successfully sent reply to chat {chat_id}.")

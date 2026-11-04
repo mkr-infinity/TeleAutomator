@@ -59,6 +59,7 @@ def test_approval_mode_and_commands(tmp_path: Path):
             allowed_private_chats={100},
             global_cooldown_seconds=0,
             per_chat_cooldown_seconds=0,
+            typing_delay_seconds=0.0,
             data_dir=tmp_path,
         )
         db = Database(tmp_path / "app.db")

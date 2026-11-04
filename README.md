@@ -52,15 +52,19 @@
    - [Approval-Required Mode](#82-approval-required-mode)
    - [Restricted Automation Mode](#83-restricted-automation-mode)
 9. [Configurable Response Styles](#9-configurable-response-styles)
-10. [Saved Messages Remote Control Center (Commands Reference)](#10-saved-messages-remote-control-center-commands-reference)
-11. [Custom Keyword Triggers](#11-custom-keyword-triggers)
-12. [Group Chat Automation & Mention Safety](#12-group-chat-automation--mention-safety)
-13. [Security, Privacy & Anti-Scam Protection](#13-security-privacy--anti-scam-protection)
-14. [Testing & Verification](#14-testing--verification)
-15. [Troubleshooting & FAQ](#15-troubleshooting--faq)
-16. [Roadmap](#16-roadmap)
-17. [Contribution Guidelines](#17-contribution-guidelines)
-18. [License & Attribution](#18-license--attribution)
+10. [AI System Prompt Customization, Typing Delay & Tone Matching](#10-ai-system-prompt-customization-typing-delay--tone-matching)
+    - [10.1 Where & How to Modify the System Prompt](#101-where--how-to-modify-the-system-prompt)
+    - [10.2 2-Second Natural Typing Delay](#102-2-second-natural-typing-delay)
+    - [10.3 Exact Tone, Slang & Language Matching (Hindi, Hinglish, English)](#103-exact-tone-slang--language-matching-hindi-hinglish-english)
+11. [Saved Messages Remote Control Center (Commands Reference)](#11-saved-messages-remote-control-center-commands-reference)
+12. [Custom Keyword Triggers](#12-custom-keyword-triggers)
+13. [Group Chat Automation & Mention Safety](#13-group-chat-automation--mention-safety)
+14. [Security, Privacy & Anti-Scam Protection](#14-security-privacy--anti-scam-protection)
+15. [Testing & Verification](#15-testing--verification)
+16. [Troubleshooting & FAQ](#16-troubleshooting--faq)
+17. [Roadmap](#17-roadmap)
+18. [Contribution Guidelines](#18-contribution-guidelines)
+19. [License & Attribution](#19-license--attribution)
 
 ---
 
@@ -90,7 +94,10 @@ Unlike basic third-party bot scripts created via `@BotFather`, TeleAutomator ope
 ## 3. Features
 
 - **Context-Aware AI Generation**: Understands the conversational flow, considering replied-to messages and recent chat history when authorized.
-- **Bilingual Hindi & English Matching**: Automatically replies in casual Hindi/Hinglish to Hindi messages, and in natural casual English to English messages.
+- **Exact Tone & Slang Matching**: Dynamically matches the sender's energy, brevity, humor, and casual slang without sounding like a robotic assistant.
+- **Bilingual Hindi, Hinglish & English Mirroring**: Replies in authentic Hinglish or pure Devanagari Hindi when addressed in Hindi, and natural casual English when spoken to in English.
+- **2-Second Typing Indicator & Delay**: Activates Telegram's native typing status indicator for 2 seconds before dispatching replies, authentically emulating human texting speed.
+- **Dynamic System Prompt Customization**: Modify the AI persona anytime via `system_prompt.txt` in the root folder or remotely via `/prompt` and `/setprompt` in Saved Messages.
 - **Human Alibi Persona (Zero AI Disclosure)**: If asked *"are you an AI?"* or *"what model is this?"*, it laughs it off naturally like a human texting on their phone.
 - **Configurable Response Styles**: Switch on the fly between `casual`, `concise`, `formal`, or `humorous` response styles.
 - **Draft-Only Mode**: Set via CLI (`--draft`, `--mode draft`) or from Telegram (`/mode draft`) to log suggested drafts without sending.
@@ -129,8 +136,8 @@ Unlike basic third-party bot scripts created via `@BotFather`, TeleAutomator ope
         ▼                         ▼                         ▼
  [ Mode: Draft ]        [ Mode: Approval ]         [ Mode: Restricted Auto ]
    Logs draft to          Sends draft to             Verifies cooldown & limits,
-   terminal & DB          Saved Messages for         then sends reply via
-   (Never sends)          manual /approve <id>       MTProto client
+   terminal & DB          Saved Messages for         shows typing indicator (2s),
+   (Never sends)          manual /approve <id>       then sends via MTProto
 ```
 
 ---
@@ -352,7 +359,83 @@ Switch between response styles at any time via Saved Messages or CLI:
 
 ---
 
-## 10. Saved Messages Remote Control Center (Commands Reference)
+## 10. AI System Prompt Customization, Typing Delay & Tone Matching
+
+TeleAutomator is designed to sound indistinguishable from you texting on your phone.
+
+### 10.1 Where & How to Modify the System Prompt
+
+You can customize the AI persona, rules, and reply instructions through two simple methods:
+
+#### Method A: Direct File Edit (`system_prompt.txt`) — Project Root
+The core AI persona is stored in plain text right in the project root:
+```text
+teleautomator/
+└── system_prompt.txt     <--- Edit this file directly
+```
+- Open and edit `system_prompt.txt` using any text editor:
+  ```bash
+  nano system_prompt.txt
+  ```
+- **Hot-Reloaded Dynamically**: TeleAutomator automatically re-reads `system_prompt.txt` on every message event. You **do not** need to restart the application or Docker container for changes to take effect!
+- If the file is ever deleted or blank, TeleAutomator safely falls back to built-in default instructions.
+
+#### Method B: Live Remote Modification from Saved Messages (`/prompt` & `/setprompt`)
+You don't need SSH, terminal access, or code editors to change instructions while on the move:
+- **View active prompt**: Send `/prompt` to your Telegram **Saved Messages**.
+- **Update prompt on the fly**: Send `/setprompt <your new rules>`:
+  ```text
+  /setprompt You are texting as Kaif. Be super chill, use short 1-line replies, and mirror Hindi or Hinglish slang.
+  ```
+- **Reset to default**: Send `/setprompt reset` to clear overrides and restore from `system_prompt.txt`.
+
+---
+
+### 10.2 2-Second Natural Typing Delay
+
+Real humans do not respond instantaneously within 20 milliseconds. To prevent machine-like speed and avoid raising suspicion:
+- Before dispatching any message (in restricted auto or approval mode), TeleAutomator triggers Telegram's native typing status indicator (`...typing` in the header) for **2 seconds**:
+  ```python
+  async with client.action(chat_id, "typing"):
+      await asyncio.sleep(2.0)
+  ```
+- **Configurable via `.env`**:
+  ```env
+  # Delay in seconds to show typing indicator before sending (default: 2.0)
+  TYPING_DELAY_SECONDS=2
+  ```
+- You can tune this value up or down depending on your preference.
+
+---
+
+### 10.3 Exact Tone, Slang & Language Matching (Hindi, Hinglish, English)
+
+TeleAutomator dynamically analyzes each incoming message and mirrors the sender:
+
+1. **Exact Language & Dialect Mirroring**:
+   - **Hinglish (Latin Script)**:
+     - *Incoming:* `"bhai kidhar hai, aaj milna hai kya?"`
+     - *Reply:* `"kuch nahi bhai bas ghar pe hu, bata kab aana hai"`
+   - **Pure Hindi (Devanagari Script)**:
+     - *Incoming:* `"नमस्ते, आप कैसे हैं?"`
+     - *Reply:* `"नमस्ते! सब बढ़िया है, आप बताइए?"`
+   - **Casual English**:
+     - *Incoming:* `"yo did you check that commit?"`
+     - *Reply:* `"yeah just saw it, looks good"`
+   - **Code-Switching**: If a friend mixes Hindi and English words, TeleAutomator mirrors the exact same mix naturally.
+
+2. **Energy & Brevity Matching**:
+   - If the user sends a brief 2-word greeting (`"sup bro"`), the reply stays equally brief and casual (`"chilling, what's up"`).
+   - Never outputs corporate fluff, polite bot greetings (*"Certainly! I would be glad to help..."*), or bulleted lists.
+
+3. **Human Alibi Persona (Anti-AI Denial)**:
+   - If someone asks: *"Are you an AI?"*, *"Is this ChatGPT?"*, or *"Which model are you?"*, TeleAutomator strictly denies it and laughs it off naturally:
+     - English: *"lol what? no, it's me haha typing from my phone"*
+     - Hinglish: *"bhai mai hi hu, kya bol raha hai haha 😂"*
+
+---
+
+## 11. Saved Messages Remote Control Center (Commands Reference)
 
 You can manage TeleAutomator entirely from your phone by sending commands to your **Saved Messages** chat (your chat with yourself):
 
@@ -382,7 +465,7 @@ You can manage TeleAutomator entirely from your phone by sending commands to you
 
 ---
 
-## 11. Custom Keyword Triggers
+## 12. Custom Keyword Triggers
 
 Create instant, non-AI rule-based auto-replies directly from Telegram:
 
@@ -406,7 +489,7 @@ Send:
 
 ---
 
-## 12. Group Chat Automation & Mention Safety
+## 13. Group Chat Automation & Mention Safety
 
 To prevent noisy groups from being spammed:
 - **`/mentiononly on` (Default)**: In groups, TeleAutomator **only** replies when someone explicitly tags your `@username` or replies directly to one of your messages.
@@ -414,7 +497,7 @@ To prevent noisy groups from being spammed:
 
 ---
 
-## 13. Security, Privacy & Anti-Scam Protection
+## 14. Security, Privacy & Anti-Scam Protection
 
 - **Zero Outgoing Links**: AI replies are passed through regex sanitizers that remove all URLs before transmission.
 - **Scam Link Detection**: Inbound messages containing crypto traps or invite links (`t.me/+...`) are discarded immediately.
@@ -425,7 +508,7 @@ To prevent noisy groups from being spammed:
 
 ---
 
-## 14. Testing & Verification
+## 15. Testing & Verification
 
 Run the automated test suite locally:
 ```bash
@@ -447,7 +530,7 @@ All 25 automated unit tests run against mocked Telegram and AI services without 
 
 ---
 
-## 15. Troubleshooting & FAQ
+## 16. Troubleshooting & FAQ
 
 ### Q1: Why does it say "Chat not allowlisted"?
 By default, TeleAutomator does not message anyone until they are added to the allowlist. Send `/allowchat <id>` in your Saved Messages or add the ID to `ALLOWED_PRIVATE_CHATS` in `.env`.
@@ -458,16 +541,24 @@ Run `./start.sh --draft` or send `/mode draft` in your Saved Messages.
 ### Q3: How do I change how the AI speaks?
 Send `/style concise`, `/style casual`, `/style formal`, or `/style humorous` in Saved Messages.
 
-### Q4: Can I run this on my laptop and VPS at the same time?
+### Q4: Where is the system prompt and how do I modify it?
+The base system prompt is in `system_prompt.txt` in the root folder. You can edit it directly with `nano system_prompt.txt` (changes take effect immediately without restart), or modify it remotely anytime by sending `/setprompt <new prompt>` in your **Saved Messages**.
+
+### Q5: How does the typing delay work?
+TeleAutomator emulates human typing by showing Telegram's native typing indicator for 2 seconds before sending replies. You can adjust this duration in `.env` using `TYPING_DELAY_SECONDS=2` (or set it to `0` to disable).
+
+### Q6: Can I run this on my laptop and VPS at the same time?
 **No**. Do not run the same session simultaneously from two different locations, as Telegram may terminate the active session.
 
 ---
 
-## 16. Roadmap
+## 17. Roadmap
 
 - [x] MTProto Telegram Client with personal account identity
 - [x] Google Gemini AI integration with casual tone and Hindi/English matching
 - [x] Human alibi persona (anti-AI disclosure)
+- [x] 2-Second natural typing indicator delay
+- [x] Dynamic system prompt file and remote chat editing
 - [x] Anti-scam and phishing link filter
 - [x] Zero outgoing link sanitizer
 - [x] Saved Messages remote control center
@@ -482,7 +573,7 @@ Send `/style concise`, `/style casual`, `/style formal`, or `/style humorous` in
 
 ---
 
-## 17. Contribution Guidelines
+## 18. Contribution Guidelines
 
 Contributions are welcome from authorized contributors:
 1. Fork the repository.
@@ -493,7 +584,7 @@ Contributions are welcome from authorized contributors:
 
 ---
 
-## 18. License & Attribution
+## 19. License & Attribution
 
 ```text
 Repository: https://github.com/mkr-infinity/TeleAutomator
