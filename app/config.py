@@ -146,8 +146,12 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         raise ValueError(f"Invalid AI_PROVIDER: '{ai_provider}'. Must be 'local', 'gemini', or 'openai'.")
 
     ai_api_key = os.getenv("AI_API_KEY", "").strip()
-    if ai_enabled and ai_provider != "local" and not ai_api_key:
-        raise ValueError(f"AI_ENABLED is true with provider '{ai_provider}', but AI_API_KEY is not set.")
+    if ai_enabled and ai_provider != "local":
+        if not ai_api_key or ai_api_key == "your_gemini_api_key_here":
+            raise ValueError(
+                f"AI_ENABLED is true with provider '{ai_provider}', but AI_API_KEY is not set. "
+                "Please add your Gemini API key from https://aistudio.google.com/app/apikey into .env."
+            )
     if ai_api_key:
         register_secret(ai_api_key)
 

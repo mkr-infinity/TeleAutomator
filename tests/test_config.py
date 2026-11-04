@@ -32,6 +32,7 @@ def test_valid_config(monkeypatch):
     monkeypatch.setenv("TG_SESSION_MODE", "local")
     monkeypatch.setenv("ALLOWED_PRIVATE_CHATS", "111,222")
     monkeypatch.setenv("REPLY_MODE", "draft")
+    monkeypatch.setenv("AI_ENABLED", "false")
 
     cfg = load_config()
     assert cfg.api_id == 1234567
@@ -44,10 +45,20 @@ def test_valid_config(monkeypatch):
     assert "abcdef0123456789abcdef0123456789" not in rep
 
 
-def test_string_session_missing_secret(monkeypatch):
+def test_gemini_config(monkeypatch):
     monkeypatch.setenv("TG_API_ID", "1234567")
     monkeypatch.setenv("TG_API_HASH", "abcdef0123456789abcdef0123456789")
-    monkeypatch.setenv("TG_SESSION_MODE", "string")
-    monkeypatch.setenv("TG_SESSION_STRING", "")
-    with pytest.raises(ValueError, match="TG_SESSION_STRING is empty"):
+    monkeypatch.setenv("AI_ENABLED", "true")
+    monkeypatch.setenv("AI_PROVIDER", "gemini")
+    monkeypatch.setenv("AI_API_KEY", "your_gemini_api_key_here")
+
+    # Placeholder API key should raise helpful ValueError
+    with pytest.raises(ValueError, match="AI_API_KEY is not set"):
         load_config()
+
+    # Valid API key succeeds
+    monkeypatch.setenv("AI_API_KEY", "AIzaSyTestValidGeminiKey1234567890")
+    cfg = load_config()
+    assert cfg.ai_enabled is True
+    assert cfg.ai_provider == "gemini"
+    assert "AIzaSyTestValidGeminiKey1234567890" not in repr(cfg)
