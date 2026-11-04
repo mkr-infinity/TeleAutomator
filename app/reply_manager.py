@@ -49,7 +49,14 @@ class ReplyManager:
         """Process an incoming message that has passed initial message filters."""
         # Sanitize incoming text before passing to generator
         clean_text = self.privacy.sanitize_text(text)
-        draft = self.generator.generate(sender_name=sender_name, incoming_text=clean_text)
+
+        # Check for custom keyword trigger rule before calling AI
+        matched_rule = self.db.match_keyword_rule(clean_text)
+        if matched_rule:
+            logger.info(f"[KEYWORD TRIGGER] Matched custom trigger rule for chat {chat_id}.")
+            draft = matched_rule
+        else:
+            draft = self.generator.generate(sender_name=sender_name, incoming_text=clean_text)
 
         if not draft:
             logger.warning(f"No draft generated for chat {chat_id}.")
@@ -196,6 +203,10 @@ class ReplyManager:
                 "• `/pause <time>` - Snooze replies (e.g. `/pause 2h`, `/pause 30m`)\n"
                 "• `/resume` - Resume operations (clears pause & stop)\n"
                 "• `/stop` - Emergency stop switch (halts all replies)\n\n"
+                "*Custom Keyword Auto-Replies:*\n"
+                "• `/addrule <word> => <reply>` - Auto-reply when a word is detected\n"
+                "• `/delrule <word>` - Delete keyword trigger\n"
+                "• `/rules` - List all active custom keyword triggers\n\n"
                 "*Chat & Group Management:*\n"
                 "• `/chats` - View all allowlisted private contacts & groups\n"
                 "• `/allowchat <id>` - Allow a contact or group directly from Telegram\n"
@@ -211,6 +222,41 @@ class ReplyManager:
                 "• `/prompt` - View active system prompt\n"
                 "• `/setprompt <text>` - Update system prompt on the fly"
             )
+
+        if cmd in ("/rules", "/listrules"):
+            rules = self.db.list_keyword_rules()
+            if not rules:
+                return "📋 *Custom Keyword Triggers:* (none configured)\nUse `/addrule <word> => <reply>` to create one!"
+            lines = ["📋 *Custom Keyword Triggers:*"]
+            for r in rules:
+                lines.append(f"• If text contains *'{r['keyword']}'* ➜ \"{r['reply']}\"")
+            lines.append("\n_Use `/delrule <word>` to remove a trigger._")
+            return "\n".join(lines)
+
+        if cmd == "/addrule":
+            raw_args = text[len(cmd_parts[0]):].strip()
+            # Support formats: <keyword> => <reply> or <keyword> : <reply>
+            sep = "=>" if "=>" in raw_args else (":" if ":" in raw_args else None)
+            if not sep:
+                return (
+                    "Usage: `/addrule <keyword> => <reply>`\n"
+                    "Example: `/addrule pricing => We are updating our packages, will send details soon!`"
+                )
+            kw, reply = raw_args.split(sep, 1)
+            kw, reply = kw.strip(), reply.strip()
+            if not kw or not reply:
+                return "Error: Both keyword and reply must be non-empty."
+            self.db.add_keyword_rule(kw, reply)
+            return f"✅ Keyword rule added!\n• When message contains: *'{kw}'*\n• Client will reply: \"{reply}\""
+
+        if cmd == "/delrule":
+            if len(cmd_parts) < 2:
+                return "Usage: `/delrule <keyword>`"
+            kw = " ".join(cmd_parts[1:]).strip()
+            ok = self.db.delete_keyword_rule(kw)
+            if ok:
+                return f"🗑️ Keyword trigger rule for *'{kw}'* has been deleted."
+            return f"Rule for *'{kw}'* not found."
 
         if cmd in ("/chats", "/allowlist", "/listchats"):
             priv, grps = self.privacy.get_all_allowed_chats()

@@ -26,6 +26,13 @@ def test_sensitive_content_detection(tmp_path: Path):
     assert safety.is_sensitive("Hello, are we still meeting today at 5?") is False
 
 
+def test_scam_link_detection(tmp_path: Path):
+    safety = create_safety(tmp_path)
+    assert safety.is_scam_or_suspicious("Join our channel t.me/+AbCdEfGhIj for 100x signals!") is True
+    assert safety.is_scam_or_suspicious("Claim your free airdrop tokens now: https://bit.ly/claim") is True
+    assert safety.is_scam_or_suspicious("Hey, are we still meeting tomorrow?") is False
+
+
 def test_duplicate_prevention(tmp_path: Path):
     safety = create_safety(tmp_path)
     chat_id = 1001

@@ -122,7 +122,8 @@ def test_approval_mode_and_commands(tmp_path: Path):
         assert "Rahul" in name_res
         assert generator.prompt_manager.owner_name == "Rahul"
 
-        # 6. /setprompt
+        # 6. /setprompt (use tmp_path file to avoid modifying root system_prompt.txt)
+        generator.prompt_manager.prompt_file = tmp_path / "system_prompt.txt"
         prompt_res = await mgr.handle_control_command("/setprompt You are a chill friend.")
         assert "updated" in prompt_res.lower()
         assert "chill friend" in generator.prompt_manager.system_instructions
@@ -140,5 +141,19 @@ def test_approval_mode_and_commands(tmp_path: Path):
         # 9. /removechat
         rem_res = await mgr.handle_control_command("/removechat 555666")
         assert "removed" in rem_res.lower()
+
+        # 10. Keyword trigger rules (/addrule, /rules, /delrule)
+        rule_add = await mgr.handle_control_command("/addrule portfolio => Check out my github profile!")
+        assert "rule added" in rule_add.lower()
+
+        rules_list = await mgr.handle_control_command("/rules")
+        assert "portfolio" in rules_list
+
+        # Test trigger matching in incoming message
+        assert db.match_keyword_rule("Hey can I see your portfolio please?") == "Check out my github profile!"
+
+        rule_del = await mgr.handle_control_command("/delrule portfolio")
+        assert "deleted" in rule_del.lower()
+        assert db.match_keyword_rule("portfolio") is None
 
     asyncio.run(_run())

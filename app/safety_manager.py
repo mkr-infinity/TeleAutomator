@@ -21,6 +21,14 @@ SENSITIVE_CONTENT_PATTERNS = [
     re.compile(r"\b(?:your code is|security code is)\b", re.IGNORECASE),
 ]
 
+# Patterns matching scammer links, crypto traps, and suspicious URL shorteners
+SCAM_AND_SPAM_PATTERNS = [
+    re.compile(r"t\.me\/(?:\+|joinchat\/)", re.IGNORECASE),
+    re.compile(r"\b(?:airdrop|crypto bonus|free usdt|claim reward|investment opportunity|profit guaranteed|binance bonus|free btc|doubler|fast profit|earn \$)\b", re.IGNORECASE),
+    re.compile(r"https?:\/\/(?:bit\.ly|tinyurl|t\.co|goo\.gl|cutt\.ly|rb\.gy|is\.gd|shorturl\.at)\b", re.IGNORECASE),
+    re.compile(r"(?:https?:\/\/|www\.)\S+.*?\b(?:win|claim|free|bonus|reward|investment|crypto|earn)\b", re.IGNORECASE),
+]
+
 
 class SafetyManager:
     """Enforces cooldowns, rate limits, sensitive message detection, and emergency stop."""
@@ -112,6 +120,15 @@ class SafetyManager:
         if not text:
             return False
         for pattern in SENSITIVE_CONTENT_PATTERNS:
+            if pattern.search(text):
+                return True
+        return False
+
+    def is_scam_or_suspicious(self, text: str) -> bool:
+        """Check if message contains scam invite links, crypto bait, or phishing patterns."""
+        if not text:
+            return False
+        for pattern in SCAM_AND_SPAM_PATTERNS:
             if pattern.search(text):
                 return True
         return False

@@ -84,9 +84,12 @@ class MessageFilter:
                 if not is_mentioned:
                     return False, "Group message does not mention or reply to your account"
 
-        # 8. Check sensitive content / OTPs
+        # 8. Check sensitive content / OTPs & Scammer links
         if self.safety.is_sensitive(raw_text):
             return False, "Message contains sensitive OTP or security keywords"
+
+        if self.safety.is_scam_or_suspicious(raw_text):
+            return False, "Message contains suspicious scam or phishing link pattern"
 
         # 9. Duplicate check
         message_id = getattr(event, "id", 0)

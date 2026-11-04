@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -48,6 +49,12 @@ class Database:
                 CREATE TABLE IF NOT EXISTS runtime_state (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS keyword_rules (
+                    keyword TEXT PRIMARY KEY,
+                    reply TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 """
             )
@@ -126,3 +133,39 @@ class Database:
                 (key,),
             ).fetchone()
             return str(row["value"]) if row else default
+
+    def add_keyword_rule(self, keyword: str, reply: str) -> None:
+        """Add or update custom trigger keyword and reply."""
+        clean_kw = keyword.strip().lower()
+        with self._get_connection() as conn:
+            conn.execute(
+                "INSERT INTO keyword_rules (keyword, reply) VALUES (?, ?) "
+                "ON CONFLICT(keyword) DO UPDATE SET reply = excluded.reply",
+                (clean_kw, reply.strip()),
+            )
+
+    def delete_keyword_rule(self, keyword: str) -> bool:
+        """Delete custom keyword rule."""
+        clean_kw = keyword.strip().lower()
+        with self._get_connection() as conn:
+            cursor = conn.execute("DELETE FROM keyword_rules WHERE keyword = ?", (clean_kw,))
+            return cursor.rowcount > 0
+
+    def list_keyword_rules(self) -> List[Dict[str, str]]:
+        """List all active custom keyword rules."""
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT keyword, reply FROM keyword_rules ORDER BY keyword ASC").fetchall()
+            return [{"keyword": r["keyword"], "reply": r["reply"]} for r in rows]
+
+    def match_keyword_rule(self, text: str) -> Optional[str]:
+        """Check if message contains any configured trigger keywords."""
+        if not text:
+            return None
+        lower_text = text.lower()
+        rules = self.list_keyword_rules()
+        for rule in rules:
+            kw = rule["keyword"]
+            # Word boundary or substring match
+            if re.search(r"\b" + re.escape(kw) + r"\b", lower_text) or kw in lower_text:
+                return rule["reply"]
+        return None

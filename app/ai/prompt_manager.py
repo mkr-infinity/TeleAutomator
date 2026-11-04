@@ -91,6 +91,17 @@ class PromptManager:
         text = re.sub(r"^```[a-z]*\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
 
+        # If model generated multiple bullet choices or "Option 1:", take the single clean human line
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if lines:
+            first_line = lines[0]
+            first_line = re.sub(r"^[\*\-\•\d\.\:\s]+(?:option\s*\d*[\:\.\s]*)?", "", first_line, flags=re.IGNORECASE).strip()
+            if len(first_line) > 2:
+                text = first_line
+
+        # STRICT SAFETY: Never allow AI to output URLs or links
+        text = re.sub(r"https?:\/\/\S+|t\.me\/\S+|www\.\S+", "", text)
+
         return text.strip()
 
     def build_user_prompt(self, sender_name: str, incoming_text: str) -> str:
