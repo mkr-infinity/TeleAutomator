@@ -175,3 +175,76 @@ def test_approval_mode_and_commands(tmp_path: Path):
         assert generator.style == "casual"
 
     asyncio.run(_run())
+
+
+def test_adaptive_delay_group_and_private(tmp_path: Path):
+    """Verify adaptive randomized delay across group chats, private DMs, and text complexity."""
+    cfg = AppConfig(
+        api_id=123,
+        api_hash="dummy_hash",
+        min_delay_seconds=5.0,
+        max_delay_seconds=60.0,
+        data_dir=tmp_path,
+    )
+    db = Database(tmp_path / "app.db")
+    safety = SafetyManager(cfg, db)
+    privacy = PrivacyManager(cfg, database=db)
+    generator = ReplyGenerator(cfg)
+    mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+    # 1. Group chat (chat_id < 0) should stay within group range (5 to 25s)
+    group_chat_id = -1001234567890
+    for _ in range(20):
+        group_delay = mgr.calculate_adaptive_delay(group_chat_id, "Sounds good bro!")
+        assert 5.0 <= group_delay <= 25.0, f"Group delay out of range: {group_delay}"
+
+    # 2. Private 1-on-1 chat (chat_id > 0) stays within DM range (10 to 60s)
+    private_chat_id = 987654321
+    for _ in range(20):
+        dm_delay = mgr.calculate_adaptive_delay(private_chat_id, "Hey Alice, how are you doing?")
+        assert 5.0 <= dm_delay <= 60.0, f"Private delay out of range: {dm_delay}"
+
+    # 3. Disabled delay returns 0.0
+    zero_cfg = AppConfig(
+        api_id=123,
+        api_hash="dummy_hash",
+        min_delay_seconds=0.0,
+        max_delay_seconds=0.0,
+        data_dir=tmp_path,
+    )
+    zero_mgr = ReplyManager(zero_cfg, db, safety, privacy, generator)
+    assert zero_mgr.calculate_adaptive_delay(group_chat_id, "yo") == 0.0
+    assert zero_mgr.calculate_adaptive_delay(private_chat_id, "yo") == 0.0
+
+
+def test_send_reply_abort_on_emergency_stop(tmp_path: Path):
+    """Verify _send_reply aborts without sending if emergency stop is triggered."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            min_delay_seconds=0.0,
+            max_delay_seconds=0.0,
+            typing_delay_seconds=0.0,
+            data_dir=tmp_path,
+        )
+        db = Database(tmp_path / "app.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        mock_client = AsyncMock()
+        mgr.set_telegram_client(mock_client)
+
+        # Trigger emergency stop
+        safety.set_emergency_stop(True)
+
+        # Attempt to send reply with mock delay
+        mgr.min_delay = 0.05
+        mgr.max_delay = 0.05
+        sent = await mgr._send_reply(100, 1, "test message", adaptive_delay=True)
+        assert sent is False
+        mock_client.send_message.assert_not_called()
+
+    asyncio.run(_run())

@@ -33,12 +33,16 @@ def test_valid_config(monkeypatch):
     monkeypatch.setenv("ALLOWED_PRIVATE_CHATS", "111,222")
     monkeypatch.setenv("REPLY_MODE", "draft")
     monkeypatch.setenv("AI_ENABLED", "false")
+    monkeypatch.setenv("MIN_REPLY_DELAY_SECONDS", "8")
+    monkeypatch.setenv("MAX_REPLY_DELAY_SECONDS", "45")
 
     cfg = load_config()
     assert cfg.api_id == 1234567
     assert cfg.session_mode == "local"
     assert cfg.allowed_private_chats == {111, 222}
     assert cfg.reply_mode == "draft"
+    assert cfg.min_delay_seconds == 8.0
+    assert cfg.max_delay_seconds == 45.0
 
     # Verify secret is not exposed in repr
     rep = repr(cfg)

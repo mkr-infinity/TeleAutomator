@@ -76,6 +76,8 @@ class AppConfig:
     per_chat_cooldown_seconds: int = 60
     max_message_length: int = 1000
     typing_delay_seconds: float = 2.0
+    min_delay_seconds: float = 5.0
+    max_delay_seconds: float = 60.0
 
     # Paths
     data_dir: Path = Path("data")
@@ -164,8 +166,10 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         per_chat_cooldown = max(0, int(os.getenv("PER_CHAT_COOLDOWN_SECONDS", "60")))
         max_length = max(10, int(os.getenv("MAX_MESSAGE_LENGTH", "1000")))
         typing_delay = max(0.0, float(os.getenv("TYPING_DELAY_SECONDS", "2.0")))
+        min_delay = max(0.0, float(os.getenv("MIN_REPLY_DELAY_SECONDS", "5.0")))
+        max_delay = max(min_delay, float(os.getenv("MAX_REPLY_DELAY_SECONDS", "60.0")))
     except ValueError as e:
-        raise ValueError(f"Invalid rate limit or message length configuration: {e}")
+        raise ValueError(f"Invalid rate limit or message delay configuration: {e}")
 
     data_dir = Path(os.getenv("DATA_DIR", "data"))
 
@@ -191,5 +195,7 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         per_chat_cooldown_seconds=per_chat_cooldown,
         max_message_length=max_length,
         typing_delay_seconds=typing_delay,
+        min_delay_seconds=min_delay,
+        max_delay_seconds=max_delay,
         data_dir=data_dir,
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from typing import Any, Optional
 
 from app.ai.reply_generator import ReplyGenerator
@@ -33,6 +34,8 @@ class ReplyManager:
         self.generator = reply_generator
         self._client: Any = None
         self.typing_delay: float = getattr(config, "typing_delay_seconds", 2.0)
+        self.min_delay: float = getattr(config, "min_delay_seconds", 5.0)
+        self.max_delay: float = getattr(config, "max_delay_seconds", 60.0)
 
         # Restore saved style if stored in DB
         saved_style = self.db.get_state("reply_style")
@@ -163,7 +166,7 @@ class ReplyManager:
                 logger.warning(f"[AUTO REPLY SUPPRESSED] Chat {chat_id}: {reason}")
                 return
 
-            await self._send_reply(chat_id, message_id, draft)
+            await self._send_reply(chat_id, message_id, draft, adaptive_delay=True)
 
     async def _notify_approval_needed(
         self,
@@ -484,7 +487,7 @@ class ReplyManager:
             if not can_send:
                 return f"⚠️ Cannot send draft #{approval_id}: {reason}"
 
-            success = await self._send_reply(item["chat_id"], item["reply_to_msg_id"], item["draft_text"])
+            success = await self._send_reply(item["chat_id"], item["reply_to_msg_id"], item["draft_text"], adaptive_delay=False)
             if success:
                 self.db.update_approval_status(approval_id, "sent")
                 return f"✅ Draft #{approval_id} sent successfully."
@@ -508,23 +511,84 @@ class ReplyManager:
 
         return None
 
-    async def _send_reply(self, chat_id: int, reply_to_msg_id: int, text: str) -> bool:
-        """Send message using Telethon client with human typing delay and error handling."""
+    def calculate_adaptive_delay(self, chat_id: int, reply_text: str = "", incoming_text: str = "") -> float:
+        """Calculate human-like randomized delay (5-60s) adapting to group vs DM and message complexity."""
+        if self.min_delay <= 0 and self.max_delay <= 0:
+            return 0.0
+
+        is_group = chat_id < 0
+
+        # Group chats move quickly in public channels: tighter delay window (5-25s)
+        # 1-on-1 private DMs are relaxed personal chats: broader delay window (10-60s)
+        if is_group:
+            low = max(self.min_delay, 5.0)
+            high = min(self.max_delay, 25.0)
+            if low > high:
+                low = high
+        else:
+            low = max(self.min_delay, 10.0)
+            high = max(low, self.max_delay)
+
+        delay = random.uniform(low, high)
+
+        # Content length adaptation
+        content_len = len(reply_text)
+        if content_len < 25:
+            # Short punchy responses skew faster
+            delay = max(self.min_delay, delay - random.uniform(2.0, 5.0))
+        elif content_len > 100:
+            # Longer thoughtful responses take more formulation time
+            delay = min(self.max_delay, delay + random.uniform(3.0, 8.0))
+
+        return round(max(self.min_delay, min(self.max_delay, delay)), 2)
+
+    async def _send_reply(
+        self,
+        chat_id: int,
+        reply_to_msg_id: int,
+        text: str,
+        adaptive_delay: bool = True,
+    ) -> bool:
+        """Send message using Telethon client with adaptive human reading/typing delay and error handling."""
         if not self._client:
             logger.error("Cannot send reply: Telegram client is not attached.")
             return False
 
         try:
-            # Natural human typing delay before sending message
-            if self.typing_delay > 0:
+            # Calculate human-like delay adapting to group/DM environment
+            if adaptive_delay and (self.min_delay > 0 or self.max_delay > 0):
+                total_delay = self.calculate_adaptive_delay(chat_id, text)
+            else:
+                total_delay = self.typing_delay
+
+            if total_delay > 0:
+                # Realistic human simulation: pause for reading/thinking, then show typing action
+                typing_duration = min(total_delay, max(2.0, min(6.0, len(text) * 0.05)))
+                reading_delay = max(0.0, total_delay - typing_duration)
+
+                env_type = "Group" if chat_id < 0 else "Private DM"
+                logger.info(
+                    f"[{env_type} Delay] Waiting {total_delay:.1f}s (reading: {reading_delay:.1f}s, typing: {typing_duration:.1f}s) before replying to chat {chat_id}."
+                )
+
+                # Phase 1: Reading/thinking pause
+                if reading_delay > 0:
+                    await asyncio.sleep(reading_delay)
+
+                # Abort if emergency stop was triggered during reading delay
+                if self.safety.is_emergency_stopped:
+                    logger.warning(f"Reply to chat {chat_id} aborted: emergency stop triggered during delay.")
+                    return False
+
+                # Phase 2: Active typing indicator
                 try:
                     if hasattr(self._client, "action") and callable(self._client.action):
                         async with self._client.action(chat_id, "typing"):
-                            await asyncio.sleep(self.typing_delay)
+                            await asyncio.sleep(typing_duration)
                     else:
-                        await asyncio.sleep(self.typing_delay)
+                        await asyncio.sleep(typing_duration)
                 except Exception:
-                    await asyncio.sleep(self.typing_delay)
+                    await asyncio.sleep(typing_duration)
 
             await self._client.send_message(chat_id, text, reply_to=reply_to_msg_id)
             self.safety.mark_reply_sent(chat_id)

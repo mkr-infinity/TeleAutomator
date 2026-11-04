@@ -54,7 +54,7 @@
 9. [Configurable Response Styles](#9-configurable-response-styles)
 10. [AI System Prompt Customization, Typing Delay & Tone Matching](#10-ai-system-prompt-customization-typing-delay--tone-matching)
     - [10.1 Where & How to Modify the System Prompt](#101-where--how-to-modify-the-system-prompt)
-    - [10.2 2-Second Natural Typing Delay](#102-2-second-natural-typing-delay)
+    - [10.2 Adaptive Randomized Human Delay (5 to 60 Seconds)](#102-adaptive-randomized-human-delay-5-to-60-seconds)
     - [10.3 Exact Tone, Slang & Language Matching (Hindi, Hinglish, English)](#103-exact-tone-slang--language-matching-hindi-hinglish-english)
 11. [Saved Messages Remote Control Center (Commands Reference)](#11-saved-messages-remote-control-center-commands-reference)
 12. [Custom Keyword Triggers](#12-custom-keyword-triggers)
@@ -96,7 +96,7 @@ Unlike basic third-party bot scripts created via `@BotFather`, TeleAutomator ope
 - **Context-Aware AI Generation**: Understands the conversational flow, considering replied-to messages and recent chat history when authorized.
 - **Exact Tone & Slang Matching**: Dynamically matches the sender's energy, brevity, humor, and casual slang without sounding like a robotic assistant.
 - **Bilingual Hindi, Hinglish & English Mirroring**: Replies in authentic Hinglish or pure Devanagari Hindi when addressed in Hindi, and natural casual English when spoken to in English.
-- **2-Second Typing Indicator & Delay**: Activates Telegram's native typing status indicator for 2 seconds before dispatching replies, authentically emulating human texting speed.
+- **Adaptive Randomized Human Delay (5 to 60s)**: Emulates real human typing and reading pauses (5-25s in group chats, 10-60s in private DMs), dynamically adapting to conversation pace and message complexity.
 - **Dynamic System Prompt Customization**: Modify the AI persona anytime via `system_prompt.txt` in the root folder or remotely via `/prompt` and `/setprompt` in Saved Messages.
 - **Human Alibi Persona (Zero AI Disclosure)**: If asked *"are you an AI?"* or *"what model is this?"*, it laughs it off naturally like a human texting on their phone.
 - **Configurable Response Styles**: Switch on the fly between `casual`, `concise`, `formal`, or `humorous` response styles.
@@ -135,9 +135,9 @@ Unlike basic third-party bot scripts created via `@BotFather`, TeleAutomator ope
         ┌────────────┴────────────┐
         ▼                         ▼                         ▼
  [ Mode: Draft ]        [ Mode: Approval ]         [ Mode: Restricted Auto ]
-   Logs draft to          Sends draft to             Verifies cooldown & limits,
-   terminal & DB          Saved Messages for         shows typing indicator (2s),
-   (Never sends)          manual /approve <id>       then sends via MTProto
+   Logs draft to          Sends draft to             Verifies limits & cooldown,
+   terminal & DB          Saved Messages for         waits adaptive delay (5-60s)
+   (Never sends)          manual /approve <id>       with typing, then sends via MTProto
 ```
 
 ---
@@ -391,20 +391,33 @@ You don't need SSH, terminal access, or code editors to change instructions whil
 
 ---
 
-### 10.2 2-Second Natural Typing Delay
+### 10.2 Adaptive Randomized Human Delay (5 to 60 Seconds)
 
-Real humans do not respond instantaneously within 20 milliseconds. To prevent machine-like speed and avoid raising suspicion:
-- Before dispatching any message (in restricted auto or approval mode), TeleAutomator triggers Telegram's native typing status indicator (`...typing` in the header) for **2 seconds**:
-  ```python
-  async with client.action(chat_id, "typing"):
-      await asyncio.sleep(2.0)
-  ```
-- **Configurable via `.env`**:
-  ```env
-  # Delay in seconds to show typing indicator before sending (default: 2.0)
-  TYPING_DELAY_SECONDS=2
-  ```
-- You can tune this value up or down depending on your preference.
+Real humans do not respond instantaneously within milliseconds, nor do they type at a constant fixed interval. TeleAutomator applies a randomized, adaptive delay ranging between **5 and 60 seconds** that dynamically adjusts to the chat environment:
+
+1. **Environment & Chat Type Adaptation**:
+   - **Group Chats (`chat_id < 0`)**: Public group chats are fast-paced. Stalling for a minute makes replies feel outdated. TeleAutomator dynamically tightens the delay bracket to **5 to 25 seconds** so you keep up with the conversation flow.
+   - **Private 1-on-1 Direct Messages (`chat_id > 0`)**: Personal chats are more relaxed. Delays naturally spread across **10 to 60 seconds**, mimicking someone seeing a notification, glancing at it, and typing a response.
+
+2. **Content Length & Complexity Scaling**:
+   - **Short Replies (< 25 chars)**: Casual greetings (*"yo"*, *"haan bhai"*, *"sure"*) skew faster within the bracket.
+   - **Longer Explanations (> 100 chars)**: Multi-sentence answers naturally take longer to formulate and type.
+
+3. **Two-Phase Human Simulation (Reading Pause + Typing Action)**:
+   - Rather than broadcasting the `...typing` indicator for 40 seconds straight (which looks fake), TeleAutomator splits the wait:
+     - **Phase 1 (Thinking / Reading)**: Silent pause while the user "reads" the message.
+     - **Phase 2 (Active Typing)**: Activates Telegram's native `...typing` indicator for the final 2 to 6 seconds before sending.
+
+4. **Emergency Stop Protection**:
+   - If an emergency `/stop` command is received in Saved Messages while a message is in its reading delay, the reply is immediately canceled.
+
+5. **Configuration in `.env`**:
+   ```env
+   # Minimum and maximum randomized delay in seconds (default: 5 to 60)
+   MIN_REPLY_DELAY_SECONDS=5
+   MAX_REPLY_DELAY_SECONDS=60
+   TYPING_DELAY_SECONDS=2
+   ```
 
 ---
 
@@ -544,8 +557,8 @@ Send `/style concise`, `/style casual`, `/style formal`, or `/style humorous` in
 ### Q4: Where is the system prompt and how do I modify it?
 The base system prompt is in `system_prompt.txt` in the root folder. You can edit it directly with `nano system_prompt.txt` (changes take effect immediately without restart), or modify it remotely anytime by sending `/setprompt <new prompt>` in your **Saved Messages**.
 
-### Q5: How does the typing delay work?
-TeleAutomator emulates human typing by showing Telegram's native typing indicator for 2 seconds before sending replies. You can adjust this duration in `.env` using `TYPING_DELAY_SECONDS=2` (or set it to `0` to disable).
+### Q5: How does the adaptive delay work?
+TeleAutomator emulates realistic human behavior by choosing a randomized delay between 5 and 60 seconds. It automatically adapts to the environment: group chats get tighter delays (5-25s) to keep up with active banter, while private 1-on-1 chats use a more relaxed spread (10-60s). It splits the time into an unread reading pause followed by an active `...typing` indicator for the final 2-6 seconds. You can customize the range in `.env` using `MIN_REPLY_DELAY_SECONDS=5` and `MAX_REPLY_DELAY_SECONDS=60`.
 
 ### Q6: Can I run this on my laptop and VPS at the same time?
 **No**. Do not run the same session simultaneously from two different locations, as Telegram may terminate the active session.
@@ -557,7 +570,8 @@ TeleAutomator emulates human typing by showing Telegram's native typing indicato
 - [x] MTProto Telegram Client with personal account identity
 - [x] Google Gemini AI integration with casual tone and Hindi/English matching
 - [x] Human alibi persona (anti-AI disclosure)
-- [x] 2-Second natural typing indicator delay
+- [x] Adaptive randomized human delay (5-60s) adapting to groups and DMs
+- [x] Native Telegram typing status simulation
 - [x] Dynamic system prompt file and remote chat editing
 - [x] Anti-scam and phishing link filter
 - [x] Zero outgoing link sanitizer
