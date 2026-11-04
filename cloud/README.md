@@ -138,11 +138,15 @@ When running in `REPLY_MODE=approval`:
 2. Simply reply in Saved Messages:
    - `/approve 12` — Dispatches the message through your personal account.
    - `/reject 12` — Discards the draft.
-   - `/status` — Displays remote server uptime and health.
+   - `/status` — Displays remote server uptime, identity name, and health.
    - `/auto on` — Temporarily authorizes automatic sending for low-risk messages.
    - `/auto off` — Revokes automatic sending.
+   - `/pause <duration>` — Snoozes automated replies (e.g. `/pause 2h`, `/pause 45m`).
+   - `/resume` — Re-enables messaging after a pause or stop.
+   - `/name <name>` — Changes your identity name dynamically.
+   - `/prompt` — Views active system instructions from your phone.
+   - `/setprompt <text>` — Updates system prompt on the VPS without SSH access!
    - `/stop` — Emergency pause switch to immediately cut off all outgoing messages.
-   - `/resume` — Re-enables messaging after a pause.
 
 ---
 

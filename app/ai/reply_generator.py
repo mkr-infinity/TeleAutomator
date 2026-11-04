@@ -20,7 +20,7 @@ def create_ai_provider(config: AppConfig) -> AIProvider:
 
     if config.ai_provider == "gemini":
         logger.info("Initializing Google Gemini AI provider.")
-        return GeminiProvider(api_key=config.ai_api_key, model=config.ai_model or "gemini-1.5-flash")
+        return GeminiProvider(api_key=config.ai_api_key, model=config.ai_model or "gemini-3.5-flash")
 
     if config.ai_provider == "openai":
         logger.info("Initializing OpenAI AI provider.")
@@ -38,12 +38,20 @@ class ReplyGenerator:
         self.provider = provider or create_ai_provider(config)
         self.prompt_manager = PromptManager()
 
+    def set_owner_name(self, name: str) -> None:
+        """Propagate owner name to prompt manager."""
+        self.prompt_manager.set_owner_name(name)
+
     def generate(self, sender_name: str, incoming_text: str) -> str:
         """Generate a draft reply text."""
         prompt = self.prompt_manager.build_user_prompt(sender_name, incoming_text)
         try:
             draft = self.provider.generate_reply(prompt, self.prompt_manager.system_instructions)
-            return draft.strip()
+            return self.prompt_manager.clean_reply(draft)
         except Exception as e:
             logger.error(f"Failed to generate draft reply: {e}")
-            return ""
+            # Natural human fallback if external API is temporarily unavailable
+            lower = incoming_text.lower()
+            if any(w in lower for w in ("bhai", "kaisa", "kya", "ha", "haan", "kaise")):
+                return "thoda busy hu bhai, thodi der me message karta hu"
+            return "got your message, tied up right now but will get back shortly!"

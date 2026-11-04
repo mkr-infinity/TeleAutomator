@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 
+import re
 from pathlib import Path
 
 
@@ -11,22 +12,27 @@ from pathlib import Path
 # =============================================================================
 # Users: You can customize your AI persona directly by editing:
 #   system_prompt.txt  (in the project root directory)
-#
-# Any changes saved to system_prompt.txt are loaded immediately!
+# Or from Telegram Saved Messages by sending:
+#   /setprompt <your instructions>
 # =============================================================================
 
 DEFAULT_SYSTEM_INSTRUCTIONS = """You are acting as me in my personal Telegram chat.
-Reply to the incoming message exactly the way a real human texts a friend or colleague.
+Reply to incoming messages exactly the way a real human friend texts.
 
-KEY RULES:
-1. NEVER sound like a chatbot, AI, or customer support agent.
-2. NEVER say things like "Certainly!", "I'd be glad to help", "How can I assist you today?", or "As an AI...".
-3. Keep it brief and natural (1 to 2 short sentences max, often just a few words).
-4. Match the tone, language, and vibe of the person texting me (e.g. casual, direct, relaxed).
-5. If someone asks "how are you" or "what's up", reply casually like "doing good, what's up with you?" or "all good, what's going on?".
-6. If someone asks for plans or questions requiring my personal schedule, say: "got your message, will check and get back to you soon!"
-7. NEVER invent facts about my life, make financial commitments, or sign agreements.
-8. Output ONLY the exact text of the reply. No quotation marks, no preamble."""
+CORE PERSONALITY & RULES:
+1. IDENTITY: You are replying directly as me. Never mention being an AI, assistant, bot, or automated program.
+2. TONE: Casual, relaxed, and genuinely friendly. Text like a real human texting from a phone.
+3. LANGUAGE MATCHING:
+   - If the sender writes in Hindi or Hinglish, reply in natural casual Hindi/Hinglish (e.g., "haan bhai bolo", "sab badhiya, tum batao", "thoda busy hu, baad me karta hu").
+   - If the sender writes in English, reply in natural casual English.
+4. STRICTLY FORBIDDEN:
+   - NEVER output brackets [ ], braces { }, or parentheses ( ) containing explanations or metadata.
+   - NEVER output labels like "Me:", "AI:", or "Reply:".
+   - NEVER output formal greetings like "Certainly!", "I'd be happy to help", or "How can I assist you?".
+   - NEVER output code blocks, JSON, or formatting tags.
+5. BREVITY: Keep it very short (usually 1-2 short sentences, sometimes just a few words).
+6. PRIVACY & SAFETY: Never make financial promises, commitments, or invent private facts.
+Output ONLY the raw text message ready to be sent to the recipient."""
 
 
 class PromptManager:
@@ -36,9 +42,16 @@ class PromptManager:
         self,
         prompt_file: Path | str | None = "system_prompt.txt",
         system_instructions: str = DEFAULT_SYSTEM_INSTRUCTIONS,
+        owner_name: str = "Kaif",
     ):
         self.prompt_file = Path(prompt_file) if prompt_file else None
         self._default_instructions = system_instructions
+        self.owner_name = owner_name
+
+    def set_owner_name(self, name: str) -> None:
+        """Update owner name fetched from Telegram account or configuration."""
+        if name and name.strip():
+            self.owner_name = name.strip()
 
     @property
     def system_instructions(self) -> str:
@@ -52,10 +65,38 @@ class PromptManager:
                 pass
         return self._default_instructions
 
+    def save_system_instructions(self, new_instructions: str) -> bool:
+        """Persist updated system instructions to system_prompt.txt."""
+        if not self.prompt_file:
+            return False
+        try:
+            self.prompt_file.write_text(new_instructions.strip(), encoding="utf-8")
+            return True
+        except Exception:
+            return False
+
+    def clean_reply(self, raw_text: str) -> str:
+        """Remove any accidental AI meta-commentary, labels, or brackets."""
+        text = raw_text.strip().strip('"').strip("'")
+
+        # Strip prefixes like "Kaif:", "Me:", "AI:", "Reply:"
+        text = re.sub(r"^(?:me|ai|reply|assistant|" + re.escape(self.owner_name) + r"):\s*", "", text, flags=re.IGNORECASE)
+
+        # Remove bracketed/parenthesized meta comments like [replying in Hindi] or (as an AI...)
+        text = re.sub(r"\[[^\]]*\]", "", text)
+        text = re.sub(r"\{[^\}]*\}", "", text)
+        text = re.sub(r"\((?:note|disclaimer|as an ai|ai)[^\)]*\)", "", text, flags=re.IGNORECASE)
+
+        # Strip markdown code fences if model accidentally wrapped output
+        text = re.sub(r"^```[a-z]*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+
+        return text.strip()
+
     def build_user_prompt(self, sender_name: str, incoming_text: str) -> str:
-        """Create prompt containing message context."""
+        """Create prompt containing message context and dynamic owner identity."""
         return (
-            f"Incoming message from {sender_name}:\n"
+            f"You are {self.owner_name}. {sender_name} sent you this message:\n"
             f'"{incoming_text}"\n\n'
-            f"Write a natural human text reply:"
+            f"Reply as {self.owner_name} (casual human text, matching language, no AI talk):"
         )

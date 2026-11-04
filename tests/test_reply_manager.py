@@ -105,7 +105,26 @@ def test_approval_mode_and_commands(tmp_path: Path):
         assert safety.is_emergency_stopped is True
 
         resume_res = await mgr.handle_control_command("/resume")
-        assert "DEACTIVATED" in resume_res
+        assert "RESUMED" in resume_res or "DEACTIVATED" in resume_res
         assert safety.is_emergency_stopped is False
+
+        # 4. /pause 2h
+        pause_res = await mgr.handle_control_command("/pause 2h")
+        assert "PAUSED" in pause_res
+        assert safety.get_remaining_pause_seconds() > 3600
+
+        # /resume clears timed pause
+        await mgr.handle_control_command("/resume")
+        assert safety.get_remaining_pause_seconds() == 0.0
+
+        # 5. /name custom identity
+        name_res = await mgr.handle_control_command("/name Rahul")
+        assert "Rahul" in name_res
+        assert generator.prompt_manager.owner_name == "Rahul"
+
+        # 6. /setprompt
+        prompt_res = await mgr.handle_control_command("/setprompt You are a chill friend.")
+        assert "updated" in prompt_res.lower()
+        assert "chill friend" in generator.prompt_manager.system_instructions
 
     asyncio.run(_run())

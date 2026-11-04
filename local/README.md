@@ -99,8 +99,12 @@ When an incoming eligible message arrives:
    - `/reject <id>` — Discards the pending draft
    - `/pending` — Lists pending drafts
    - `/status` — Displays current mode, error count, and safety status
+   - `/pause <duration>` — Snoozes auto-replies for a duration (e.g. `/pause 2h`, `/pause 30m`)
+   - `/resume` — Resumes normal operations (clears pause & stop)
+   - `/name <name>` — Customizes your personal name for the AI persona
+   - `/prompt` — Displays the active system prompt
+   - `/setprompt <text>` — Updates your AI persona instructions on the fly
    - `/stop` — Immediate emergency kill switch (halts all outgoing replies)
-   - `/resume` — Resumes normal operations
 
 ### 3. `REPLY_MODE=restricted_auto`
 Allows automated replies without manual approval for allowlisted chats, **provided safety rules pass and explicit authorization is given**:

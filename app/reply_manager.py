@@ -156,8 +156,31 @@ class ReplyManager:
             except Exception as e:
                 logger.error(f"Failed to send approval notification to Saved Messages: {e}")
 
+    def _parse_duration(self, raw: str) -> Optional[float]:
+        """Parse duration strings like '2h', '30m', '1d', or '2' (hours)."""
+        import re
+        s = raw.strip().lower()
+        if not s:
+            return None
+        try:
+            if s.endswith(("m", "min", "mins")):
+                num = re.sub(r"[^\d.]", "", s)
+                return float(num) * 60
+            elif s.endswith(("h", "hr", "hrs", "hour", "hours")):
+                num = re.sub(r"[^\d.]", "", s)
+                return float(num) * 3600
+            elif s.endswith(("d", "day", "days")):
+                num = re.sub(r"[^\d.]", "", s)
+                return float(num) * 86400
+            elif re.match(r"^\d+(?:\.\d+)?$", s):
+                # Default bare number to hours
+                return float(s) * 3600
+        except ValueError:
+            pass
+        return None
+
     async def handle_control_command(self, text: str) -> Optional[str]:
-        """Handle control commands sent to Saved Messages (e.g., /approve, /reject, /status, /stop)."""
+        """Handle control commands sent to Saved Messages (e.g., /approve, /reject, /status, /pause, /setprompt)."""
         cmd_parts = text.strip().split()
         if not cmd_parts:
             return None
@@ -167,36 +190,79 @@ class ReplyManager:
         if cmd == "/help":
             return (
                 "🤖 *Telegram Client Commands:*\n"
-                "• `/approve <id>` - Approve and send pending draft\n"
+                "• `/approve <id>` - Approve & send pending draft\n"
                 "• `/reject <id>` - Discard pending draft\n"
                 "• `/pending` - List pending drafts\n"
-                "• `/status` - View client health & safety status\n"
+                "• `/status` - View health, pause timers & status\n"
                 "• `/auto on` - Authorize Mode 3 restricted auto replies\n"
                 "• `/auto off` - Revoke Mode 3 authorization\n"
+                "• `/pause <duration>` - Snooze auto replies (e.g. `/pause 2h`, `/pause 30m`)\n"
                 "• `/stop` - Emergency stop (halts all outgoing replies)\n"
-                "• `/resume` - Resume operations after emergency stop"
+                "• `/resume` - Resume operations (clears pause & stop)\n"
+                "• `/name <name>` - Set your display name for AI persona\n"
+                "• `/prompt` - View active system prompt\n"
+                "• `/setprompt <text>` - Update system prompt directly from Telegram"
             )
 
         if cmd == "/status":
             auto_status = "AUTHORIZED" if self.safety.is_auto_authorized else "DISABLED"
             stop_status = "ACTIVE" if self.safety.is_emergency_stopped else "NORMAL"
+            remaining = self.safety.get_remaining_pause_seconds()
+            pause_str = f"PAUSED ({int(remaining // 60)}m left)" if remaining > 0 else "ACTIVE"
             pending_count = len(self.db.list_pending_approvals())
+            owner = self.generator.prompt_manager.owner_name
             return (
                 f"📊 *Client Status:*\n"
+                f"• Identity Name: `{owner}`\n"
+                f"• Automation: *{pause_str}*\n"
                 f"• Reply Mode: `{self.config.reply_mode}`\n"
-                f"• Emergency Stop: *{stop_status}*\n"
                 f"• Auto Authorized: *{auto_status}*\n"
+                f"• Emergency Stop: *{stop_status}*\n"
                 f"• Pending Approvals: `{pending_count}`\n"
-                f"• AI Provider: `{self.config.ai_provider}` (enabled={self.config.ai_enabled})"
+                f"• AI Provider: `{self.config.ai_provider}` (model={self.config.ai_model or 'default'})"
             )
 
-        if cmd == "/stop":
+        if cmd in ("/pause", "/off", "/sleep"):
+            if len(cmd_parts) < 2:
+                return "Usage: `/pause <duration>` (e.g. `/pause 2h`, `/pause 30m`, `/pause 45m`)"
+            seconds = self._parse_duration(cmd_parts[1])
+            if not seconds:
+                return "Invalid duration format. Use e.g. `/pause 2h` or `/pause 30m`."
+            self.safety.set_timed_pause(seconds)
+            mins = int(seconds // 60)
+            hours = round(seconds / 3600, 1)
+            display = f"{hours} hour(s)" if seconds >= 3600 else f"{mins} minute(s)"
+            return f"⏸️ Automation PAUSED for {display}. All auto-replies are paused.\nSend `/resume` anytime to reactivate early."
+
+        if cmd in ("/stop", "/halt"):
             self.safety.set_emergency_stop(True)
             return "🛑 Emergency stop ACTIVATED. All automated actions halted."
 
-        if cmd == "/resume":
-            self.safety.set_emergency_stop(False)
-            return "✅ Emergency stop DEACTIVATED. Resuming operations."
+        if cmd in ("/resume", "/start", "/unpause"):
+            self.safety.clear_pause()
+            return "▶️ Automation RESUMED. Emergency stop and timed pauses cleared."
+
+        if cmd == "/name":
+            if len(cmd_parts) < 2:
+                return f"Current identity name is `{self.generator.prompt_manager.owner_name}`.\nUsage: `/name <YourName>`"
+            new_name = " ".join(cmd_parts[1:]).strip()
+            self.generator.set_owner_name(new_name)
+            self.db.set_state("owner_name", new_name)
+            return f"✅ Identity updated! The AI will now reply as '{new_name}'."
+
+        if cmd == "/prompt":
+            current_prompt = self.generator.prompt_manager.system_instructions
+            return f"📜 *Active System Prompt:*\n\n{current_prompt[:1500]}"
+
+        if cmd == "/setprompt":
+            if len(cmd_parts) < 2:
+                return "Usage: `/setprompt <new prompt text>`"
+            new_prompt = text[len(cmd_parts[0]):].strip()
+            ok = self.generator.prompt_manager.save_system_instructions(new_prompt)
+            if ok:
+                return "✅ System prompt updated successfully! The AI will now follow your new instructions immediately."
+            else:
+                return "❌ Failed to save new system prompt to disk."
 
         if cmd == "/auto":
             if len(cmd_parts) > 1 and cmd_parts[1].lower() == "on":

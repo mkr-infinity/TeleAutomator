@@ -46,6 +46,27 @@ class SafetyManager:
         else:
             logger.info("SAFETY: Emergency stop deactivated.")
 
+    def set_timed_pause(self, seconds: float) -> float:
+        """Pause automated replies for a specific duration in seconds."""
+        until = time.time() + max(0.0, seconds)
+        self.db.set_state("pause_until", str(until))
+        logger.warning(f"SAFETY: Client paused for {int(seconds)}s (until timestamp {int(until)}).")
+        return until
+
+    def clear_pause(self) -> None:
+        """Clear both timed pause and emergency stop."""
+        self.db.set_state("pause_until", "0")
+        self.db.set_state("emergency_stop", "0")
+        logger.info("SAFETY: Pause and emergency stop cleared.")
+
+    def get_remaining_pause_seconds(self) -> float:
+        """Return remaining seconds if client is in a timed pause."""
+        try:
+            until = float(self.db.get_state("pause_until", "0"))
+            return max(0.0, until - time.time())
+        except ValueError:
+            return 0.0
+
     @property
     def is_auto_authorized(self) -> bool:
         """Check if Mode 3 (Restricted Automation) has been explicitly authorized."""
@@ -99,6 +120,12 @@ class SafetyManager:
         """Verify whether an outgoing reply is safe and permitted."""
         if self.is_emergency_stopped:
             return False, "Emergency stop active"
+
+        remaining_pause = self.get_remaining_pause_seconds()
+        if remaining_pause > 0:
+            mins = int(remaining_pause // 60)
+            secs = int(remaining_pause % 60)
+            return False, f"Client is paused ({mins}m {secs}s remaining)"
 
         now = time.time()
         if now < self._error_pause_until:

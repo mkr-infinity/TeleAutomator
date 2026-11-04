@@ -131,11 +131,15 @@ When the client is running, you can manage it in real time by texting commands t
 | `/approve <id>` | Approves and immediately dispatches pending draft `#<id>` |
 | `/reject <id>` | Discards pending draft `#<id>` |
 | `/pending` | Lists all drafts currently waiting for your review |
-| `/status` | Shows client mode, uptime, error count, and safety status |
+| `/status` | Shows client mode, identity name, pause timer, and health |
 | `/auto on` | Authorizes Mode 3 (Restricted Automation) to act without manual approval |
 | `/auto off` | Revokes Mode 3 authorization |
+| `/pause <time>` | **Snoozes auto replies** for a set time (e.g., `/pause 2h`, `/pause 30m`) |
+| `/resume` | Deactivates emergency stop and clears timed pause |
 | `/stop` | **Emergency kill switch**: immediately halts all outgoing messages |
-| `/resume` | Deactivates emergency stop and resumes normal operation |
+| `/name <name>` | Sets your personal identity name for AI responses |
+| `/prompt` | Shows active system prompt directly in Telegram |
+| `/setprompt <text>` | Updates system prompt on the fly from Telegram |
 | `/help` | Shows available commands |
 
 ---
