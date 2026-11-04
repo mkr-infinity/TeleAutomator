@@ -89,6 +89,38 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
     # Run service as a background task and wait for stop_event
     run_task = asyncio.create_task(service.run())
 
+    # Optional HTTP health server for cloud platforms like Render.com
+    port_env = os.getenv("PORT")
+    http_server = None
+    if port_env:
+        try:
+            port = int(port_env)
+            async def _handle_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+                try:
+                    await reader.read(1024)
+                    body = b'{"status":"healthy","service":"teleautomator"}\n'
+                    header = (
+                        b"HTTP/1.1 200 OK\r\n"
+                        b"Content-Type: application/json\r\n"
+                        b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n"
+                        b"Connection: close\r\n\r\n"
+                    )
+                    writer.write(header + body)
+                    await writer.drain()
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        writer.close()
+                        await writer.wait_closed()
+                    except Exception:
+                        pass
+
+            http_server = await asyncio.start_server(_handle_http, "0.0.0.0", port)
+            logger.info(f"Render / Cloud PaaS HTTP health server listening on port {port}.")
+        except Exception as e:
+            logger.warning(f"Could not start HTTP health server on port {port_env}: {e}")
+
     try:
         # Wait until run_task finishes or stop_event is fired
         wait_stop = asyncio.create_task(stop_event.wait())
@@ -101,6 +133,9 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
             # Service completed or failed
             run_task.result()
     finally:
+        if http_server:
+            http_server.close()
+            await http_server.wait_closed()
         await service.stop()
 
 

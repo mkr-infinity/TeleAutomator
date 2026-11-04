@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: teleautomator
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 -m app.main
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: TG_API_ID
+        sync: false
+      - key: TG_API_HASH
+        sync: false
+      - key: TG_SESSION_MODE
+        value: string
+      - key: TG_SESSION_STRING
+        sync: false
+      - key: AI_ENABLED
+        value: "true"
+      - key: AI_PROVIDER
+        value: gemini
+      - key: AI_API_KEY
+        sync: false
+      - key: REPLY_MODE
+        value: restricted_auto
+      - key: AUTO_AUTHORIZE
+        value: "true"
+      - key: MIN_REPLY_DELAY_SECONDS
+        value: "5"
+      - key: MAX_REPLY_DELAY_SECONDS
+        value: "60"
+      - key: TYPING_DELAY_SECONDS
+        value: "2"

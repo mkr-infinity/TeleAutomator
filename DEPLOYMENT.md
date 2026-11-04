@@ -13,13 +13,17 @@
 5. [Step 4: Connect to Server & Clone Repository](#step-4-connect-to-server--clone-repository)
 6. [Step 5: Run Automated Server Setup](#step-5-run-automated-server-setup)
 7. [Step 6: Authenticate Your Telegram Account](#step-6-authenticate-your-telegram-account)
-   - [Option A: Interactive File Session (Recommended)](#option-a-interactive-file-session-recommended)
+   - [Option A: Interactive File Session (Recommended for VPS)](#option-a-interactive-file-session-recommended)
    - [Option B: Headless StringSession (For Docker & Cloud PaaS)](#option-b-headless-stringsession-for-docker--cloud-paas)
 8. [Step 7: Configure Environment Variables (.env)](#step-7-configure-environment-variables-env)
-9. [Step 8: Launch 24/7 with Docker Compose](#step-8-launch-247-with-docker-compose)
-10. [Step 9: Test & Verify from Telegram](#step-9-test--verify-from-telegram)
-11. [Step 10: Server Management & Updates](#step-10-server-management--updates)
-12. [Troubleshooting & FAQ](#troubleshooting--faq)
+9. [Step 8: Launch 24/7 with Docker Compose (VPS)](#step-8-launch-247-with-docker-compose)
+10. [Render.com Deployment (Free Cloud Hosting)](#rendercom-deployment-free-cloud-hosting)
+    - [Method 1: One-Click Render Blueprint (render.yaml)](#method-1-one-click-render-blueprint-renderyaml)
+    - [Method 2: Manual Render Web Service Setup](#method-2-manual-render-web-service-setup)
+    - [Keeping Render Free Tier Alive 24/7](#keeping-render-free-tier-alive-247)
+11. [Step 9: Test & Verify from Telegram](#step-9-test--verify-from-telegram)
+12. [Step 10: Server Management & Updates](#step-10-server-management--updates)
+13. [Troubleshooting & FAQ](#troubleshooting--faq)
 
 ---
 
@@ -217,6 +221,103 @@ You should see the startup banner and:
 ```
 
 Press `Ctrl + C` to detach from logs. The container will remain running 24/7 in the background and will restart automatically if the server reboots.
+
+---
+
+## Render.com Deployment (Free Cloud Hosting)
+
+If you do not want to manage a VPS, you can host TeleAutomator on **[Render.com](https://render.com)** for free.
+
+### Why Render Needs a StringSession
+Cloud platforms like Render do not allow interactive terminal typing to enter your Telegram login code. You must generate your session string once on your local computer before deploying.
+
+#### Pre-Step: Generate Your Session String (1 Minute)
+On your local laptop/PC (in terminal or PowerShell inside `TeleAutomator` folder):
+```bash
+python3 scripts/generate_session.py
+# Or on Windows:
+python run.py --auth
+```
+- Enter your phone number, the 5-digit Telegram code, and your 2FA password (if enabled).
+- The script will print a long string starting with `1...` (your `TG_SESSION_STRING`).
+- Copy this entire string.
+
+---
+
+### Method 1: One-Click Render Blueprint (render.yaml)
+
+1. **Fork the Repository**:
+   - Go to [https://github.com/mkr-infinity/TeleAutomator](https://github.com/mkr-infinity/TeleAutomator).
+   - Click **Fork** (top-right) to copy the repository to your GitHub account.
+2. **Log into Render**:
+   - Visit **[https://dashboard.render.com](https://dashboard.render.com)** and sign in with GitHub.
+3. **Deploy Blueprint**:
+   - Click **New +** -> **Blueprint**.
+   - Select your forked `TeleAutomator` repository.
+   - Render automatically reads [`render.yaml`](render.yaml).
+4. **Enter Your Secrets**:
+   Render will prompt you for the following environment variables:
+   - **`TG_API_ID`**: Your numeric API ID from `my.telegram.org`.
+   - **`TG_API_HASH`**: Your 32-character API Hash from `my.telegram.org`.
+   - **`TG_SESSION_STRING`**: The session string you generated above.
+   - **`AI_API_KEY`**: Your Google Gemini API key (`AIzaSy...`).
+5. Click **Apply**. Render will build and launch your service!
+
+---
+
+### Method 2: Manual Render Web Service Setup
+
+If you prefer setting it up manually without a blueprint:
+
+1. In Render Dashboard, click **New +** -> **Web Service**.
+2. Connect your GitHub repository.
+3. Configure the settings:
+   - **Name**: `teleautomator`
+   - **Language / Runtime**: `Python 3`
+   - **Branch**: `main`
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `python3 -m app.main`
+   - **Instance Type**: `Free`
+4. Click **Advanced** -> **Add Environment Variable** and add each:
+
+| Key | Value | Notes |
+| :--- | :--- | :--- |
+| `TG_API_ID` | `12345678` | From `my.telegram.org` |
+| `TG_API_HASH` | `0123456789abcdef...` | From `my.telegram.org` |
+| `TG_SESSION_MODE` | `string` | **Must be `string` on Render** |
+| `TG_SESSION_STRING` | `1BVts...` | The string from `generate_session.py` |
+| `AI_ENABLED` | `true` | Enables Google Gemini AI |
+| `AI_PROVIDER` | `gemini` | Google Gemini |
+| `AI_API_KEY` | `AIzaSy...` | From Google AI Studio |
+| `REPLY_MODE` | `restricted_auto` | Hands-free auto-replying |
+| `AUTO_AUTHORIZE` | `true` | Authorizes automated sends |
+| `MIN_REPLY_DELAY_SECONDS` | `5` | Adaptive delay lower bound |
+| `MAX_REPLY_DELAY_SECONDS` | `60` | Adaptive delay upper bound |
+| `TYPING_DELAY_SECONDS` | `2` | Typing action duration |
+
+5. Click **Create Web Service**.
+6. TeleAutomator automatically detects Render's `$PORT` and starts an internal health check server on `/` and `/health`, ensuring Render marks the deployment as **Healthy**!
+
+---
+
+### Keeping Render Free Tier Alive 24/7
+
+> [!NOTE]  
+> Render's **Free Tier Web Services** automatically spin down into sleep mode after 15 minutes if no web requests are received.
+
+To keep TeleAutomator awake and responding 24/7 on the Free tier:
+1. Copy your Render web service URL (e.g. `https://teleautomator-xxxx.onrender.com`).
+2. Go to a free website monitoring service such as:
+   - **[UptimeRobot](https://uptimerobot.com)** (Free)
+   - **[cron-job.org](https://cron-job.org)** (Free)
+   - **[Better Stack](https://betterstack.com)** (Free)
+3. Create a **New Monitor / Cron Job**:
+   - **URL**: `https://teleautomator-xxxx.onrender.com`
+   - **Interval**: Every 10 minutes (or 5 minutes)
+   - **Method**: `HTTP GET`
+4. TeleAutomator's built-in HTTP server will reply with `200 OK {"status":"healthy"}`. This keeps your free container permanently awake 24/7 without ever entering sleep mode!
+
+*(Alternatively, upgrading to a Render Background Worker for $7/month runs 24/7 natively without needing web pings).*
 
 ---
 
