@@ -1,4 +1,8 @@
-# Environment files
+# =============================================================================
+# TeleAutomator - Git Ignore Rules
+# =============================================================================
+
+# Environment and secrets (Never commit live credentials)
 .env
 .env.*
 !.env.example
@@ -7,24 +11,40 @@
 *.session
 *.session-journal
 *.sqlite
+*.sqlite3
 *.db
+*.db-journal
+*.bak
 
-# Python bytecode and virtual environments
+# Python artifacts and virtual environments
 __pycache__/
 *.py[cod]
 *$py.class
 .venv/
 venv/
 env/
+ENV/
 .pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.eggs/
 
-# Application data, logs, and backups
+# Application runtime data, logs, and process files
 logs/
 data/
 backups/
 *.log
+nohup.out
 
-# IDE and OS files
+# Editor, OS, and temporary files
 .DS_Store
+Thumbs.db
+desktop.ini
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
