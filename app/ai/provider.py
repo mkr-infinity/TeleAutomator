@@ -43,43 +43,65 @@ class LocalRuleProvider(AIProvider):
 class GeminiProvider(AIProvider):
     """Google Gemini API provider using standard library urllib."""
 
-    def __init__(self, api_key: str, model: str = "gemini-1.5-flash"):
+    def __init__(self, api_key: str, model: str = "gemini-3.5-flash"):
         self.api_key = api_key
-        self.model = model or "gemini-1.5-flash"
+        # Clean model name and default to latest fast flash model
+        clean = (model or "gemini-3.5-flash").strip()
+        if clean.startswith("models/"):
+            clean = clean[len("models/"):]
+        # Automatically upgrade legacy/deprecated models
+        if clean in ("gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.5-flash", "gemini-2.5-pro"):
+            clean = "gemini-3.5-flash"
+        self.model = clean
 
     def generate_reply(self, prompt: str, system_instructions: str) -> str:
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{self.model}:generateContent"
-        )
+        # Candidate models to try in sequence if one returns 404 or 503
+        candidate_models = [self.model]
+        for fallback in ("gemini-3.5-flash", "gemini-3.5-flash-lite"):
+            if fallback not in candidate_models:
+                candidate_models.append(fallback)
+
         payload = {
             "system_instruction": {"parts": [{"text": system_instructions}]},
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.6, "maxOutputTokens": 200},
         }
         data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "x-goog-api-key": self.api_key,
-            },
-            method="POST",
-        )
 
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-                candidates = body.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts:
-                        return str(parts[0].get("text", "")).strip().strip('"')
-        except Exception as e:
-            logger.error(f"Gemini API request failed: {e}")
-            raise
-        return ""
+        last_error = None
+        for m in candidate_models:
+            url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{m}:generateContent?key={self.api_key}"
+            )
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": self.api_key,
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                    candidates = body.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts:
+                            return str(parts[0].get("text", "")).strip().strip('"')
+            except urllib.error.HTTPError as e:
+                last_error = e
+                logger.warning(f"Gemini model '{m}' request failed ({e.code}). Trying fallback...")
+                continue
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Gemini model '{m}' error: {e}. Trying fallback...")
+                continue
+
+        logger.error(f"All Gemini candidate models failed: {last_error}")
+        raise last_error if last_error else RuntimeError("Gemini reply generation failed.")
 
 
 class OpenAIProvider(AIProvider):
