@@ -1,76 +1,106 @@
 # Local Deployment Guide (Arch Linux & Standard Linux)
 
-This directory contains the scripts and configuration required to run your personal Telegram MTProto client locally on your laptop.
+```text
+========================================================================================
+  telegram-chat-automation v1.0
+  ~~~~~~~~~~~~~~~~~~~~~~~~~~
+  Author:     Mohammad Kaif Raja (mkr-infinity)
+  Copyright:  Copyright (c) Mohammad Kaif Raja. All Rights Reserved.
+========================================================================================
+```
+
+This guide walks you through setting up and running your personal Telegram client locally on your Linux laptop.
 
 ---
 
-## 🚀 Quick Start in 3 Steps
+## 🚀 Beginner Quick Start in 4 Steps
 
-### Step 1: Run Setup
-Ensure you are in the `local/` folder (or project root) and execute:
+### Step 1: Run Local Setup
+In your terminal, navigate to the project directory and run:
 ```bash
 ./local/setup.sh
 ```
 What this does:
-- Detects Python 3.10+
-- Creates a virtual environment in `.venv/`
+- Checks Python 3.10+
+- Creates an isolated virtual environment in `.venv/`
 - Installs all dependencies (`telethon`, `python-dotenv`, `pytest`)
-- Creates a private `.env` file from `.env.example` with restricted `0600` permissions
-- Creates a protected `data/` folder with `0700` permissions
+- Prepares your private `.env` file with `0600` permissions
+- Prepares your private `data/` directory with `0700` permissions
 
 ---
 
 ### Step 2: Configure Your Credentials
-Open `.env` in your preferred editor (e.g., `nano .env` or `vim .env`):
+Open `.env` (e.g. `nano .env`):
 ```env
-TG_API_ID=12345678
-TG_API_HASH=0123456789abcdef0123456789abcdef
+# 1. Telegram API (from https://my.telegram.org)
+TG_API_ID=34656768
+TG_API_HASH=7c7077f000e5a2da382562c27881a5fc
 
-# Specify which private chat IDs or group IDs the client is permitted to interact with
-# (Leaves all other chats ignored for safety)
-ALLOWED_PRIVATE_CHATS=123456789
+# 2. Google Gemini API Key (from https://aistudio.google.com/app/apikey)
+AI_ENABLED=true
+AI_PROVIDER=gemini
+AI_API_KEY=your_gemini_api_key_here
+AI_MODEL=gemini-3.5-flash
+
+# 3. Automation Mode
+REPLY_MODE=restricted_auto
+AUTO_AUTHORIZE=true
+
+# 4. Target Chats (Optional: you can also add them later from Telegram using /allowchat <id>)
+ALLOWED_PRIVATE_CHATS=
 ALLOWED_GROUPS=
-
-# Reply Mode: draft (default), approval, or restricted_auto
-REPLY_MODE=draft
 ```
 
 ---
 
-### Step 3: Authenticate Interactively
-Run the authentication script:
+### Step 3: First-Time Authentication
+Run:
 ```bash
 ./local/authenticate.sh
 ```
-What happens during authentication:
-1. You will be prompted for your phone number (e.g. `+1234567890`).
-2. Telegram sends a 5-digit verification code to your Telegram app.
-3. Enter the code in your terminal.
-4. If Two-Step Verification (2FA) is active on your account, enter your 2FA password.
-5. The script verifies that the connected account is your **personal account** (not a bot).
-6. It saves your session securely to `data/telegram_client.session` with `0600` permissions.
-7. It prints your **Cloud StringSession (`TG_SESSION_STRING`)**. Save this if you plan to deploy to a cloud VPS later!
+1. Enter your phone number with country code (e.g., `+1234567890`).
+2. Enter the 5-digit verification code sent to your Telegram app.
+3. Enter your Two-Step Verification (2FA) password if enabled.
+4. The script confirms authentication, creates your session file in `data/telegram_client.session` (`0600`), and exports your `TG_SESSION_STRING` for cloud VPS use.
 
 ---
 
-## 🏃 Running the Application
-
-To start the local client:
+### Step 4: Start the Client
+Run:
 ```bash
 ./local/start.sh
 ```
+The client will display the professional startup banner, connect to MTProto, and send a welcome guide to your **Telegram Saved Messages**!
 
-To stop the client at any time, press `Ctrl+C`.
+---
+
+## 📱 Telegram Saved Messages Commands
+
+While the client is running, you can manage it directly by texting your **Saved Messages**:
+
+- **`/status`** — Displays health, identity name, and pause status.
+- **`/chats`** — Lists all active allowlisted private chats and groups.
+- **`/allowchat <id>`** — Adds a contact or group to the allowlist instantly.
+- **`/removechat <id>`** — Removes a chat from the allowlist.
+- **`/addrule <word> => <reply>`** — Sets a custom auto-reply trigger for any word.
+- **`/rules`** — Lists your custom keyword rules.
+- **`/delrule <word>`** — Deletes a keyword rule.
+- **`/pause 2h`** — Snoozes auto-replies for 2 hours (or any duration like `30m`).
+- **`/resume`** — Resumes normal listening immediately.
+- **`/mentiononly on|off`** — Group filter: replies only when mentioned in groups.
+- **`/name <name>`** — Changes your persona name.
+- **`/prompt`** — Views your active AI persona prompt.
+- **`/setprompt <text>`** — Updates your AI prompt on the fly.
+- **`/stop`** — Emergency kill switch (halts all replies).
 
 ---
 
 ## 🧪 Testing
-
 To run the automated test suite locally:
 ```bash
 ./local/test.sh
 ```
-Or run non-destructive account connection verification:
+Or verify account connection without sending messages:
 ```bash
 source .venv/bin/activate
 python3 scripts/check_connection.py
@@ -78,61 +108,6 @@ python3 scripts/check_connection.py
 
 ---
 
-## ⚙️ Reply Modes & Commands
-
-### 1. `REPLY_MODE=draft` (Default)
-Incoming eligible messages will generate suggested drafts and log them to your console and database. **No messages are sent automatically.**
-
-### 2. `REPLY_MODE=approval`
-When an incoming eligible message arrives:
-1. A draft is generated.
-2. A notification is sent to your **Saved Messages** (private chat with yourself in Telegram):
-   ```text
-   📝 Pending Approval #1
-   • Chat: Alice (123456789)
-   • Incoming: "Hey, are you free?"
-   • Suggested Reply: "Got your message, will get back shortly!"
-   Send /approve 1 to send, or /reject 1 to discard.
-   ```
-3. You control the client directly from Telegram Saved Messages:
-   - `/approve <id>` — Approves and sends the reply
-   - `/reject <id>` — Discards the pending draft
-   - `/pending` — Lists pending drafts
-   - `/status` — Displays current mode, error count, and safety status
-   - `/pause <duration>` — Snoozes auto-replies for a duration (e.g. `/pause 2h`, `/pause 30m`)
-   - `/resume` — Resumes normal operations (clears pause & stop)
-   - `/name <name>` — Customizes your personal name for the AI persona
-   - `/prompt` — Displays the active system prompt
-   - `/setprompt <text>` — Updates your AI persona instructions on the fly
-   - `/stop` — Immediate emergency kill switch (halts all outgoing replies)
-
-### 3. `REPLY_MODE=restricted_auto`
-Allows automated replies without manual approval for allowlisted chats, **provided safety rules pass and explicit authorization is given**:
-- You can toggle authorization at runtime inside Telegram Saved Messages by sending:
-  ```text
-  /auto on
-  ```
-- Or revoke anytime by sending:
-  ```text
-  /auto off
-  ```
-
----
-
-## 🔒 Session Security & Privacy
-
-- **File Permissions**: The session file (`data/telegram_client.session`) is locked to user read/write only (`0600`).
-- **Never Commit Credentials**: `.env` and `*.session` are excluded by `.gitignore`.
-- **Revoking Access**: If you ever suspect a session is compromised, open Telegram:
-  **Settings → Devices → Terminate Session**.
-
----
-
-## 🛠️ Troubleshooting
-
-- **Error: `Missing required configuration: TG_API_ID must be set.`**
-  - Ensure you opened `.env` and replaced `your_api_id_here` with your actual numeric API ID from https://my.telegram.org/apps.
-- **Error: `Connected account is a Bot account!`**
-  - Telegram Bot API tokens are not supported; you must log in with your actual personal phone number.
-- **Error: `ImportError: No module named 'telethon'`**
-  - Run `./local/install.sh` to reinstall packages into `.venv`.
+## 🔗 Related Documentation
+- 📖 Main Complete Guide: [`README.md`](../README.md)
+- ☁️ Cloud VPS 24/7 Deployment: [`cloud/README.md`](../cloud/README.md)

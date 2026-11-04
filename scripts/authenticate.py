@@ -14,6 +14,7 @@ from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError
 from telethon.sessions import StringSession
 
+from app.banner import print_banner
 from app.config import load_config
 from app.logger import setup_logger
 from app.session_manager import ensure_secure_file, get_local_session_path
@@ -22,6 +23,7 @@ logger = setup_logger("authenticator")
 
 
 async def authenticate() -> None:
+    print_banner()
     print("=" * 60)
     print(" Telegram Personal MTProto Account Authentication")
     print("=" * 60)

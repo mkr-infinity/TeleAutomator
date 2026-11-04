@@ -11,11 +11,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from telethon import TelegramClient
 
+from app.banner import print_banner
 from app.config import load_config
 from app.session_manager import get_telethon_session
 
 
 async def check() -> None:
+    print_banner()
     print("Testing Telegram MTProto connection...")
     try:
         config = load_config()

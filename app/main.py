@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from app.ai.reply_generator import ReplyGenerator
+from app.banner import print_banner
 from app.config import load_config
 from app.health import HealthMonitor
 from app.logger import setup_logger
@@ -91,6 +92,8 @@ async def run_app() -> None:
 def main() -> None:
     if "--health" in sys.argv:
         sys.exit(run_health_check())
+
+    print_banner()
 
     try:
         asyncio.run(run_app())

@@ -1,103 +1,136 @@
-# Personal Telegram MTProto Client
+# telegram-chat-automation v1.0
 
-A secure, production-grade **Personal Telegram MTProto Client** built with Python and Telethon. Designed to operate your personal Telegram identity with strict privacy controls, explicit chat allowlists, automated safety guards, and dual deployment environments: **Local (Arch Linux laptop)** and **Cloud (24/7 Linux VPS via Docker)**.
+```text
+========================================================================================
+  telegram-chat-automation v1.0
+  ~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  A production-ready automation tool for automating whole telegram messages from
+  bot-bot, account-bot, groups messages etc all from your main account.
+
+  Repository: i will tell you later
+  Author:     Mohammad Kaif Raja (mkr-infinity)
+  Copyright:  Copyright (c) Mohammad Kaif Raja. All Rights Reserved.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~  If you modify, redistribute, or sell anything made from my things without my         ~
+~  permission, it is strictly prohibited.                                              ~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  Unauthorized removal of attribution is strictly prohibited.
+========================================================================================
+```
 
 ---
 
-## 📑 Table of Contents
-1. [Overview](#1-overview)
-2. [Bot Accounts vs. Personal User Clients](#2-bot-accounts-vs-personal-user-clients)
+## 📑 Complete Table of Contents
+1. [Overview & What This Application Does](#1-overview--what-this-application-does)
+2. [Differences: Telegram Bot vs. Personal MTProto Account](#2-differences-telegram-bot-vs-personal-mtproto-account)
 3. [Architecture & Folder Structure](#3-architecture--folder-structure)
-4. [Reply Modes & Approval Flow](#4-reply-modes--approval-flow)
-5. [Telegram Saved Messages Control Channel](#5-telegram-saved-messages-control-channel)
-6. [AI Engine & Data Privacy](#6-ai-engine--data-privacy)
-7. [Safety & Anti-Spam Guards](#7-safety--anti-spam-guards)
-8. [Local Deployment Quick Start](#8-local-deployment-quick-start)
-9. [Cloud VPS Deployment Quick Start](#9-cloud-vps-deployment-quick-start)
-10. [Session Security & Revocation](#10-session-security--revocation)
-11. [Troubleshooting & Emergency Stop](#11-troubleshooting--emergency-stop)
-12. [Telegram API Terms & Compliance](#12-telegram-api-terms--compliance)
+4. [Step-by-Step Beginner Setup Guide](#4-step-by-step-beginner-setup-guide)
+   - [Step 4.1: Getting Telegram API Credentials (my.telegram.org)](#step-41-getting-telegram-api-credentials-mytelegramorg)
+   - [Step 4.2: Getting a Free Google Gemini API Key](#step-42-getting-a-free-google-gemini-api-key)
+   - [Step 4.3: Local Installation & Configuration](#step-43-local-installation--configuration)
+   - [Step 4.4: First-Time Phone & 2FA Authentication](#step-44-first-time-phone--2fa-authentication)
+   - [Step 4.5: Finding & Setting Chat IDs](#step-45-finding--setting-chat-ids)
+   - [Step 4.6: Running the Client](#step-46-running-the-client)
+5. [Telegram Saved Messages Control Center (Interactive Commands)](#5-telegram-saved-messages-control-center-interactive-commands)
+6. [Setting Custom Keyword Trigger Rules From Telegram](#6-setting-custom-keyword-trigger-rules-from-telegram)
+7. [Group Chat Automation & Mention Filters](#7-group-chat-automation--mention-filters)
+8. [Anti-Scam & Link Protection System](#8-anti-scam--link-protection-system)
+9. [Human Persona & Language Matching (Hindi + English)](#9-human-persona--language-matching-hindi--english)
+10. [Local Deployment Guide (Reference)](#10-local-deployment-guide-reference)
+11. [Cloud VPS 24/7 Deployment Guide (Reference)](#11-cloud-vps-247-deployment-guide-reference)
+12. [Emergency Kill Switch & Safety Guards](#12-emergency-kill-switch--safety-guards)
+13. [Troubleshooting & FAQ](#13-troubleshooting--faq)
+14. [License & Attribution](#14-license--attribution)
 
 ---
 
-## 1. Overview
+## 1. Overview & What This Application Does
 
-Unlike generic bot scripts, this application runs directly as your **personal Telegram account** over official MTProto protocols. It enables:
-- Context-aware reply suggestions for private chats and groups you belong to.
-- Three configurable operational modes: **Draft Only**, **Approval Required**, and **Restricted Automation**.
-- Remote control and reply approval directly through Telegram **Saved Messages**.
-- Offline, privacy-preserving draft mode by default (zero message contents leaked to external AI servers).
-- Secret redaction preventing API keys, phone numbers, codes, and tokens from ever entering logs.
+**telegram-chat-automation** is a production-grade Telegram client built with **Python 3**, **Telethon (MTProto)**, and **Google Gemini AI**.
+
+Unlike simple bot scripts, this software connects directly as your **actual personal Telegram account**. It operates seamlessly in both private chats and groups you belong to, providing:
+- **Intelligent Context-Aware Replies**: Generates natural, human-sounding replies in your personal texting tone.
+- **Bilingual Matching**: Automatically replies in casual Hindi/Hinglish when messaged in Hindi, and in casual English when messaged in English.
+- **Human Alibi (Anti-AI Disclosure)**: If someone asks *"are you an AI?"* or *"what model are you using?"*, it laughs it off as a human typing on their phone (e.g. *"model? mai toh bas phone se type kar raha hu bhai 😂"*).
+- **Anti-Scam & Phishing Blocker**: Automatically drops messages containing suspicious crypto baits, Telegram channel invite links (`t.me/+...`), or URL shorteners.
+- **Zero Outgoing Links**: The AI is strictly blocked from ever sending links or invites.
+- **Custom Keyword Triggers**: Set instant custom auto-replies for specific keywords (e.g., `/addrule pricing => We will share pricing shortly`).
+- **Remote Control from Your Phone**: Manage the entire client, allow/block chats, snooze replies, or change persona instructions straight from your **Telegram Saved Messages**.
+- **Dual Deployment**: Run locally on your Arch Linux laptop or 24/7 in a lightweight Docker container on a Linux VPS.
 
 ---
 
-## 2. Bot Accounts vs. Personal User Clients
+## 2. Differences: Telegram Bot vs. Personal MTProto Account
 
-| Feature | Telegram Bot API (`BotFather`) | Personal MTProto Client (This Project) |
+| Feature | Telegram Bot (`@BotFather`) | Personal MTProto Client (This Project) |
 | :--- | :--- | :--- |
-| **Identity** | Bot account with `@...bot` username | **Your actual personal Telegram account** |
-| **Authentication** | Static bot token (`123456:ABC-DEF...`) | **MTProto Session** via API ID + API Hash + Phone Code/2FA |
-| **Chat Visibility** | Only chats where bot is explicitly added | **Any private chat or group your account participates in** |
-| **Message Styling** | Labeled as "bot" by Telegram UI | **Appears as normal messages typed by you** |
-| **Privacy Terms** | Bot API Terms | **Telegram API Terms of Service & Fair Use** |
+| **Account Identity** | Bot badge (`@sample_bot`) | **Your real personal Telegram account** |
+| **Authentication** | Bot token (`123456:ABC...`) | **MTProto Session** via API ID + API Hash + Phone Login |
+| **Chat Access** | Only where bot is explicitly invited | **Any private conversation or group you participate in** |
+| **Message Presentation** | Marked as "bot" | **Appears exactly like normal messages typed by you** |
+| **Privacy Terms** | Bot API Terms | **Official Telegram MTProto Fair Use** |
 
 ---
 
 ## 3. Architecture & Folder Structure
 
-Both local and cloud setups share the exact same underlying logic inside `app/`:
+Both local and cloud setups share the exact same core code inside `app/`:
 
 ```text
 telegram-chat-automation/
 ├── app/                      # Shared Core Logic
 │   ├── __init__.py
-│   ├── main.py               # Main runtime entrypoint & signal handling
-│   ├── config.py             # Typed configuration loader & validator
-│   ├── telegram_client.py    # Telethon MTProto connection & lifecycle
-│   ├── session_manager.py    # Local file session & StringSession handler
-│   ├── event_handlers.py     # Event registration for messages & commands
-│   ├── message_filter.py     # Discard self-messages, service, & non-allowlisted chats
-│   ├── reply_manager.py      # Draft, Approval, and Auto orchestrator
-│   ├── safety_manager.py     # Cooldowns, dedup, OTP guard, emergency stop
-│   ├── privacy_manager.py    # Chat allowlisting, user exclusions, data minimization
-│   ├── logger.py             # Structured logging with secret redaction
+│   ├── banner.py             # Professional startup banner & copyright attribution
+│   ├── main.py               # Main runtime entrypoint & Docker health check CLI
+│   ├── config.py             # Configuration loader & bound validator
+│   ├── telegram_client.py    # Telethon MTProto client lifecycle & reconnect backoff
+│   ├── session_manager.py    # Local file session (0600) & Cloud StringSession generator
+│   ├── event_handlers.py     # Dispatches messages & Saved Messages commands
+│   ├── message_filter.py     # Scam link filter, service message drop, group mention guard
+│   ├── reply_manager.py      # Draft, Approval, and Auto-reply orchestrator
+│   ├── safety_manager.py     # Cooldowns, dedup, OTP guard, emergency stop, timed pause
+│   ├── privacy_manager.py    # Dynamic chat allowlist & user exclusions
+│   ├── logger.py             # Structured logging with automatic secret redaction
 │   ├── health.py             # Heartbeat monitor & container health check
 │   │
-│   ├── ai/                   # Modular AI Subsystem
+│   ├── ai/                   # AI Subsystem
 │   │   ├── __init__.py
-│   │   ├── provider.py       # LocalRuleProvider, GeminiProvider, OpenAIProvider
-│   │   ├── prompt_manager.py # Human-sounding tone & boundary enforcement
-│   │   └── reply_generator.py# Orchestrates draft reply creation
+│   │   ├── provider.py       # Google Gemini (gemini-3.5-flash with fallback), OpenAI, Local
+│   │   ├── prompt_manager.py # Anti-AI sanitizer, language matching, & human persona
+│   │   └── reply_generator.py# Coordinates prompt assembly and draft generation
 │   │
-│   └── storage/              # Persistent State
+│   └── storage/              # SQLite Persistent Storage
 │       ├── __init__.py
-│       └── database.py       # SQLite database for dedup & approval queue
+│       └── database.py       # Database for approvals, dedup, dynamic chats & keyword rules
 │
 ├── local/                    # Local Laptop Deployment Environment
-│   ├── setup.sh              # Python venv creation & dependency install
-│   ├── install.sh            # Reinstall requirements
+│   ├── setup.sh              # Virtualenv creation, dependency installation, .env setup
+│   ├── install.sh            # Reinstalls requirements
 │   ├── authenticate.sh       # Interactive terminal login & StringSession exporter
-│   ├── start.sh              # Start local client
-│   ├── test.sh               # Run test suite
+│   ├── start.sh              # Starts local client
+│   ├── test.sh               # Runs pytest test suite
 │   ├── .env.example          # Local environment template
-│   └── README.md             # Local setup documentation
+│   └── README.md             # Dedicated Local Deployment Guide
 │
 ├── cloud/                    # 24/7 Cloud VPS Deployment Environment
-│   ├── Dockerfile            # Secure non-root container image (Python slim)
-│   ├── compose.yaml          # Docker Compose orchestration & health check
-│   ├── .dockerignore         # Docker context filtering
+│   ├── Dockerfile            # Secure non-root container image (Python slim, appuser)
+│   ├── compose.yaml          # Docker Compose with persistent volume & restart policy
+│   ├── .dockerignore         # Docker context exclusions
 │   ├── .env.example          # Cloud environment template (StringSession)
 │   ├── entrypoint.sh         # Non-root permission checks & startup
-│   ├── healthcheck.sh        # Container healthcheck runner
+│   ├── healthcheck.sh        # Self-contained container health checker
 │   ├── deploy.sh             # Cloud build and launch helper
-│   └── README.md             # Cloud deployment documentation
+│   ├── system_prompt.txt     # Cloud bundled AI persona prompt
+│   └── README.md             # Dedicated Cloud VPS Deployment Guide
 │
 ├── scripts/                  # Utilities
-│   ├── authenticate.py       # Interactive Telegram authentication script
-│   ├── generate_session.py   # Export cloud string session from local session
-│   └── check_connection.py   # Safe non-destructive account verification
+│   ├── authenticate.py       # Interactive phone/code/2FA login script
+│   ├── check_connection.py   # Non-destructive account verification
+│   └── generate_session.py   # StringSession exporter for cloud deployment
 │
-├── tests/                    # Comprehensive Test Suite (pytest)
+├── tests/                    # 21 Automated Unit Tests (pytest)
+├── system_prompt.txt         # Live editable AI persona instructions
 ├── requirements.txt
 ├── pyproject.toml
 ├── .gitignore
@@ -107,133 +140,250 @@ telegram-chat-automation/
 
 ---
 
-## 4. Reply Modes & Approval Flow
+## 4. Step-by-Step Beginner Setup Guide
 
-Configured via `REPLY_MODE` in `.env`:
+Follow these steps sequentially to set up and run the client:
 
-### Mode 1: `draft` (Default)
-Generates a draft reply and logs it locally. **Does not send any message.**
-
-### Mode 2: `approval`
-Generates a draft and sends a private review prompt to your **Telegram Saved Messages**. Only dispatches the message to the recipient after you explicitly send `/approve <id>`.
-
-### Mode 3: `restricted_auto`
-Allows automated sending for allowlisted chats without manual approval, **only when explicitly authorized** via `/auto on` in Saved Messages and all safety cooldowns pass.
-
----
-
-## 5. Telegram Saved Messages Control Channel
-
-When the client is running, you can manage it in real time by texting commands to your **Saved Messages** (chat with yourself):
-
-| Command | Action |
-| :--- | :--- |
-| `/approve <id>` | Approves and immediately dispatches pending draft `#<id>` |
-| `/reject <id>` | Discards pending draft `#<id>` |
-| `/pending` | Lists all drafts currently waiting for your review |
-| `/status` | Shows client mode, identity name, pause timer, and health |
-| `/auto on` | Authorizes Mode 3 (Restricted Automation) to act without manual approval |
-| `/auto off` | Revokes Mode 3 authorization |
-| `/pause <time>` | **Snoozes auto replies** for a set time (e.g., `/pause 2h`, `/pause 30m`) |
-| `/resume` | Deactivates emergency stop and clears timed pause |
-| `/stop` | **Emergency kill switch**: immediately halts all outgoing messages |
-| `/name <name>` | Sets your personal identity name for AI responses |
-| `/prompt` | Shows active system prompt directly in Telegram |
-| `/setprompt <text>` | Updates system prompt on the fly from Telegram |
-| `/help` | Shows available commands |
+### Step 4.1: Getting Telegram API Credentials (my.telegram.org)
+1. Open your browser and go to: **[https://my.telegram.org](https://my.telegram.org)**.
+2. Enter your phone number (with country code, e.g. `+91...` or `+1...`) and log in using the code sent to your Telegram app.
+3. Click on **API development tools**.
+4. Fill in the short form:
+   - **App title**: Any name (e.g. `MyPersonalClient`)
+   - **Short name**: Any single word (e.g. `myclient`)
+   - **Platform**: Desktop / Other
+5. Click **Create application**.
+6. You will see:
+   - **`api_id`**: A numeric ID (e.g., `34656768`)
+   - **`api_hash`**: A 32-character hexadecimal string (e.g., `7c7077f000e5a2da...`)
+   *(Keep these private; do not share them).*
 
 ---
 
-## 6. AI Engine & Data Privacy
-
-- **Offline Drafts by Default**: When `AI_ENABLED=false` or `AI_PROVIDER=local`, the application uses `LocalRuleProvider`, generating draft replies without making any external network requests.
-- **Pluggable AI Backends**: Supports **Google Gemini** (`AI_PROVIDER=gemini`) and **OpenAI** (`AI_PROVIDER=openai`) using standard library HTTP requests (no bloated SDK dependencies).
-- **Communication Guidelines**: Prompts enforce a natural, concise, human-sounding tone. The AI is strictly instructed **never to make commitments, financial promises, or invent facts**.
-
----
-
-## 7. Safety & Anti-Spam Guards
-
-The `SafetyManager` protects your personal account against Telegram rate limits and accidental loops:
-- **Strict Allowlist**: Only chats explicitly listed in `ALLOWED_PRIVATE_CHATS` or `ALLOWED_GROUPS` are processed.
-- **Cooldowns**:
-  - `GLOBAL_COOLDOWN_SECONDS` (default: 30s) between any two outgoing replies.
-  - `PER_CHAT_COOLDOWN_SECONDS` (default: 60s) between replies in the same conversation.
-- **Sensitive Content Guard**: Automatically suppresses replies to messages mentioning OTPs, verification codes, 2FA passwords, or bank/crypto credentials.
-- **Self-Message & Loop Protection**: Completely ignores messages sent by your own user ID.
-- **Consecutive Error Breaker**: Pauses sending for 5 minutes if 5 consecutive errors occur.
+### Step 4.2: Getting a Free Google Gemini API Key
+1. Go to **[Google AI Studio](https://aistudio.google.com/app/apikey)**.
+2. Sign in with your Google account.
+3. Click **Create API key**.
+4. Copy your key (starts with `AIzaSy...` or `AQ...`).
 
 ---
 
-## 8. Local Deployment Quick Start
-
-On your Arch Linux laptop:
+### Step 4.3: Local Installation & Configuration
+Open your terminal on your laptop:
 ```bash
-# 1. Setup virtual environment & dependencies
+# 1. Clone or navigate to the project directory
+cd telegram-chat-automation
+
+# 2. Run the automated local setup script
 ./local/setup.sh
+```
+This script automatically:
+- Checks for Python 3.10+
+- Creates an isolated virtual environment in `.venv/`
+- Installs all required packages (`telethon`, `python-dotenv`, `pytest`)
+- Creates a private `.env` file with restrictive `0600` permissions
 
-# 2. Edit .env with your credentials from https://my.telegram.org/apps
+Now open `.env` in an editor:
+```bash
 nano .env
+```
+Fill in your credentials:
+```env
+# Paste your credentials from my.telegram.org
+TG_API_ID=34656768
+TG_API_HASH=7c7077f000e5a2da382562c27881a5fc
 
-# 3. Authenticate your personal Telegram account
+# Enable Google Gemini
+AI_ENABLED=true
+AI_PROVIDER=gemini
+AI_API_KEY=your_gemini_api_key_here
+AI_MODEL=gemini-3.5-flash
+
+# Set automation mode
+REPLY_MODE=restricted_auto
+AUTO_AUTHORIZE=true
+
+# Add allowed chat IDs (leave blank for now if you don't know them yet)
+ALLOWED_PRIVATE_CHATS=
+ALLOWED_GROUPS=
+```
+Save and exit (`Ctrl+O`, then `Enter`, then `Ctrl+X`).
+
+---
+
+### Step 4.4: First-Time Phone & 2FA Authentication
+Run the interactive login script:
+```bash
 ./local/authenticate.sh
+```
+1. Enter your phone number with country code (e.g. `+1234567890`).
+2. Enter the 5-digit verification code sent to your Telegram app.
+3. If Two-Step Verification (2FA) is enabled, enter your password.
+4. The script verifies your account, locks session file permissions (`0600`), and prints your **Cloud StringSession (`TG_SESSION_STRING`)** (save this if you plan to deploy to a VPS later).
 
-# 4. Start the client
+---
+
+### Step 4.5: Finding & Setting Chat IDs
+**How to find someone's Chat ID:**
+- **Method 1 (Automatic)**: Just start the client! When anyone messages you, the terminal will print:
+  ```text
+  [CHAT DETECTED] Received message from Chat ID: 123456789. To allow replies, add 123456789 to ALLOWED_PRIVATE_CHATS in .env
+  ```
+- **Method 2 (From Telegram)**: Once the client is running, you don't even have to edit `.env`! Simply send `/allowchat 123456789` in your **Saved Messages**!
+- **Method 3**: Forward any message from the user to `@userinfobot` in Telegram.
+- **For Groups**: Group IDs are negative numbers (e.g. `-1001234567890`).
+
+---
+
+### Step 4.6: Running the Client
+Start the client:
+```bash
 ./local/start.sh
 ```
-See [`local/README.md`](local/README.md) for full instructions.
+When it starts, check your Telegram app under **Saved Messages**. You will receive an immediate startup notification with your active status and command guide!
 
 ---
 
-## 9. Cloud VPS Deployment Quick Start
+## 5. Telegram Saved Messages Control Center (Interactive Commands)
 
-On your Linux server with Docker installed:
-```bash
-# 1. Generate cloud session string on your laptop
-python3 scripts/generate_session.py
+You can control and customize everything by sending commands directly to your **Saved Messages** (chat with yourself) from your phone:
 
-# 2. Copy project to your server
-rsync -avz --exclude='.venv' --exclude='data' ./ user@server-ip:~/telegram-chat-automation/
+| Command | Action | Example |
+| :--- | :--- | :--- |
+| **`/status`** | Shows active health, identity name, pause timer, and reply mode | `/status` |
+| **`/chats`** | Lists all allowlisted private contacts and groups | `/chats` |
+| **`/allowchat <id>`** | Adds a contact or group ID to allowlist instantly | `/allowchat 123456789` |
+| **`/removechat <id>`**| Removes a chat from the allowlist | `/removechat 123456789` |
+| **`/blockchat <id>`** | Blacklists a chat completely | `/blockchat 987654321` |
+| **`/pause <time>`** | Snoozes auto-replies for a set duration | `/pause 2h` or `/pause 30m` |
+| **`/resume`** | Clears pause/stop and resumes normal listening | `/resume` |
+| **`/stop`** | **Emergency kill switch**: immediately halts all outgoing messages | `/stop` |
+| **`/name <name>`** | Sets your display name for the AI persona | `/name Kaif` |
+| **`/prompt`** | Views active system instructions on your phone | `/prompt` |
+| **`/setprompt <text>`**| Updates the AI prompt on the fly without touching code | `/setprompt You are chill and brief.` |
+| **`/auto on` / `off`** | Authorizes or revokes automated sending mode | `/auto on` |
+| **`/pending`** | Lists drafts waiting for manual review (in approval mode) | `/pending` |
+| **`/approve <id>`** | Approves and sends draft `#<id>` | `/approve 1` |
+| **`/reject <id>`** | Discards draft `#<id>` | `/reject 1` |
+| **`/help`** | Shows the full interactive command guide | `/help` |
 
-# 3. SSH into server, configure cloud/.env with TG_SESSION_STRING
-cd cloud
-cp .env.example .env
-nano .env
+---
 
-# 4. Launch in background
-./deploy.sh
+## 6. Setting Custom Keyword Trigger Rules From Telegram
+
+You can set custom instant auto-replies for specific keywords without waiting for AI generation:
+
+### Adding a Keyword Trigger
+Send to your **Saved Messages**:
+```text
+/addrule pricing => Our packages are being updated, will send details shortly!
 ```
-See [`cloud/README.md`](cloud/README.md) for full instructions.
-
----
-
-## 10. Session Security & Revocation
-
-- **Local Permissions**: Session files in `data/` are created with `0600` permissions (readable only by the owner).
-- **Cloud Secrets**: `TG_SESSION_STRING` gives access to your Telegram account. Never commit it to git or paste it in public chat logs.
-- **Single Instance**: Do not run local and cloud clients simultaneously with the same session.
-- **Session Revocation**: If you ever suspect a session string was exposed, open Telegram on your phone:
-  **Settings → Devices → Terminate Session**.
-
----
-
-## 11. Troubleshooting & Emergency Stop
-
-### How to stop the client immediately
-- **Locally**: Press `Ctrl+C` in your terminal.
-- **In Cloud**: Run `docker compose down` inside `cloud/`.
-- **From your Phone**: Send `/stop` in **Saved Messages** to activate the emergency kill switch.
-
-### Running Tests
-To verify all 20 automated unit tests:
-```bash
-./local/test.sh
+Or for another keyword:
+```text
+/addrule portfolio => Check out my github profile at github.com/mkr-infinity
 ```
 
+### Viewing Active Rules
+Send:
+```text
+/rules
+```
+It returns all active keyword triggers.
+
+### Deleting a Rule
+Send:
+```text
+/delrule pricing
+```
+
+Whenever an incoming message contains that keyword, the client replies with your exact chosen text immediately!
+
 ---
 
-## 12. Telegram API Terms & Compliance
+## 7. Group Chat Automation & Mention Filters
 
-- This application complies with Telegram MTProto API rules by acting as a user-client tool.
-- Automation is strictly opt-in and restricted to allowlisted chats. Mass marketing, unsolicited advertising, or spamming is strictly prohibited under Telegram terms.
-- No personal user messages are retained permanently or uploaded to external servers without explicit configuration.
+Running automation in high-volume groups requires strict spam protection:
+
+### Group Mention Filter (`/mentiononly`)
+- **`/mentiononly on` (Default ON)**: In groups, the client **only** replies when someone explicitly mentions your `@username` or directly replies to one of your messages. It will never spam the group when other members are talking among themselves.
+- **`/mentiononly off`**: Allows replying to every message in allowlisted groups (recommended only for small private discussion groups).
+
+### Adding a Group
+1. Find the group ID (always negative, e.g. `-1001234567890`).
+2. Send to Saved Messages:
+   ```text
+   /allowchat -1001234567890
+   ```
+
+---
+
+## 8. Anti-Scam & Link Protection System
+
+- **Scam Link Detection**: Automatically detects and drops scammer messages containing:
+  - Private channel join links (`t.me/+...`, `t.me/joinchat/...`).
+  - Crypto traps (`airdrop`, `free usdt`, `crypto bonus`, `claim reward`, `investment opportunity`).
+  - Suspicious URL shorteners (`bit.ly`, `tinyurl`, `cutt.ly`, `rb.gy`, etc.).
+- **Zero Outgoing Links**: The AI is strictly instructed and post-processed by a hard-coded regex sanitizer that strips any URLs before messages are dispatched.
+
+---
+
+## 9. Human Persona & Language Matching (Hindi + English)
+
+Configured in [`system_prompt.txt`](file:///home/kaif/Downloads/Projects/telegram-chat-automation/system_prompt.txt):
+- **Hindi / Hinglish**: If someone texts in Hindi or Hinglish, the AI replies naturally:
+  - *"bhai kaisa hai?"* ➜ `sab badhiya bhai, tu bata`
+  - *"aaj sham ko milte hai kya?"* ➜ `haan bhai, sham ko milte hain`
+- **English**: If someone texts in English:
+  - *"Hey bro what are you doing?"* ➜ `not much, just chilling! what's up with you?`
+- **Anti-AI Human Alibi**:
+  - *"are you an ai?"* ➜ `lol what? no bro, it's me haha`
+  - *"which model are you using?"* ➜ `model? mai toh bas phone se type kar raha hu bhai 😂`
+
+---
+
+## 10. Local Deployment Guide (Reference)
+
+For dedicated instructions on running the client locally on an Arch Linux or standard Linux laptop, see:
+👉 **[`local/README.md`](file:///home/kaif/Downloads/Projects/telegram-chat-automation/local/README.md)**
+
+---
+
+## 11. Cloud VPS 24/7 Deployment Guide (Reference)
+
+For step-by-step instructions on deploying the client to a Linux VPS using Docker Compose (so it stays online 24/7 without your laptop), see:
+👉 **[`cloud/README.md`](file:///home/kaif/Downloads/Projects/telegram-chat-automation/cloud/README.md)**
+
+---
+
+## 12. Emergency Kill Switch & Safety Guards
+
+If you ever need to stop the client immediately:
+- **From your Phone**: Send `/stop` in **Saved Messages**. All automated replies halt instantly.
+- **From Terminal (Local)**: Press `Ctrl+C`.
+- **From VPS (Cloud)**: Run `docker compose down` inside `cloud/`.
+- **Compromised Session**: Open Telegram on your phone ➜ **Settings ➜ Devices ➜ Terminate Session**.
+
+---
+
+## 13. Troubleshooting & FAQ
+
+- **Error: `HTTP Error 404: Not Found` on Gemini API**
+  - Ensure `AI_MODEL=gemini-3.5-flash` in `.env`. Older models like `gemini-1.5-flash` are deprecated by Google.
+- **Error: `Missing required configuration: TG_API_ID`**
+  - Open `.env` and fill in your actual numeric API ID from my.telegram.org.
+- **Running Tests**:
+  - Run `./local/test.sh` to execute all 21 unit tests.
+
+---
+
+## 14. License & Attribution
+
+```text
+Author:     Mohammad Kaif Raja (mkr-infinity)
+Copyright:  Copyright (c) Mohammad Kaif Raja. All Rights Reserved.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~  If you modify, redistribute, or sell anything made from my things without my permission, it is strictly prohibited. ~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Unauthorized removal of attribution is strictly prohibited.
+```
+Licensed under the [MIT License](LICENSE).

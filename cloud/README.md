@@ -1,84 +1,84 @@
-# Cloud Deployment Guide (Docker & Linux VPS)
+# Cloud VPS 24/7 Deployment Guide (Docker Compose)
 
-This directory contains the production-ready Docker Compose configuration for running your personal Telegram MTProto client 24/7 on a Linux VPS without requiring your laptop to remain switched on.
+```text
+========================================================================================
+  telegram-chat-automation v1.0
+  ~~~~~~~~~~~~~~~~~~~~~~~~~~
+  Author:     Mohammad Kaif Raja (mkr-infinity)
+  Copyright:  Copyright (c) Mohammad Kaif Raja. All Rights Reserved.
+========================================================================================
+```
 
----
-
-## 🔒 Cloud Architecture & Security Principles
-
-1. **No Interactive Login on Server**: The cloud container never asks for SMS codes or passwords. Instead, it uses a pre-authenticated **MTProto StringSession (`TG_SESSION_STRING`)** generated on your local laptop.
-2. **Non-Root Execution**: Runs under unprivileged user `appuser` (UID `10001`).
-3. **No Inbound Web Ports**: Telegram MTProto is an outbound long-polling/TCP socket protocol. No public web ports or HTTP proxies are opened to the internet.
-4. **Isolated Volume**: Stores deduplication and approval queue state in Docker named volume `cloud_data` mounted at `/app/data`.
-5. **Restart Policy**: `restart: unless-stopped` guarantees the client restarts after server reboot or transient crashes.
-
----
-
-## 📋 Prerequisites
-
-On your cloud server (e.g., Ubuntu, Debian, Arch Linux VPS):
-- Docker installed (`sudo apt install docker.io` or distro equivalent)
-- Docker Compose plugin installed (`docker compose version`)
+This guide explains how to deploy your personal Telegram client to a Linux VPS (Ubuntu, Debian, Arch Linux, etc.) using Docker Compose so it stays online 24/7 without requiring your laptop to stay powered on.
 
 ---
 
-## 🚀 Step-by-Step Deployment
+## 🔒 Security & Architecture Principles
 
-### Step 1: Generate Cloud Session on Local Laptop
-On your local computer, run:
+1. **No Interactive Login on the VPS**: The container never asks for SMS codes or passwords. It uses an official **MTProto StringSession (`TG_SESSION_STRING`)** pre-authenticated safely on your laptop.
+2. **Hardened Non-Root Container**: Runs under unprivileged user `appuser` (UID `10001`).
+3. **No Inbound Open Web Ports**: Telegram MTProto uses outbound TCP connections to Telegram data centers. No open HTTP ports or web dashboards are exposed.
+4. **Persistent Named Volume**: Docker volume `cloud_data` mounts at `/app/data` to persist deduplication, keyword rules, and approval queues.
+5. **Auto-Restart**: `restart: unless-stopped` guarantees automatic recovery after server reboots.
+
+---
+
+## 🚀 Beginner Quick Start in 4 Steps
+
+### Step 1: Export Your StringSession on Your Laptop
+On your local laptop (after running `./local/authenticate.sh` at least once):
 ```bash
 python3 scripts/generate_session.py
 ```
-*(Or use `./local/authenticate.sh` which prints the string session upon first login).*
-Copy the resulting `TG_SESSION_STRING` value.
+Copy the full `1ApWapzIBu...` string displayed.
 
 ---
 
-### Step 2: Copy Project to Cloud Server
-Copy or clone the project folder to your VPS:
+### Step 2: Copy Code to Your Cloud VPS
+From your laptop, copy the project directory to your VPS:
 ```bash
-rsync -avz --exclude='.venv' --exclude='data' ./ user@your-server-ip:~/telegram-chat-automation/
+rsync -avz --exclude='.venv' --exclude='data' ./ user@YOUR_SERVER_IP:~/telegram-chat-automation/
 ```
 
 ---
 
-### Step 3: Configure Cloud Environment
-SSH into your server and enter the `cloud/` directory:
+### Step 3: Configure Cloud Environment on Server
+SSH into your server:
 ```bash
+ssh user@YOUR_SERVER_IP
 cd ~/telegram-chat-automation/cloud
 cp .env.example .env
 chmod 600 .env
 nano .env
 ```
-
-Set the following variables in `cloud/.env`:
+Fill in your secrets:
 ```env
-TG_API_ID=your_api_id
-TG_API_HASH=your_api_hash
+TG_API_ID=34656768
+TG_API_HASH=7c7077f000e5a2da382562c27881a5fc
 
-# Set session mode to 'string' and paste your session string
+# Set string session mode and paste your exported session
 TG_SESSION_MODE=string
-TG_SESSION_STRING=1ApWapzIBu3h4...[paste full session string]
+TG_SESSION_STRING=1ApWapzIBu...paste_your_string_session_here...
 
-# Reply Mode: approval (recommended for cloud) or restricted_auto
-REPLY_MODE=approval
+# Enable Gemini AI
+AI_ENABLED=true
+AI_PROVIDER=gemini
+AI_API_KEY=your_gemini_api_key_here
+AI_MODEL=gemini-3.5-flash
 
-# Explicit Allowlist (Only messages from these IDs will ever be processed)
-ALLOWED_PRIVATE_CHATS=123456789
-ALLOWED_GROUPS=
+# Mode
+REPLY_MODE=restricted_auto
+AUTO_AUTHORIZE=true
 
-# Rates and Limits
-GLOBAL_COOLDOWN_SECONDS=30
-PER_CHAT_COOLDOWN_SECONDS=60
-MAX_MESSAGE_LENGTH=1000
-
+# Persistent volume directory
 DATA_DIR=/app/data
 ```
+Save and exit (`Ctrl+O`, `Enter`, `Ctrl+X`).
 
 ---
 
 ### Step 4: Build and Launch
-Deploy using the automated script:
+Run:
 ```bash
 ./deploy.sh
 ```
@@ -88,70 +88,55 @@ docker compose build
 docker compose up -d
 ```
 
----
-
-## 🎮 Managing the Cloud Deployment
-
-### View Realtime Logs
-```bash
-docker compose logs -f
-```
-*(Notice that all phone numbers, API hashes, and session keys are automatically redacted in logs!)*
-
-### Check Health & Container Status
-```bash
-docker compose ps
-```
-The status will display `Up (healthy)`.
-
-### Restart Container
-```bash
-docker compose restart
-```
-
-### Stop Container Cleanly
-```bash
-docker compose down
-```
-
-### Update Code
-When you push code updates:
-```bash
-git pull
-docker compose build
-docker compose up -d
-```
+The container will build, start in the background, and immediately send an onboarding welcome message to your **Telegram Saved Messages**!
 
 ---
 
-## 📱 Controlling the Remote Client from Telegram
+## 🛠️ Management Commands
 
-When running in `REPLY_MODE=approval`:
-1. Whenever someone in your allowlist messages you, the cloud client sends a private notification to your **Saved Messages**:
-   ```text
-   📝 Pending Approval #12
-   • Chat: Client Bob (987654321)
-   • Incoming: "Are you ready to discuss the project?"
-   • Suggested Reply: "Yes, ready when you are! Let me know."
-   Send /approve 12 to send, or /reject 12 to discard.
-   ```
-2. Simply reply in Saved Messages:
-   - `/approve 12` — Dispatches the message through your personal account.
-   - `/reject 12` — Discards the draft.
-   - `/status` — Displays remote server uptime, identity name, and health.
-   - `/auto on` — Temporarily authorizes automatic sending for low-risk messages.
-   - `/auto off` — Revokes automatic sending.
-   - `/pause <duration>` — Snoozes automated replies (e.g. `/pause 2h`, `/pause 45m`).
-   - `/resume` — Re-enables messaging after a pause or stop.
-   - `/name <name>` — Changes your identity name dynamically.
-   - `/prompt` — Views active system instructions from your phone.
-   - `/setprompt <text>` — Updates system prompt on the VPS without SSH access!
-   - `/stop` — Emergency pause switch to immediately cut off all outgoing messages.
+- **View Live Logs**:
+  ```bash
+  docker compose logs -f
+  ```
+- **Check Health Status**:
+  ```bash
+  docker compose ps
+  ```
+  *(Status will show `Up (healthy)`).*
+- **Restart Container**:
+  ```bash
+  docker compose restart
+  ```
+- **Stop Container**:
+  ```bash
+  docker compose down
+  ```
+
+---
+
+## 📱 Controlling the Remote VPS Client from Your Phone
+
+You do not need to SSH into your server to manage the client. Simply text commands to your **Saved Messages**:
+
+- **`/status`** — Check VPS uptime, identity name, and pause timers.
+- **`/chats`** — View all active allowlisted chats.
+- **`/allowchat <id>`** — Add a new group or contact without touching `.env`.
+- **`/addrule <word> => <reply>`** — Add custom instant keyword responses.
+- **`/pause 2h`** — Snooze automated replies for 2 hours.
+- **`/resume`** — Unpause and resume operations.
+- **`/stop`** — Emergency kill switch (halts all outgoing replies immediately).
+- **`/setprompt <text>`** — Updates the AI prompt on your VPS on the fly.
 
 ---
 
 ## ⚠️ Important Operating Warnings
 
-- **Never Run Local and Cloud Concurrently**: Operating two instances using the same Telegram session at the same instant can trigger MTProto session invalidation (`SESSION_REVOKED`). Stop your local instance (`Ctrl+C`) before starting the cloud container.
-- **Revoking Compromised Cloud Instances**: If your VPS is compromised, immediately open Telegram on your phone:
+- **Never Run Local and Cloud Instances Concurrently**: Using the same Telegram session on two computers at the exact same time can cause Telegram to invalidate the session (`SESSION_REVOKED`). Stop your local laptop client before starting the cloud container.
+- **Revoking Compromised Instances**: If your VPS is ever compromised, immediately open Telegram on your phone:
   **Settings → Devices → Terminate all other sessions**.
+
+---
+
+## 🔗 Related Documentation
+- 📖 Main Complete Guide: [`README.md`](../README.md)
+- 💻 Local Laptop Deployment: [`local/README.md`](../local/README.md)

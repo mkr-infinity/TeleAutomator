@@ -118,6 +118,8 @@ class TelegramService:
                     f"• `/status` - Check current health, mode & pause status\n"
                     f"• `/chats` - View allowlisted private chats & groups\n"
                     f"• `/allowchat <id>` - Add a contact or group to allowlist\n"
+                    f"• `/addrule <word> => <reply>` - Auto-reply when a word is detected\n"
+                    f"• `/rules` - View active custom keyword triggers\n"
                     f"• `/pause 2h` - Snooze automated replies for 2 hours\n"
                     f"• `/resume` - Unpause and resume normal operation\n"
                     f"• `/mentiononly on` - In groups: reply only when mentioned\n"
