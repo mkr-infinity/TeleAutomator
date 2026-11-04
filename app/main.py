@@ -41,6 +41,8 @@ async def run_app() -> None:
     # Initialize storage & managers
     db = Database(config.data_dir / "app.db")
     safety = SafetyManager(config, db)
+    if config.auto_authorize:
+        safety.set_auto_authorization(True)
     privacy = PrivacyManager(config)
     generator = ReplyGenerator(config)
     reply_mgr = ReplyManager(config, db, safety, privacy, generator)

@@ -49,6 +49,7 @@ class AppConfig:
 
     # Reply Mode: "draft" (default), "approval", "restricted_auto"
     reply_mode: str = "draft"
+    auto_authorize: bool = False
 
     # AI Configuration
     ai_enabled: bool = False
@@ -128,6 +129,7 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         raise ValueError(
             f"Invalid REPLY_MODE: '{reply_mode}'. Must be 'draft', 'approval', or 'restricted_auto'."
         )
+    auto_authorize = _parse_bool(os.getenv("AUTO_AUTHORIZE"), default=False)
 
     # AI Configuration
     ai_enabled = _parse_bool(os.getenv("AI_ENABLED"), default=False)
@@ -162,6 +164,7 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         app_env=os.getenv("APP_ENV", "development").strip().lower(),
         log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper(),
         reply_mode=reply_mode,
+        auto_authorize=auto_authorize,
         ai_enabled=ai_enabled,
         ai_provider=ai_provider,
         ai_api_key=ai_api_key,

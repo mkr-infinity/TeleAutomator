@@ -50,7 +50,7 @@ class GeminiProvider(AIProvider):
     def generate_reply(self, prompt: str, system_instructions: str) -> str:
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{self.model}:generateContent?key={self.api_key}"
+            f"{self.model}:generateContent"
         )
         payload = {
             "system_instruction": {"parts": [{"text": system_instructions}]},
@@ -61,7 +61,10 @@ class GeminiProvider(AIProvider):
         req = urllib.request.Request(
             url,
             data=data,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": self.api_key,
+            },
             method="POST",
         )
 
