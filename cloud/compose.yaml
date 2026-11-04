@@ -1,0 +1,27 @@
+services:
+  telegram-client:
+    build:
+      context: ..
+      dockerfile: cloud/Dockerfile
+    container_name: telegram-client
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - cloud_data:/app/data
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  cloud_data:
+    driver: local

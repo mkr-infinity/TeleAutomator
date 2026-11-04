@@ -1,0 +1,163 @@
+"""Telethon MTProto client lifecycle, authentication verification, and connection management."""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Optional
+
+from telethon import TelegramClient
+
+from app.config import AppConfig
+from app.event_handlers import register_handlers
+from app.health import HealthMonitor
+from app.logger import setup_logger
+from app.message_filter import MessageFilter
+from app.privacy_manager import PrivacyManager
+from app.reply_manager import ReplyManager
+from app.safety_manager import SafetyManager
+from app.session_manager import get_telethon_session
+from app.storage.database import Database
+
+logger = setup_logger(__name__)
+
+
+class TelegramService:
+    """Manages Telethon MTProto client connection, session validation, and heartbeat."""
+
+    def __init__(
+        self,
+        config: AppConfig,
+        database: Database,
+        safety_manager: SafetyManager,
+        privacy_manager: PrivacyManager,
+        reply_manager: ReplyManager,
+        health_monitor: HealthMonitor,
+    ):
+        self.config = config
+        self.db = database
+        self.safety = safety_manager
+        self.privacy = privacy_manager
+        self.reply_manager = reply_manager
+        self.health = health_monitor
+        self.client: Optional[TelegramClient] = None
+        self._running = False
+        self._heartbeat_task: Optional[asyncio.Task] = None
+
+    async def initialize(self) -> TelegramClient:
+        """Create and connect the Telethon client, verifying personal account identity."""
+        session = get_telethon_session(self.config)
+        self.client = TelegramClient(
+            session=session,
+            api_id=self.config.api_id,
+            api_hash=self.config.api_hash,
+            connection_retries=5,
+            retry_delay=3,
+        )
+
+        logger.info("Connecting to Telegram MTProto servers...")
+        await self.client.connect()
+
+        if not await self.client.is_user_authorized():
+            if self.config.session_mode == "string":
+                raise RuntimeError(
+                    "Cloud Telegram session is invalid or unauthorized. "
+                    "Generate a valid TG_SESSION_STRING locally using ./local/authenticate.sh."
+                )
+            raise RuntimeError(
+                "Local Telegram session is not authenticated. "
+                "Run ./local/authenticate.sh to log in interactively."
+            )
+
+        # Confirm identity of the connected account
+        me = await self.client.get_me()
+        if getattr(me, "bot", False):
+            raise RuntimeError(
+                "Connected account is a Bot account! This client is designed strictly "
+                "for personal MTProto user accounts. Please authenticate with your personal account."
+            )
+
+        user_id = me.id
+        name = f"{me.first_name or ''} {me.last_name or ''}".strip()
+        username = f"@{me.username}" if me.username else "(no username)"
+        logger.info(f"Connected personal Telegram account: {name} {username} [ID: {user_id}]")
+
+        # Wire up reply manager and message filter
+        self.reply_manager.set_telegram_client(self.client)
+        message_filter = MessageFilter(
+            my_user_id=user_id,
+            privacy_manager=self.privacy,
+            safety_manager=self.safety,
+        )
+
+        register_handlers(
+            client=self.client,
+            my_user_id=user_id,
+            message_filter=message_filter,
+            reply_manager=self.reply_manager,
+        )
+
+        return self.client
+
+    async def _heartbeat_loop(self) -> None:
+        """Periodically write health status file."""
+        while self._running:
+            is_connected = bool(self.client and self.client.is_connected())
+            self.health.update_heartbeat(
+                is_connected=is_connected,
+                emergency_stop=self.safety.is_emergency_stopped,
+            )
+            await asyncio.sleep(30)
+
+    async def run(self) -> None:
+        """Run the client and sustain connection with exponential backoff on disconnects."""
+        self._running = True
+        await self.initialize()
+
+        # Start health monitor loop
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        logger.info(f"Client is running in mode: '{self.config.reply_mode}'. Listening for events.")
+
+        backoff = 2
+        max_backoff = 60
+
+        while self._running:
+            try:
+                # Maintain connection until disconnected or stopped
+                if self.client:
+                    await self.client.run_until_disconnected()
+                if not self._running:
+                    break
+
+                logger.warning("Disconnected from Telegram. Attempting reconnection...")
+                await asyncio.sleep(backoff)
+                if self.client and not self.client.is_connected():
+                    await self.client.connect()
+                    logger.info("Successfully reconnected to Telegram MTProto.")
+                    backoff = 2
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Telegram connection error: {e}")
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
+
+    async def stop(self) -> None:
+        """Gracefully disconnect and stop background tasks."""
+        logger.info("Stopping Telegram service...")
+        self._running = False
+
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+
+        if self.client:
+            try:
+                await self.client.disconnect()
+            except Exception as e:
+                logger.warning(f"Error disconnecting client: {e}")
+
+        self.health.update_heartbeat(is_connected=False, emergency_stop=self.safety.is_emergency_stopped)
+        logger.info("Telegram service stopped cleanly.")

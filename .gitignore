@@ -1,0 +1,30 @@
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Telegram sessions and SQLite databases
+*.session
+*.session-journal
+*.sqlite
+*.db
+
+# Python bytecode and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Application data, logs, and backups
+logs/
+data/
+backups/
+*.log
+
+# IDE and OS files
+.DS_Store
+.idea/
+.vscode/
