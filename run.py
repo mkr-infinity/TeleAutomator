@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Universal cross-platform launcher and management CLI for Telegram Chat Automation.
+"""Universal cross-platform launcher and management CLI for TeleAutomator (Telegram Chat Automation).
 
 Works out-of-the-box on Linux, Windows, macOS, and remote servers without bash or PowerShell.
 """
@@ -63,7 +63,7 @@ def ensure_environment() -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Universal Runner for Telegram Chat Automation"
+        description="Universal Runner for TeleAutomator - Telegram Chat Automation"
     )
     parser.add_argument("--setup", action="store_true", help="Set up environment and install dependencies")
     parser.add_argument("--auth", action="store_true", help="Run interactive Telegram phone/2FA authentication")

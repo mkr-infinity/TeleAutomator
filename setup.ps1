@@ -3,7 +3,7 @@
 # =============================================================================
 
 Write-Host "========================================================================" -ForegroundColor Cyan
-Write-Host " Telegram Chat Automation - Windows Setup" -ForegroundColor Green
+Write-Host " TeleAutomator - Telegram Chat Automation Windows Setup" -ForegroundColor Green
 Write-Host "========================================================================" -ForegroundColor Cyan
 
 # 1. Check Python

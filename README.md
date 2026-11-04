@@ -1,9 +1,9 @@
-# Telegram Chat Automation v1.0
+# TeleAutomator - Telegram Chat Automation v1.0
 
 ```text
 ========================================================================================
-  Telegram Chat Automation v1.0
-  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  TeleAutomator - Telegram Chat Automation v1.0
+  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
   A production-ready automation tool for automating whole telegram messages from
   bot-bot, account-bot, groups messages etc all from your main account.
@@ -49,7 +49,7 @@
 
 ## 1. Overview & Core Capabilities
 
-**Telegram Chat Automation** is a production-grade Telegram automation client built with **Python 3**, **Telethon (MTProto)**, and **Google Gemini AI**.
+**TeleAutomator** (Telegram Chat Automation) is a production-grade Telegram automation client built with **Python 3**, **Telethon (MTProto)**, and **Google Gemini AI**.
 
 Unlike third-party bots, this application connects directly as your **real personal Telegram account**:
 - **Natural Texting Tone**: Speaks casually like a human, never like a corporate AI chatbot.

@@ -1,9 +1,9 @@
 services:
-  telegram-client:
+  teleautomator:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: telegram-client
+    container_name: teleautomator
     restart: unless-stopped
     env_file:
       - .env

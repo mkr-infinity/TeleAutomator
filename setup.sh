@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
 echo "========================================================================"
-echo " Telegram Chat Automation - Universal System Setup"
+echo " TeleAutomator - Telegram Chat Automation Setup"
 echo "========================================================================"
 
 # 1. Detect Operating System & Environment

@@ -6,8 +6,8 @@ import sys
 
 BANNER_TEXT = """
 \033[1;36m========================================================================================\033[0m
-\033[1;32m  Telegram Chat Automation v1.0\033[0m
-\033[1;30m  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\033[0m
+\033[1;32m  TeleAutomator - Telegram Chat Automation v1.0\033[0m
+\033[1;30m  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\033[0m
 
   \033[1;37mA production-ready automation tool for automating whole telegram messages from\033[0m
   \033[1;37mbot-bot, account-bot, groups messages etc all from your main account.\033[0m
