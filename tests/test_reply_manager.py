@@ -248,3 +248,57 @@ def test_send_reply_abort_on_emergency_stop(tmp_path: Path):
         mock_client.send_message.assert_not_called()
 
     asyncio.run(_run())
+
+
+def test_errors_and_fallbacks_never_sent_to_groups_or_chats(tmp_path: Path):
+    """Verify that when errors or issues occur, zero messages are sent to groups; alerts only route to Saved Messages."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            reply_mode="restricted_auto",
+            allowed_groups={-100123456789},
+            min_delay_seconds=0.0,
+            max_delay_seconds=0.0,
+            typing_delay_seconds=0.0,
+            data_dir=tmp_path,
+        )
+        db = Database(tmp_path / "app.db")
+        safety = SafetyManager(cfg, db)
+        safety.set_auto_authorization(True)
+        privacy = PrivacyManager(cfg, database=db)
+
+        # Mock generator that raises an AI generation error
+        failing_generator = MagicMock()
+        failing_generator.generate.side_effect = RuntimeError("API rate limit exceeded 429")
+
+        mgr = ReplyManager(cfg, db, safety, privacy, failing_generator)
+        mock_client = AsyncMock()
+        mgr.set_telegram_client(mock_client)
+
+        group_id = -100123456789
+
+        # Inbound eligible message arrives in group
+        await mgr.handle_incoming_eligible_message(
+            chat_id=group_id,
+            chat_title="Developer Group",
+            message_id=999,
+            sender_id=456,
+            sender_name="Bob",
+            text="Hey Kaif can you review this PR?",
+        )
+
+        # Crucial Assertion 1: Zero messages were sent to the group!
+        for call in mock_client.send_message.call_args_list:
+            dest = call[0][0]
+            assert dest != group_id, f"Error/fallback was leaked to group {group_id}!"
+
+        # Crucial Assertion 2: Exactly one issue alert was delivered to private Saved Messages ('me')
+        assert mock_client.send_message.call_count == 1
+        saved_call = mock_client.send_message.call_args[0]
+        assert saved_call[0] == "me"
+        assert "TeleAutomator Alert" in saved_call[1]
+        assert "API rate limit exceeded 429" in saved_call[1]
+        assert "Developer Group" in saved_call[1]
+
+    asyncio.run(_run())

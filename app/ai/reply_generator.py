@@ -66,8 +66,5 @@ class ReplyGenerator:
             return self.prompt_manager.clean_reply(draft)
         except Exception as e:
             logger.error(f"Failed to generate draft reply: {e}")
-            # Natural human fallback if external API is temporarily unavailable
-            lower = incoming_text.lower()
-            if any(w in lower for w in ("bhai", "kaisa", "kya", "ha", "haan", "kaise")):
-                return "thoda busy hu bhai, thodi der me message karta hu"
-            return "got your message, tied up right now but will get back shortly!"
+            # Never return fallbacks to groups or peer chats; raise so caller alerts Saved Messages exclusively
+            raise RuntimeError(f"AI generation failed: {e}") from e

@@ -26,7 +26,7 @@
 [![MTProto Telethon](https://img.shields.io/badge/protocol-MTProto%20Telethon-informational.svg)](https://github.com/LonamiWebs/Telethon)
 [![Google Gemini](https://img.shields.io/badge/AI-Google%20Gemini%203.5--Flash-orange.svg)](https://aistudio.google.com/)
 [![License](https://img.shields.io/badge/license-Source--Available-red.svg)](LICENSE)
-[![Tests Passing](https://img.shields.io/badge/tests-25%2F25%20passed-brightgreen.svg)](test.sh)
+[![Tests Passing](https://img.shields.io/badge/tests-28%2F28%20passed-brightgreen.svg)](test.sh)
 
 ---
 
@@ -105,6 +105,7 @@ Unlike basic third-party bot scripts created via `@BotFather`, TeleAutomator ope
 - **Instant Custom Keyword Rules**: Set exact responses for specific words from Telegram (e.g., `/addrule pricing => We'll share details shortly`).
 - **Anti-Scam & Phishing Blocker**: Drops scam links, crypto airdrop baits, and channel invite traps (`t.me/+...`).
 - **Zero Outgoing Links**: Regex post-processing bars the AI from ever outputting URLs or links.
+- **Zero Group/Peer Error Leaks**: If an AI provider fails, rate limits, or experiences an error, no fallback text or error messages are EVER sent to groups or peer chats. All error and issue alerts are routed strictly to your private Telegram Saved Messages.
 - **Group Mention Filter**: In high-volume groups, only responds when your `@username` is tagged or your message is replied to.
 - **Emergency Kill Switch**: Send `/stop` in Saved Messages to immediately halt all outgoing actions.
 - **Multi-Platform Universal Setup**: Automatically detects Arch Linux, Debian, Ubuntu, Fedora, Alpine, macOS, Windows, and headless servers.
@@ -513,6 +514,7 @@ To prevent noisy groups from being spammed:
 ## 14. Security, Privacy & Anti-Scam Protection
 
 - **Zero Outgoing Links**: AI replies are passed through regex sanitizers that remove all URLs before transmission.
+- **Zero Group/Peer Error Leaking**: If an AI request fails, times out, or encounters a rate limit, no error messages, technical details, or canned fallbacks are ever sent to groups or peer contacts. All alerts are sent exclusively to your private **Saved Messages** control channel.
 - **Scam Link Detection**: Inbound messages containing crypto traps or invite links (`t.me/+...`) are discarded immediately.
 - **Sensitive Content Scrubbing**: Messages containing keywords like `otp`, `password`, `passcode`, `cvv`, or `seed phrase` are ignored.
 - **Strict Rate Limiting**: Global cooldown (default: 30s) and per-chat cooldown (default: 60s) protect against Telegram FloodWait errors.
@@ -531,7 +533,7 @@ Or via the universal launcher:
 ```bash
 python run.py --test
 ```
-All 25 automated unit tests run against mocked Telegram and AI services without sending real messages:
+All 28 automated unit tests run against mocked Telegram and AI services without sending real messages:
 - `test_config.py`: Environment bounds and secret masking
 - `test_logger.py`: Phone and token redaction in logs
 - `test_message_filter.py`: Broadcast drop, bot command filter, and scam link drop
@@ -576,6 +578,7 @@ TeleAutomator emulates realistic human behavior by choosing a randomized delay b
 - [x] Anti-scam and phishing link filter
 - [x] Zero outgoing link sanitizer
 - [x] Saved Messages remote control center
+- [x] Strict Saved Messages error isolation (zero group/peer error leaks)
 - [x] Custom keyword auto-reply rules
 - [x] Configurable response styles (`casual`, `concise`, `formal`, `humorous`)
 - [x] Conversation context and history awareness

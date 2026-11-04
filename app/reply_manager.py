@@ -82,14 +82,33 @@ class ReplyManager:
             logger.info(f"[KEYWORD TRIGGER] Matched custom trigger rule for chat {chat_id}.")
             draft = matched_rule
         else:
-            draft = self.generator.generate(
-                sender_name=sender_name,
-                incoming_text=clean_text,
-                conversation_history=conversation_history,
-            )
+            try:
+                draft = self.generator.generate(
+                    sender_name=sender_name,
+                    incoming_text=clean_text,
+                    conversation_history=conversation_history,
+                )
+            except Exception as e:
+                logger.error(f"Failed to generate AI reply for chat {chat_id}: {e}")
+                # Strictly send issue/error to Saved Messages only; never leak to peer chat or group
+                await self._notify_issue_to_saved_messages(
+                    chat_id=chat_id,
+                    chat_title=chat_title,
+                    sender_name=sender_name,
+                    error_msg=f"AI generation failed: {e}",
+                    incoming_text=clean_text,
+                )
+                return
 
         if not draft:
             logger.warning(f"No draft generated for chat {chat_id}.")
+            await self._notify_issue_to_saved_messages(
+                chat_id=chat_id,
+                chat_title=chat_title,
+                sender_name=sender_name,
+                error_msg="Empty response from AI engine; reply was dropped safely.",
+                incoming_text=clean_text,
+            )
             return
 
         mode = self.current_mode
@@ -164,6 +183,13 @@ class ReplyManager:
             can_send, reason = self.safety.can_reply(chat_id, draft)
             if not can_send:
                 logger.warning(f"[AUTO REPLY SUPPRESSED] Chat {chat_id}: {reason}")
+                await self._notify_issue_to_saved_messages(
+                    chat_id=chat_id,
+                    chat_title=chat_title,
+                    sender_name=sender_name,
+                    error_msg=f"Auto-reply suppressed by safety guard: {reason}",
+                    incoming_text=clean_text,
+                )
                 return
 
             await self._send_reply(chat_id, message_id, draft, adaptive_delay=True)
@@ -192,6 +218,31 @@ class ReplyManager:
                 await self._client.send_message("me", notification, parse_mode="md")
             except Exception as e:
                 logger.error(f"Failed to send approval notification to Saved Messages: {e}")
+
+    async def _notify_issue_to_saved_messages(
+        self,
+        chat_id: int,
+        chat_title: str,
+        sender_name: str,
+        error_msg: str,
+        incoming_text: str = "",
+    ) -> None:
+        """Send internal error/issue alerts exclusively to user's private Saved Messages."""
+        if not self._client:
+            return
+        try:
+            target_name = chat_title or f"Chat {chat_id}"
+            sender = f" from *{sender_name}*" if sender_name else ""
+            incoming_snippet = f"\n• *Incoming:* \"{incoming_text[:120]}\"" if incoming_text else ""
+            alert = (
+                f"⚠️ *TeleAutomator Alert (Never Sent to Chat)*\n"
+                f"• *Destination:* {target_name} (`{chat_id}`){sender}\n"
+                f"• *Issue/Error:* `{error_msg}`{incoming_snippet}\n"
+                f"• *Safety Status:* Suppressed safely. Zero error text or fallbacks sent to recipient."
+            )
+            await self._client.send_message("me", alert, parse_mode="md")
+        except Exception as e:
+            logger.error(f"Failed to deliver issue alert to Saved Messages: {e}")
 
     def _parse_duration(self, raw: str) -> Optional[float]:
         """Parse duration strings like '2h', '30m', '1d', or '2' (hours)."""
@@ -597,4 +648,11 @@ class ReplyManager:
         except Exception as e:
             self.safety.record_error()
             logger.error(f"Failed to send message to chat {chat_id}: {e}")
+            await self._notify_issue_to_saved_messages(
+                chat_id=chat_id,
+                chat_title="",
+                sender_name="",
+                error_msg=f"Message delivery error: {e}",
+                incoming_text=text,
+            )
             return False
