@@ -45,10 +45,13 @@ git clone https://github.com/mkr-infinity/TeleAutomator.git && cd TeleAutomator
 # 3. Authenticate with your Telegram account (Phone, OTP, 2FA)
 ./authenticate.sh
 
+# (Optional) View your exported cloud session string in terminal (local mode):
+./session.sh
+
 # 4. Start TeleAutomator
 ./start.sh
 ```
-*(Windows users: Run `python run.py --setup` -> `python run.py --auth` -> `python run.py`)*
+*(Windows / cross-platform: `python run.py --setup` -> `python run.py --auth` -> `python run.py --session` -> `python run.py`)*
 
 ---
 

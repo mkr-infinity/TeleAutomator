@@ -231,16 +231,17 @@ If you do not want to manage a VPS, you can host TeleAutomator on **[Render.com]
 ### Why Render Needs a StringSession
 Cloud platforms like Render do not allow interactive terminal typing to enter your Telegram login code. You must generate your session string once on your local computer before deploying.
 
-#### Pre-Step: Generate Your Session String (1 Minute)
-On your local laptop/PC (in terminal or PowerShell inside `TeleAutomator` folder):
+#### Pre-Step: View or Generate Your Session String (1 Minute)
+If you already authenticated locally using `./authenticate.sh` (local mode), view your exported cloud session string directly in your terminal:
 ```bash
-python3 scripts/generate_session.py
-# Or on Windows:
-python run.py --auth
+./session.sh
+# Or on Windows / cross-platform:
+python run.py --session
 ```
-- Enter your phone number, the 5-digit Telegram code, and your 2FA password (if enabled).
-- The script will print a long string starting with `1...` (your `TG_SESSION_STRING`).
-- Copy this entire string.
+*(If you have not authenticated yet, run `./authenticate.sh` or `python run.py --auth` first).*
+
+- The terminal will display your complete string starting with `1...` (your `TG_SESSION_STRING`).
+- Copy this entire string to use in Render.com or Docker.
 
 ---
 

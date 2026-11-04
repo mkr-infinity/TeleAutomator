@@ -67,6 +67,7 @@ def main() -> None:
     )
     parser.add_argument("--setup", action="store_true", help="Set up environment and install dependencies")
     parser.add_argument("--auth", action="store_true", help="Run interactive Telegram phone/2FA authentication")
+    parser.add_argument("--session", action="store_true", help="Export and display your cloud StringSession")
     parser.add_argument("--test", action="store_true", help="Run unit test suite")
     parser.add_argument("--check", action="store_true", help="Check MTProto connection status")
     parser.add_argument("--draft", action="store_true", help="Launch directly in draft-only mode (never sends)")
@@ -83,6 +84,10 @@ def main() -> None:
 
     if args.auth:
         cmd = [python_str, str(ROOT_DIR / "scripts" / "authenticate.py")] + extra
+        sys.exit(subprocess.call(cmd))
+
+    if args.session:
+        cmd = [python_str, str(ROOT_DIR / "scripts" / "generate_session.py")] + extra
         sys.exit(subprocess.call(cmd))
 
     if args.test:
