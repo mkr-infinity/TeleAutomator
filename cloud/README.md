@@ -2,8 +2,8 @@
 
 ```text
 ========================================================================================
-  ProtoFlow: Telegram Chat Automation v1.0
-  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  Telegram Chat Automation v1.0
+  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   Author:     Mohammad Kaif Raja (mkr-infinity)
   Telegram:   @mkr_infinity (https://t.me/mkr_infinity)
   Instagram:  @mkr_infinity (https://instagram.com/mkr_infinity)

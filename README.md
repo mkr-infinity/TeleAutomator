@@ -2,8 +2,8 @@
 
 ```text
 ========================================================================================
-  ProtoFlow: Telegram Chat Automation v1.0
-  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  Telegram Chat Automation v1.0
+  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
   A production-ready automation tool for automating whole telegram messages from
   bot-bot, account-bot, groups messages etc all from your main account.
@@ -13,8 +13,8 @@
   Instagram:  @mkr_infinity (https://instagram.com/mkr_infinity)
   Copyright:  Copyright (c) Mohammad Kaif Raja. All Rights Reserved.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~  If you modify, redistribute, or sell anything made from my things without my         ~
-~  permission, it is strictly prohibited. Free to use for personal use.                 ~
+~  Unauthorized modification, redistribution, or commercial sale of this software       ~
+~  is strictly prohibited without prior written permission. Personal use permitted.     ~
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   Unauthorized removal of attribution is strictly prohibited.
 ========================================================================================
@@ -385,8 +385,8 @@ Telegram:   @mkr_infinity (https://t.me/mkr_infinity)
 Instagram:  @mkr_infinity (https://instagram.com/mkr_infinity)
 Copyright:  Copyright (c) Mohammad Kaif Raja. All Rights Reserved.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~  If you modify, redistribute, or sell anything made from my things without my         ~
-~  permission, it is strictly prohibited. Free to use for personal use.                 ~
+~  Unauthorized modification, redistribution, or commercial sale of this software       ~
+~  is strictly prohibited without prior written permission. Personal use permitted.     ~
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Unauthorized removal of attribution is strictly prohibited.
 ```
