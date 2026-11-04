@@ -60,12 +60,12 @@ class TelegramService:
         if not await self.client.is_user_authorized():
             if self.config.session_mode == "string":
                 raise RuntimeError(
-                    "Cloud Telegram session is invalid or unauthorized. "
-                    "Generate a valid TG_SESSION_STRING locally using ./local/authenticate.sh."
+                    "Telegram string session is invalid or unauthorized. "
+                    "Generate a valid TG_SESSION_STRING using ./authenticate.sh (or: python3 run.py --auth)."
                 )
             raise RuntimeError(
-                "Local Telegram session is not authenticated. "
-                "Run ./local/authenticate.sh to log in interactively."
+                "Telegram session is not authenticated. "
+                "Run ./authenticate.sh (or: python3 run.py --auth) to log in interactively."
             )
 
         # Confirm identity of the connected account

@@ -2,16 +2,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-VENV_DIR="${PROJECT_ROOT}/.venv"
+VENV_DIR="${SCRIPT_DIR}/.venv"
 
 if [ ! -d "${VENV_DIR}" ]; then
     echo "Virtual environment not found. Running setup.sh first..."
     "${SCRIPT_DIR}/setup.sh"
 fi
 
+# shellcheck disable=SC1091
 source "${VENV_DIR}/bin/activate"
-
-cd "${PROJECT_ROOT}"
-echo "Running test suite..."
-pytest -v tests/
+cd "${SCRIPT_DIR}"
+exec python3 scripts/authenticate.py "$@"

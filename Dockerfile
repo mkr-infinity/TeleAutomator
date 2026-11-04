@@ -1,4 +1,4 @@
-# Multi-stage/minimal secure container for Personal Telegram Client
+# Multi-stage/minimal secure container for Telegram Chat Automation
 FROM python:3.12-slim
 
 # Prevent Python from writing .pyc files and enable unbuffered logging
@@ -15,12 +15,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application source code and prompt configuration
+# Copy application source code, scripts, and prompt configuration
 COPY app/ ./app/
 COPY scripts/ ./scripts/
 COPY system_prompt.txt* ./
-COPY cloud/entrypoint.sh ./entrypoint.sh
-COPY cloud/healthcheck.sh ./healthcheck.sh
+COPY entrypoint.sh ./entrypoint.sh
+COPY healthcheck.sh ./healthcheck.sh
 
 # Prepare data directory and enforce ownership
 RUN mkdir -p /app/data && \

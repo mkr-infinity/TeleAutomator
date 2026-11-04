@@ -1,14 +1,14 @@
 services:
   telegram-client:
     build:
-      context: ..
-      dockerfile: cloud/Dockerfile
+      context: .
+      dockerfile: Dockerfile
     container_name: telegram-client
     restart: unless-stopped
     env_file:
       - .env
     volumes:
-      - cloud_data:/app/data
+      - app_data:/app/data
     security_opt:
       - no-new-privileges:true
     deploy:
@@ -23,5 +23,5 @@ services:
         max-file: "3"
 
 volumes:
-  cloud_data:
+  app_data:
     driver: local

@@ -28,14 +28,14 @@ async def export_session() -> None:
 
     if not session_file.exists():
         print(f"[ERROR] Session file not found: {session_file}")
-        print("Please authenticate locally first by running ./local/authenticate.sh")
+        print("Please authenticate first by running ./authenticate.sh (or: python3 run.py --auth)")
         sys.exit(1)
 
     client = TelegramClient(str(session_path), config.api_id, config.api_hash)
     await client.connect()
 
     if not await client.is_user_authorized():
-        print("[ERROR] Local session is not authorized. Please run ./local/authenticate.sh")
+        print("[ERROR] Session is not authorized. Please run ./authenticate.sh (or: python3 run.py --auth)")
         await client.disconnect()
         sys.exit(1)
 
@@ -43,11 +43,11 @@ async def export_session() -> None:
     await client.disconnect()
 
     print("\n" + "=" * 60)
-    print(" EXPORTED CLOUD STRING SESSION (TG_SESSION_STRING)")
+    print(" EXPORTED STRING SESSION (TG_SESSION_STRING)")
     print("=" * 60)
     print("\n" + cloud_session + "\n")
     print("=" * 60)
-    print("Copy this value into cloud/.env as TG_SESSION_STRING.")
+    print("Copy this value into .env as TG_SESSION_STRING if deploying to Docker or cloud VPS.")
     print("NEVER commit or share this string.\n")
 
 

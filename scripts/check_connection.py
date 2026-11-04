@@ -31,7 +31,7 @@ async def check() -> None:
     try:
         await client.connect()
         if not await client.is_user_authorized():
-            print("[FAIL] Session exists but is NOT authorized. Please run ./local/authenticate.sh.")
+            print("[FAIL] Session exists but is NOT authorized. Please run ./authenticate.sh (or: python3 run.py --auth).")
             sys.exit(1)
 
         me = await client.get_me()
