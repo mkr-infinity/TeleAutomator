@@ -26,7 +26,7 @@
 [![MTProto Telethon](https://img.shields.io/badge/protocol-MTProto%20Telethon-informational.svg)](https://github.com/LonamiWebs/Telethon)
 [![Google Gemini](https://img.shields.io/badge/AI-Google%20Gemini%203.5--Flash-orange.svg)](https://aistudio.google.com/)
 [![License](https://img.shields.io/badge/license-Source--Available-red.svg)](LICENSE)
-[![Tests Passing](https://img.shields.io/badge/tests-28%2F28%20passed-brightgreen.svg)](test.sh)
+[![Tests Passing](https://img.shields.io/badge/tests-29%2F29%20passed-brightgreen.svg)](test.sh)
 
 > 🚀 **Deploying to a Cloud VPS, Docker, or Render.com?**  
 > Check out the complete step-by-step beginner guide with Render Blueprint support: **[DEPLOYMENT.md](DEPLOYMENT.md)**.

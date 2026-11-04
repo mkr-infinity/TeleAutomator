@@ -128,7 +128,7 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         raise ValueError(f"Invalid TG_SESSION_MODE: '{session_mode}'. Must be 'local' or 'string'.")
 
     session_name = os.getenv("TG_SESSION_NAME", "telegram_client").strip()
-    session_string = os.getenv("TG_SESSION_STRING", "").strip()
+    session_string = "".join(os.getenv("TG_SESSION_STRING", "").split()).strip("\"'")
     if session_mode == "string":
         if not session_string:
             raise ValueError("TG_SESSION_MODE is set to 'string', but TG_SESSION_STRING is empty.")
