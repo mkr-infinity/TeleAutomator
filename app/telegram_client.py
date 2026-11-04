@@ -107,15 +107,18 @@ class TelegramService:
         if not self.db.get_state("first_run_welcomed"):
             try:
                 welcome_msg = (
-                    f"👋 *Welcome to your Personal Telegram MTProto Client, {owner_name}!*\n\n"
-                    f"Your client is connected and active.\n"
-                    f"• *Mode:* `{self.config.reply_mode}`\n"
+                    f"👋 *Welcome to TeleAutomator, {owner_name}!*\n"
+                    f"_Your Telegram account, powered by AI. 🤖_\n\n"
+                    f"Your personal MTProto client is connected and active.\n"
+                    f"• *Mode:* `{self.config.reply_mode}` (switch anytime with `/mode <draft|approval|auto>`)\n"
                     f"• *Account:* `{name}` [ID: `{user_id}`]\n"
                     f"• *AI Engine:* `{self.config.ai_provider}` (model: `{self.config.ai_model or 'default'}`)\n\n"
                     f"💡 *How to Use:*\n"
-                    f"Whenever someone messages you from an allowlisted chat, your AI persona will generate natural human replies.\n\n"
+                    f"Whenever someone messages you from an allowlisted chat, TeleAutomator crafts natural, human context-aware replies.\n\n"
                     f"📌 *Key Commands (send here anytime):*\n"
-                    f"• `/status` - Check current health, mode & pause status\n"
+                    f"• `/status` - Check health, mode, style & pause status\n"
+                    f"• `/mode <draft|approval|auto>` - Switch automation mode\n"
+                    f"• `/style <casual|concise|formal|humorous>` - Switch AI response style\n"
                     f"• `/chats` - View allowlisted private chats & groups\n"
                     f"• `/allowchat <id>` - Add a contact or group to allowlist\n"
                     f"• `/addrule <word> => <reply>` - Auto-reply when a word is detected\n"

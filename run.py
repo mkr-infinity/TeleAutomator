@@ -69,6 +69,9 @@ def main() -> None:
     parser.add_argument("--auth", action="store_true", help="Run interactive Telegram phone/2FA authentication")
     parser.add_argument("--test", action="store_true", help="Run unit test suite")
     parser.add_argument("--check", action="store_true", help="Check MTProto connection status")
+    parser.add_argument("--draft", action="store_true", help="Launch directly in draft-only mode (never sends)")
+    parser.add_argument("--mode", choices=["draft", "approval", "restricted_auto"], help="Override automation mode")
+    parser.add_argument("--style", choices=["casual", "concise", "formal", "humorous"], help="Override AI reply style")
     args, extra = parser.parse_known_args()
 
     venv_python = ensure_environment()
@@ -91,7 +94,15 @@ def main() -> None:
         sys.exit(subprocess.call(cmd))
 
     # Default action: run main application daemon
-    cmd = [python_str, "-m", "app.main"] + extra
+    extra_flags = list(extra)
+    if args.draft:
+        extra_flags.append("--draft")
+    if args.mode:
+        extra_flags.extend(["--mode", args.mode])
+    if args.style:
+        extra_flags.extend(["--style", args.style])
+
+    cmd = [python_str, "-m", "app.main"] + extra_flags
     sys.exit(subprocess.call(cmd))
 
 

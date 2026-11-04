@@ -8,10 +8,12 @@ BANNER_TEXT = """
 \033[1;36m========================================================================================\033[0m
 \033[1;32m  TeleAutomator - Telegram Chat Automation v1.0\033[0m
 \033[1;30m  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\033[0m
+  \033[1;35m"Your Telegram account, powered by AI. 🤖"\033[0m
 
-  \033[1;37mA production-ready automation tool for automating whole telegram messages from\033[0m
-  \033[1;37mbot-bot, account-bot, groups messages etc all from your main account.\033[0m
+  \033[1;37mProduction-grade Telegram user-account automation with Google Gemini AI,\033[0m
+  \033[1;37mhuman alibi persona, custom keyword triggers, and zero-spam safety guards.\033[0m
 
+  \033[1;34mRepository:\033[0m \033[1;36mhttps://github.com/mkr-infinity/TeleAutomator\033[0m
   \033[1;34mAuthor:    \033[0m \033[1;33mMohammad Kaif Raja (mkr-infinity)\033[0m
   \033[1;34mTelegram:  \033[0m \033[1;36m@mkr_infinity\033[0m \033[0;37m(https://t.me/mkr_infinity)\033[0m
   \033[1;34mInstagram: \033[0m \033[1;35m@mkr_infinity\033[0m \033[0;37m(https://instagram.com/mkr_infinity)\033[0m

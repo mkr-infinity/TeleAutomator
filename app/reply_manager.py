@@ -33,6 +33,27 @@ class ReplyManager:
         self.generator = reply_generator
         self._client: Any = None
 
+        # Restore saved style if stored in DB
+        saved_style = self.db.get_state("reply_style")
+        if saved_style:
+            self.generator.set_style(saved_style)
+
+    @property
+    def current_mode(self) -> str:
+        """Active reply mode, prioritizing runtime database state over initial config."""
+        saved_mode = self.db.get_state("reply_mode")
+        if saved_mode in ("draft", "approval", "restricted_auto"):
+            return saved_mode
+        return self.config.reply_mode
+
+    def set_mode(self, mode: str) -> bool:
+        """Set and persist the active reply mode."""
+        clean = mode.strip().lower()
+        if clean in ("draft", "approval", "restricted_auto"):
+            self.db.set_state("reply_mode", clean)
+            return True
+        return False
+
     def set_telegram_client(self, client: Any) -> None:
         """Attach the active Telethon client."""
         self._client = client
@@ -45,6 +66,7 @@ class ReplyManager:
         sender_id: Optional[int],
         sender_name: str,
         text: str,
+        conversation_history: Optional[Any] = None,
     ) -> None:
         """Process an incoming message that has passed initial message filters."""
         # Sanitize incoming text before passing to generator
@@ -56,13 +78,17 @@ class ReplyManager:
             logger.info(f"[KEYWORD TRIGGER] Matched custom trigger rule for chat {chat_id}.")
             draft = matched_rule
         else:
-            draft = self.generator.generate(sender_name=sender_name, incoming_text=clean_text)
+            draft = self.generator.generate(
+                sender_name=sender_name,
+                incoming_text=clean_text,
+                conversation_history=conversation_history,
+            )
 
         if not draft:
             logger.warning(f"No draft generated for chat {chat_id}.")
             return
 
-        mode = self.config.reply_mode
+        mode = self.current_mode
 
         # Mode 1: Draft Only (Default)
         if mode == "draft":
@@ -196,9 +222,11 @@ class ReplyManager:
 
         if cmd in ("/help", "/start"):
             return (
-                "🤖 *Telegram Personal Client Commands:*\n\n"
+                "🤖 *TeleAutomator Commands:*\n\n"
                 "*Core Controls:*\n"
                 "• `/status` - Health, active identity, pause timer, & mode\n"
+                "• `/mode <draft|approval|auto>` - Switch automation mode on the fly\n"
+                "• `/style <casual|concise|formal|humorous>` - Change AI reply style\n"
                 "• `/auto on` / `/auto off` - Authorize or revoke automated replies\n"
                 "• `/pause <time>` - Snooze replies (e.g. `/pause 2h`, `/pause 30m`)\n"
                 "• `/resume` - Resume operations (clears pause & stop)\n"
@@ -316,6 +344,48 @@ class ReplyManager:
             else:
                 return "⚠️ Group automation: *All Messages* activated. The client may reply to any message in allowlisted groups."
 
+        if cmd in ("/mode", "/setmode"):
+            if len(cmd_parts) < 2:
+                curr = self.current_mode
+                return (
+                    f"⚙️ *Current Reply Mode:* `{curr}`\n\n"
+                    f"*Available Modes:*\n"
+                    f"• `/mode draft` - Suggests drafts in terminal/logs; NEVER sends.\n"
+                    f"• `/mode approval` - Sends drafts to Saved Messages for `/approve <id>`.\n"
+                    f"• `/mode auto` - Directly replies to allowlisted chats without manual approval."
+                )
+            target = cmd_parts[1].lower().strip()
+            if target in ("draft", "draft_only", "drafts"):
+                self.set_mode("draft")
+                return "📝 Mode switched to *Draft Only*. Replies will be generated and logged, but never sent to recipients."
+            elif target in ("approval", "pending", "review"):
+                self.set_mode("approval")
+                return "📋 Mode switched to *Approval Required*. Every draft will be sent to your Saved Messages for review."
+            elif target in ("auto", "restricted_auto", "automatic"):
+                self.set_mode("restricted_auto")
+                self.safety.set_auto_authorization(True)
+                return "⚡ Mode switched to *Restricted Auto*. Allowlisted chats will receive automated replies directly."
+            else:
+                return "Invalid mode. Use `/mode draft`, `/mode approval`, or `/mode auto`."
+
+        if cmd in ("/style", "/setstyle"):
+            if len(cmd_parts) < 2:
+                curr = self.generator.style
+                return (
+                    f"🎨 *Current AI Style:* `{curr}`\n\n"
+                    f"*Available Styles:*\n"
+                    f"• `/style casual` - Friendly, relaxed texting tone.\n"
+                    f"• `/style concise` - Minimal, brief, straight to the point.\n"
+                    f"• `/style formal` - Polite, structured, professional.\n"
+                    f"• `/style humorous` - Witty, playful banter."
+                )
+            target_style = cmd_parts[1].lower().strip()
+            ok = self.generator.set_style(target_style)
+            if ok:
+                self.db.set_state("reply_style", target_style)
+                return f"🎨 AI response style switched to *{target_style}*."
+            return "Invalid style. Available: `/style casual`, `/style concise`, `/style formal`, `/style humorous`."
+
         if cmd == "/status":
             auto_status = "AUTHORIZED" if self.safety.is_auto_authorized else "DISABLED"
             stop_status = "ACTIVE" if self.safety.is_emergency_stopped else "NORMAL"
@@ -323,11 +393,14 @@ class ReplyManager:
             pause_str = f"PAUSED ({int(remaining // 60)}m left)" if remaining > 0 else "ACTIVE"
             pending_count = len(self.db.list_pending_approvals())
             owner = self.generator.prompt_manager.owner_name
+            mode_display = self.current_mode
+            style_display = self.generator.style
             return (
-                f"📊 *Client Status:*\n"
+                f"📊 *TeleAutomator Status:*\n"
                 f"• Identity Name: `{owner}`\n"
                 f"• Automation: *{pause_str}*\n"
-                f"• Reply Mode: `{self.config.reply_mode}`\n"
+                f"• Reply Mode: `{mode_display}` (change with `/mode <draft|approval|auto>`)\n"
+                f"• AI Style: `{style_display}` (change with `/style <casual|concise|formal|humorous>`)\n"
                 f"• Auto Authorized: *{auto_status}*\n"
                 f"• Emergency Stop: *{stop_status}*\n"
                 f"• Pending Approvals: `{pending_count}`\n"

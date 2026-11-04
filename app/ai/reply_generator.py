@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from app.ai.prompt_manager import PromptManager
 from app.ai.provider import AIProvider, GeminiProvider, LocalRuleProvider, OpenAIProvider
@@ -33,18 +33,34 @@ def create_ai_provider(config: AppConfig) -> AIProvider:
 class ReplyGenerator:
     """Generates suggested draft replies."""
 
-    def __init__(self, config: AppConfig, provider: Optional[AIProvider] = None):
+    def __init__(self, config: AppConfig, provider: Optional[AIProvider] = None, style: str = "casual"):
         self.config = config
         self.provider = provider or create_ai_provider(config)
-        self.prompt_manager = PromptManager()
+        self.prompt_manager = PromptManager(style=style)
 
     def set_owner_name(self, name: str) -> None:
         """Propagate owner name to prompt manager."""
         self.prompt_manager.set_owner_name(name)
 
-    def generate(self, sender_name: str, incoming_text: str) -> str:
-        """Generate a draft reply text."""
-        prompt = self.prompt_manager.build_user_prompt(sender_name, incoming_text)
+    def set_style(self, style: str) -> bool:
+        """Set AI response style (casual, concise, formal, humorous)."""
+        return self.prompt_manager.set_style(style)
+
+    @property
+    def style(self) -> str:
+        """Active AI response style."""
+        return self.prompt_manager.style
+
+    def generate(
+        self,
+        sender_name: str,
+        incoming_text: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+    ) -> str:
+        """Generate a draft reply text considering conversation context when provided."""
+        prompt = self.prompt_manager.build_user_prompt(
+            sender_name, incoming_text, conversation_history=conversation_history
+        )
         try:
             draft = self.provider.generate_reply(prompt, self.prompt_manager.system_instructions)
             return self.prompt_manager.clean_reply(draft)

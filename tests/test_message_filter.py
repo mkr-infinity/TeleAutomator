@@ -67,3 +67,13 @@ def test_message_filter(tmp_path: Path):
     eligible, reason = msg_filter.evaluate(MockEvent(chat_id=100, raw_text="Your OTP code is 44551"))
     assert eligible is False
     assert "sensitive OTP" in reason
+
+    # 8. Bot slash command from contact
+    eligible, reason = msg_filter.evaluate(MockEvent(chat_id=100, raw_text="/start"))
+    assert eligible is False
+    assert "slash command" in reason
+
+    # 9. Standalone punctuation
+    eligible, reason = msg_filter.evaluate(MockEvent(chat_id=100, raw_text="?"))
+    assert eligible is False
+    assert "punctuation" in reason

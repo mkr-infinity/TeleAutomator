@@ -72,6 +72,19 @@ def register_handlers(
 
         message_id = getattr(event, "id", 0)
 
+        # Extract conversation context (e.g. replied-to message) safely
+        conversation_history = []
+        try:
+            if getattr(event, "is_reply", False):
+                reply_msg = await event.get_reply_message()
+                if reply_msg and getattr(reply_msg, "raw_text", None):
+                    reply_text = reply_msg.raw_text.strip()
+                    if reply_text:
+                        reply_sender = "You" if getattr(reply_msg, "out", False) else "Contact"
+                        conversation_history.append({"sender": reply_sender, "text": reply_text})
+        except Exception:
+            pass
+
         await reply_manager.handle_incoming_eligible_message(
             chat_id=chat_id,
             chat_title=chat_title,
@@ -79,4 +92,5 @@ def register_handlers(
             sender_id=sender_id,
             sender_name=sender_name,
             text=text,
+            conversation_history=conversation_history,
         )

@@ -89,7 +89,7 @@ def test_approval_mode_and_commands(tmp_path: Path):
         # Test commands
         # 1. /status
         res = await mgr.handle_control_command("/status")
-        assert "Client Status" in res
+        assert "Status" in res
 
         # 2. /approve 1
         res = await mgr.handle_control_command("/approve 1")
@@ -155,5 +155,22 @@ def test_approval_mode_and_commands(tmp_path: Path):
         rule_del = await mgr.handle_control_command("/delrule portfolio")
         assert "deleted" in rule_del.lower()
         assert db.match_keyword_rule("portfolio") is None
+
+        # 11. Mode switching (/mode draft, /mode approval, /mode auto)
+        mode_res = await mgr.handle_control_command("/mode")
+        assert "Current Reply Mode" in mode_res
+        await mgr.handle_control_command("/mode draft")
+        assert mgr.current_mode == "draft"
+        await mgr.handle_control_command("/mode auto")
+        assert mgr.current_mode == "restricted_auto"
+        assert safety.is_auto_authorized is True
+
+        # 12. Style switching (/style casual, /style concise, /style formal, /style humorous)
+        style_res = await mgr.handle_control_command("/style")
+        assert "Current AI Style" in style_res
+        await mgr.handle_control_command("/style concise")
+        assert generator.style == "concise"
+        await mgr.handle_control_command("/style casual")
+        assert generator.style == "casual"
 
     asyncio.run(_run())

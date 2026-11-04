@@ -52,8 +52,17 @@ class MessageFilter:
 
         # 4. Check text content
         raw_text = getattr(event, "raw_text", "") or ""
-        if not raw_text.strip():
+        clean_stripped = raw_text.strip()
+        if not clean_stripped:
             return False, "Empty message or unsupported media without text"
+
+        # Ignore slash commands intended for other bots or systems
+        if clean_stripped.startswith("/") and not clean_stripped.startswith("//"):
+            return False, "Message is a slash command intended for a bot"
+
+        # Ignore standalone punctuation noise (e.g. "?", ".", "!")
+        if len(clean_stripped) == 1 and clean_stripped in (".", "?", "!", ",", ":", ";", "-"):
+            return False, "Single punctuation character message"
 
         # 5. Check sender user exclusion
         if not self.privacy.is_user_allowed(sender_id):
