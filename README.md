@@ -2,18 +2,19 @@
 
 ```text
 ========================================================================================
-  telegram-chat-automation v1.0
-  ~~~~~~~~~~~~~~~~~~~~~~~~~~
+  ProtoFlow: Telegram Chat Automation v1.0
+  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
   A production-ready automation tool for automating whole telegram messages from
   bot-bot, account-bot, groups messages etc all from your main account.
 
-  Repository: i will tell you later
   Author:     Mohammad Kaif Raja (mkr-infinity)
+  Telegram:   @mkr_infinity (https://t.me/mkr_infinity)
+  Instagram:  @mkr_infinity (https://instagram.com/mkr_infinity)
   Copyright:  Copyright (c) Mohammad Kaif Raja. All Rights Reserved.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ~  If you modify, redistribute, or sell anything made from my things without my         ~
-~  permission, it is strictly prohibited.                                              ~
+~  permission, it is strictly prohibited. Free to use for personal use.                 ~
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   Unauthorized removal of attribution is strictly prohibited.
 ========================================================================================
@@ -380,10 +381,13 @@ If you ever need to stop the client immediately:
 
 ```text
 Author:     Mohammad Kaif Raja (mkr-infinity)
+Telegram:   @mkr_infinity (https://t.me/mkr_infinity)
+Instagram:  @mkr_infinity (https://instagram.com/mkr_infinity)
 Copyright:  Copyright (c) Mohammad Kaif Raja. All Rights Reserved.
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~  If you modify, redistribute, or sell anything made from my things without my permission, it is strictly prohibited. ~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~  If you modify, redistribute, or sell anything made from my things without my         ~
+~  permission, it is strictly prohibited. Free to use for personal use.                 ~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Unauthorized removal of attribution is strictly prohibited.
 ```
-Licensed under the [MIT License](LICENSE).
+Licensed under the [Proprietary Source-Available License](LICENSE). Free for personal use; redistribution and modification without permission are strictly prohibited.

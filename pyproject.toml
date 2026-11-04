@@ -3,11 +3,11 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "telegram-personal-client"
+name = "telegram-chat-automation"
 version = "1.0.0"
 description = "Secure Personal Telegram MTProto Client with Local and Cloud Deployment"
-authors = [{ name = "Kaif" }]
-license = { text = "MIT" }
+authors = [{ name = "Mohammad Kaif Raja (mkr-infinity)" }]
+license = { text = "Proprietary Source-Available" }
 requires-python = ">=3.10"
 dependencies = [
     "telethon>=1.36.0,<2.0.0",
