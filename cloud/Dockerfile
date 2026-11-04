@@ -15,9 +15,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application source code
+# Copy application source code and prompt configuration
 COPY app/ ./app/
 COPY scripts/ ./scripts/
+COPY system_prompt.txt* ./
 COPY cloud/entrypoint.sh ./entrypoint.sh
 COPY cloud/healthcheck.sh ./healthcheck.sh
 
