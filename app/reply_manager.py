@@ -187,22 +187,88 @@ class ReplyManager:
 
         cmd = cmd_parts[0].lower()
 
-        if cmd == "/help":
+        if cmd in ("/help", "/start"):
             return (
-                "🤖 *Telegram Client Commands:*\n"
-                "• `/approve <id>` - Approve & send pending draft\n"
-                "• `/reject <id>` - Discard pending draft\n"
-                "• `/pending` - List pending drafts\n"
-                "• `/status` - View health, pause timers & status\n"
-                "• `/auto on` - Authorize Mode 3 restricted auto replies\n"
-                "• `/auto off` - Revoke Mode 3 authorization\n"
-                "• `/pause <duration>` - Snooze auto replies (e.g. `/pause 2h`, `/pause 30m`)\n"
-                "• `/stop` - Emergency stop (halts all outgoing replies)\n"
+                "🤖 *Telegram Personal Client Commands:*\n\n"
+                "*Core Controls:*\n"
+                "• `/status` - Health, active identity, pause timer, & mode\n"
+                "• `/auto on` / `/auto off` - Authorize or revoke automated replies\n"
+                "• `/pause <time>` - Snooze replies (e.g. `/pause 2h`, `/pause 30m`)\n"
                 "• `/resume` - Resume operations (clears pause & stop)\n"
+                "• `/stop` - Emergency stop switch (halts all replies)\n\n"
+                "*Chat & Group Management:*\n"
+                "• `/chats` - View all allowlisted private contacts & groups\n"
+                "• `/allowchat <id>` - Allow a contact or group directly from Telegram\n"
+                "• `/removechat <id>` - Remove chat from allowlist\n"
+                "• `/blockchat <id>` - Block a chat ID\n"
+                "• `/mentiononly on|off` - Group safety: reply only when mentioned/replied to\n\n"
+                "*Approvals & Drafts:*\n"
+                "• `/pending` - List drafts waiting for review\n"
+                "• `/approve <id>` - Approve & send pending draft\n"
+                "• `/reject <id>` - Discard pending draft\n\n"
+                "*Identity & Persona:*\n"
                 "• `/name <name>` - Set your display name for AI persona\n"
                 "• `/prompt` - View active system prompt\n"
-                "• `/setprompt <text>` - Update system prompt directly from Telegram"
+                "• `/setprompt <text>` - Update system prompt on the fly"
             )
+
+        if cmd in ("/chats", "/allowlist", "/listchats"):
+            priv, grps = self.privacy.get_all_allowed_chats()
+            lines = ["📋 *Active Allowlisted Chats:*"]
+            if priv:
+                lines.append("• *Private Chats:* " + ", ".join(f"`{c}`" for c in sorted(priv)))
+            else:
+                lines.append("• *Private Chats:* (none)")
+            if grps:
+                lines.append("• *Groups:* " + ", ".join(f"`{g}`" for g in sorted(grps)))
+            else:
+                lines.append("• *Groups:* (none)")
+            mention_only = self.db.get_state("group_mention_only", "1") == "1"
+            lines.append(f"\n*Group Filter:* {'@Mentions / Replies Only' if mention_only else 'All Group Messages'}")
+            lines.append("\n_Use `/allowchat <id>` to add, or `/removechat <id>` to remove._")
+            return "\n".join(lines)
+
+        if cmd == "/allowchat":
+            if len(cmd_parts) < 2:
+                return "Usage: `/allowchat <chat_id>` (e.g. `/allowchat 123456789` or `/allowchat -1001234567890`)"
+            try:
+                cid = int(cmd_parts[1])
+                self.privacy.allow_chat(cid)
+                target = "Group" if cid < 0 else "Private contact"
+                return f"✅ {target} `{cid}` has been added to the allowlist!"
+            except ValueError:
+                return "Error: Chat ID must be an integer."
+
+        if cmd == "/removechat":
+            if len(cmd_parts) < 2:
+                return "Usage: `/removechat <chat_id>`"
+            try:
+                cid = int(cmd_parts[1])
+                self.privacy.remove_chat(cid)
+                return f"🗑️ Chat `{cid}` removed from allowlist."
+            except ValueError:
+                return "Error: Chat ID must be an integer."
+
+        if cmd == "/blockchat":
+            if len(cmd_parts) < 2:
+                return "Usage: `/blockchat <chat_id>`"
+            try:
+                cid = int(cmd_parts[1])
+                self.privacy.block_chat(cid)
+                return f"🚫 Chat `{cid}` is now blocked."
+            except ValueError:
+                return "Error: Chat ID must be an integer."
+
+        if cmd in ("/mentiononly", "/mentions"):
+            if len(cmd_parts) < 2 or cmd_parts[1].lower() not in ("on", "off"):
+                current = "ON (safe: only replies when mentioned/replied to)" if self.db.get_state("group_mention_only", "1") == "1" else "OFF (replies to all group messages)"
+                return f"Group mention filter is currently: *{current}*\nUsage: `/mentiononly on` or `/mentiononly off`"
+            val = "1" if cmd_parts[1].lower() == "on" else "0"
+            self.db.set_state("group_mention_only", val)
+            if val == "1":
+                return "🛡️ Group automation: *Mentions Only* activated. The client will only reply in groups when someone mentions your @username or replies directly to your message."
+            else:
+                return "⚠️ Group automation: *All Messages* activated. The client may reply to any message in allowlisted groups."
 
         if cmd == "/status":
             auto_status = "AUTHORIZED" if self.safety.is_auto_authorized else "DISABLED"

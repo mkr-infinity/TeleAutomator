@@ -92,6 +92,8 @@ class TelegramService:
             my_user_id=user_id,
             privacy_manager=self.privacy,
             safety_manager=self.safety,
+            my_username=me.username or "",
+            database=self.db,
         )
 
         register_handlers(
@@ -100,6 +102,36 @@ class TelegramService:
             message_filter=message_filter,
             reply_manager=self.reply_manager,
         )
+
+        # Send first-run onboarding welcome message to Saved Messages
+        if not self.db.get_state("first_run_welcomed"):
+            try:
+                welcome_msg = (
+                    f"👋 *Welcome to your Personal Telegram MTProto Client, {owner_name}!*\n\n"
+                    f"Your client is connected and active.\n"
+                    f"• *Mode:* `{self.config.reply_mode}`\n"
+                    f"• *Account:* `{name}` [ID: `{user_id}`]\n"
+                    f"• *AI Engine:* `{self.config.ai_provider}` (model: `{self.config.ai_model or 'default'}`)\n\n"
+                    f"💡 *How to Use:*\n"
+                    f"Whenever someone messages you from an allowlisted chat, your AI persona will generate natural human replies.\n\n"
+                    f"📌 *Key Commands (send here anytime):*\n"
+                    f"• `/status` - Check current health, mode & pause status\n"
+                    f"• `/chats` - View allowlisted private chats & groups\n"
+                    f"• `/allowchat <id>` - Add a contact or group to allowlist\n"
+                    f"• `/pause 2h` - Snooze automated replies for 2 hours\n"
+                    f"• `/resume` - Unpause and resume normal operation\n"
+                    f"• `/mentiononly on` - In groups: reply only when mentioned\n"
+                    f"• `/stop` - Emergency stop switch\n"
+                    f"• `/prompt` - View your active AI persona prompt\n"
+                    f"• `/setprompt <text>` - Update your prompt on the fly\n"
+                    f"• `/help` - View complete command guide\n\n"
+                    f"Enjoy your automated personal client! 🚀"
+                )
+                await self.client.send_message("me", welcome_msg, parse_mode="md")
+                self.db.set_state("first_run_welcomed", "1")
+                logger.info("Sent first-run welcome and command guide to Saved Messages.")
+            except Exception as e:
+                logger.warning(f"Could not send first-run welcome message: {e}")
 
         return self.client
 

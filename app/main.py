@@ -43,7 +43,7 @@ async def run_app() -> None:
     safety = SafetyManager(config, db)
     if config.auto_authorize:
         safety.set_auto_authorization(True)
-    privacy = PrivacyManager(config)
+    privacy = PrivacyManager(config, database=db)
     generator = ReplyGenerator(config)
     reply_mgr = ReplyManager(config, db, safety, privacy, generator)
     health = HealthMonitor(config.data_dir)

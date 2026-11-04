@@ -14,10 +14,19 @@ logger = setup_logger(__name__)
 class MessageFilter:
     """Filters incoming Telegram events according to privacy and safety policies."""
 
-    def __init__(self, my_user_id: int, privacy_manager: PrivacyManager, safety_manager: SafetyManager):
+    def __init__(
+        self,
+        my_user_id: int,
+        privacy_manager: PrivacyManager,
+        safety_manager: SafetyManager,
+        my_username: str = "",
+        database: Optional[Any] = None,
+    ):
         self.my_user_id = my_user_id
         self.privacy = privacy_manager
         self.safety = safety_manager
+        self.my_username = (my_username or "").lstrip("@").lower()
+        self.db = database
 
     def evaluate(self, event: Any) -> Tuple[bool, str]:
         """Evaluate an incoming message event. Returns (is_eligible, reason)."""
@@ -58,11 +67,28 @@ class MessageFilter:
         if not self.privacy.is_chat_allowed(chat_id, is_group):
             return False, f"Chat {chat_id} is not allowlisted"
 
-        # 7. Check sensitive content / OTPs
+        # 7. Group smart filtering: Avoid spamming noisy groups
+        if is_group and self.db:
+            # Default to mention_only=True ("1") unless user explicitly disables it
+            mention_only = self.db.get_state("group_mention_only", "1") == "1"
+            if mention_only:
+                is_mentioned = False
+                if message_obj and getattr(message_obj, "mentioned", False):
+                    is_mentioned = True
+                elif self.my_username and f"@{self.my_username}" in raw_text.lower():
+                    is_mentioned = True
+                elif getattr(event, "is_reply", False):
+                    # Direct reply to a message in the group
+                    is_mentioned = True
+
+                if not is_mentioned:
+                    return False, "Group message does not mention or reply to your account"
+
+        # 8. Check sensitive content / OTPs
         if self.safety.is_sensitive(raw_text):
             return False, "Message contains sensitive OTP or security keywords"
 
-        # 8. Duplicate check
+        # 9. Duplicate check
         message_id = getattr(event, "id", 0)
         if self.safety.is_duplicate(chat_id, message_id, raw_text):
             return False, "Duplicate message event"

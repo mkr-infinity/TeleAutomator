@@ -23,7 +23,7 @@ def test_draft_only_mode(tmp_path: Path):
         )
         db = Database(tmp_path / "app.db")
         safety = SafetyManager(cfg, db)
-        privacy = PrivacyManager(cfg)
+        privacy = PrivacyManager(cfg, database=db)
         generator = ReplyGenerator(cfg)
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
@@ -63,7 +63,7 @@ def test_approval_mode_and_commands(tmp_path: Path):
         )
         db = Database(tmp_path / "app.db")
         safety = SafetyManager(cfg, db)
-        privacy = PrivacyManager(cfg)
+        privacy = PrivacyManager(cfg, database=db)
         generator = ReplyGenerator(cfg)
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
@@ -126,5 +126,19 @@ def test_approval_mode_and_commands(tmp_path: Path):
         prompt_res = await mgr.handle_control_command("/setprompt You are a chill friend.")
         assert "updated" in prompt_res.lower()
         assert "chill friend" in generator.prompt_manager.system_instructions
+
+        # 7. /allowchat and /chats
+        allow_res = await mgr.handle_control_command("/allowchat 555666")
+        assert "added" in allow_res.lower()
+        chats_res = await mgr.handle_control_command("/chats")
+        assert "555666" in chats_res
+
+        # 8. /mentiononly
+        mentions_res = await mgr.handle_control_command("/mentiononly on")
+        assert "Mentions Only" in mentions_res
+
+        # 9. /removechat
+        rem_res = await mgr.handle_control_command("/removechat 555666")
+        assert "removed" in rem_res.lower()
 
     asyncio.run(_run())
