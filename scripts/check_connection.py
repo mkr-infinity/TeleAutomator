@@ -44,6 +44,10 @@ async def check() -> None:
             print("[WARNING] Account is marked as a Bot. This application expects a personal account.")
             sys.exit(1)
 
+        print("\nTip: To allow the client to reply to specific contacts, put their Chat IDs in .env:")
+        print("  ALLOWED_PRIVATE_CHATS=123456789,987654321")
+        print("When anyone sends you a message while the client runs, its Chat ID is printed in the terminal.\n")
+
     except Exception as e:
         print(f"[FAIL] Connection error: {e}")
         sys.exit(1)

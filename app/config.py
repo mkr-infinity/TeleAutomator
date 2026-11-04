@@ -13,7 +13,12 @@ from app.logger import register_secret
 
 
 def _parse_id_set(value: str | None) -> Set[int]:
-    """Parse comma-separated Telegram IDs into an integer set."""
+    """Parse comma-separated Telegram IDs into an integer set.
+    
+    Users can enter single or multiple IDs separated by commas in .env:
+      - Private chat: ALLOWED_PRIVATE_CHATS=123456789,987654321
+      - Group/Supergroup: ALLOWED_GROUPS=-1001234567890
+    """
     if not value or not value.strip():
         return set()
     result: Set[int] = set()
@@ -23,7 +28,10 @@ def _parse_id_set(value: str | None) -> Set[int]:
             try:
                 result.add(int(cleaned))
             except ValueError:
-                raise ValueError(f"Invalid Telegram ID in configuration: '{cleaned}' must be an integer.")
+                raise ValueError(
+                    f"Invalid Telegram ID in configuration: '{cleaned}' must be an integer. "
+                    "Make sure to separate multiple IDs with commas (e.g. 123456, 789012)."
+                )
     return result
 
 

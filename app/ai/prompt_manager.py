@@ -3,6 +3,16 @@
 from __future__ import annotations
 
 
+# =============================================================================
+# PERSONAL AI PERSONA & REPLY INSTRUCTIONS
+# =============================================================================
+# Users: You can freely customize the instructions below to make the AI sound
+# like you! For example, you can specify:
+#   - Your typical tone (e.g., "Use casual lowercase, friendly vibe", or "Keep it professional")
+#   - Your preferred language (e.g., "Reply in English or Hindi depending on user")
+#   - Common questions to handle (e.g., "If asked about my availability, say I am free after 6 PM")
+# =============================================================================
+
 DEFAULT_SYSTEM_INSTRUCTIONS = """You are assisting me by drafting a personal reply to a Telegram message.
 Your response must sound like a real human:
 - Friendly, clear, concise, and context-aware.

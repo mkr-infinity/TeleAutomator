@@ -38,7 +38,14 @@ def register_handlers(
         # Regular incoming message handling
         is_eligible, reason = message_filter.evaluate(event)
         if not is_eligible:
-            logger.debug(f"Message ignored: {reason}")
+            # Helper log for users: shows the Chat ID so they can easily copy it into .env
+            if "not allowlisted" in reason and chat_id:
+                logger.info(
+                    f"[CHAT DETECTED] Received message from Chat ID: {chat_id}. "
+                    f"To allow replies for this contact/group, add {chat_id} to ALLOWED_PRIVATE_CHATS in .env"
+                )
+            else:
+                logger.debug(f"Message ignored: {reason}")
             return
 
         # Resolve chat title and sender name safely
