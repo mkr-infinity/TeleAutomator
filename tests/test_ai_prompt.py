@@ -309,3 +309,18 @@ def test_clean_reply_suppresses_none_and_word_repetition():
     assert pm.clean_reply("haan haan sahi hai") == "haan sahi hai"
     assert pm.clean_reply("cool cool cool") == "cool"
 
+
+def test_top_common_emojis_and_active_group_engagement():
+    """Verify minimum 5 commonly used emojis and active group engagement instructions are in prompt."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+    prompt = pm.build_user_prompt(sender_name="Alex", incoming_text="anyone working on the bot", is_group=True)
+
+    # Minimum 5 commonly used emojis present
+    top_emojis = ["😂", "👍", "🔥", "👀", "🤝", "💀", "💯", "❤️"]
+    found_emojis = [em for em in top_emojis if em in prompt]
+    assert len(found_emojis) >= 5
+
+    # Active group engagement instruction present
+    assert "active Telegram user" in prompt
+    assert "understand discussions" in prompt or "chime in naturally" in prompt
+

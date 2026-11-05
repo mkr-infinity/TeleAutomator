@@ -1717,26 +1717,26 @@ class ReplyManager:
         all_telegram_reactions = [
             "👍", "👎", "❤️", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", "🤬", "😢", "🎉", "🤩",
             "🤮", "💩", "🙏", "👌", "🕊️", "🤡", "🥱", "🥴", "😍", "🐳", "❤️‍🔥", "🌚", "🌭", "💯",
-            "🤣", "⚡", "🍌", "🏆", "💔", "🤨", "😐", "🍓", "🍾", "💋", "🖕", "😈", "😴", "😭",
+            "🤣", "😂", "💀", "⚡", "🍌", "🏆", "💔", "🤨", "😐", "🍓", "🍾", "💋", "🖕", "😈", "😴", "😭",
             "🤓", "👻", "👨‍💻", "👀", "🎃", "🙈", "😇", "😨", "🤝", "✍️", "🤗", "🫡", "🎅", "🎄",
             "☃️", "💅", "🤪", "🗿", "🆒", "💘", "🙉", "🦄", "😘", "💊", "🙊", "😎", "👾", "🤷‍♂️",
             "🤷", "🤷‍♀️", "😡"
         ]
 
-        # Natural sentiment & tone mapping with full emoji variety
+        # Natural sentiment & tone mapping with full emoji variety (featuring top common emojis: 😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️)
         lower = text.lower()
         has_sentiment = True
-        if any(w in lower for w in ("haha", "lol", "lmao", "rofl", "xd", "funny", "lmfao", "joke")):
-            chosen = random.choice(["😂", "🤣", "😁", "🤪", "🤡", "😎"])
+        if any(w in lower for w in ("haha", "lol", "lmao", "rofl", "xd", "funny", "lmfao", "joke", "dead", "ded")):
+            chosen = random.choice(["😂", "🤣", "💀", "😁", "🤪", "🤡", "😎"])
         elif any(w in lower for w in ("fire", "op", "w", "nice", "cool", "goat", "lit", "win", "awesome", "pro")):
             chosen = random.choice(["🔥", "⚡", "💯", "🆒", "🏆", "🤩", "👏"])
         elif any(w in lower for w in ("thanks", "thx", "love", "heart", "tysm", "appreciate", "cute", "sweet")):
             chosen = random.choice(["❤️", "❤️‍🔥", "🥰", "😍", "💘", "😘", "🙏", "🤗"])
-        elif any(w in lower for w in ("ok", "okay", "done", "yes", "yeah", "yep", "sure", "alright", "got it", "true")):
+        elif any(w in lower for w in ("ok", "okay", "done", "yes", "yeah", "yep", "sure", "alright", "got it", "true", "deal", "agree")):
             chosen = random.choice(["👍", "👌", "🤝", "🫡", "✍️", "🆒"])
         elif any(w in lower for w in ("no", "nah", "nope", "bad", "disagree", "worst", "hate", "bruh")):
             chosen = random.choice(["👎", "💔", "😐", "🤨", "🗿", "🥱"])
-        elif any(w in lower for w in ("omg", "what", "wait", "wow", "damn", "seriously", "bro what")):
+        elif any(w in lower for w in ("omg", "what", "wait", "wow", "damn", "seriously", "bro what", "look")):
             chosen = random.choice(["🤯", "😱", "👀", "😨", "👻"])
         elif any(w in lower for w in ("why", "how", "who", "where", "?", "idk", "wonder", "really")):
             chosen = random.choice(["🤔", "🧐", "🤓", "👀"])
@@ -1774,7 +1774,7 @@ class ReplyManager:
         return text.strip()
 
     def is_group_message_relevant(self, chat_id: int, text: str, chat_title: str = "") -> bool:
-        """Check if an incoming group message is relevant to the group's permanent context, pinned summary, or topic."""
+        """Check if an incoming group message is relevant to the group's topic, context, or active discussion."""
         clean_text = text.strip().lower()
         if not clean_text:
             return False
@@ -1797,14 +1797,19 @@ class ReplyManager:
                 if msg_words.intersection(meaningful_kw):
                     return True
 
-        # 2. Check if the message is a genuine technical/topic question or discussion prompt
-        question_or_discussion_words = (
-            "how to", "how do", "anyone know", "any idea", "what is", "why is",
-            "can we", "does anyone", "help with", "thoughts on", "what do you think",
-            "kisi ko", "kaise kare", "batao", "kya lagta", "solution", "issue", "error",
-            "working on", "anyone tried", "suggestion", "opinions", "thoughts"
+        # 2. Check if the message is a discussion prompt, question, or understandable topic statement
+        discussion_keywords = (
+            "how", "what", "why", "where", "who", "when", "can", "could", "should", "would",
+            "anyone", "anybody", "someone", "think", "thought", "thoughts", "opinion", "idea",
+            "solution", "issue", "error", "problem", "working", "tried", "tested", "project",
+            "guys", "bro", "folks", "team", "people", "suggestion", "opinions", "batao",
+            "kisi ko", "kaise", "kya", "kyun", "lagta", "sahi", "chal raha", "update"
         )
-        if any(phrase in clean_text for phrase in question_or_discussion_words):
+        words = clean_text.split()
+        if len(words) >= 3 and any(kw in clean_text for kw in discussion_keywords):
+            return True
+        if len(words) >= 5:
+            # Meaningful multi-word statement or conversation in the group
             return True
 
         return False

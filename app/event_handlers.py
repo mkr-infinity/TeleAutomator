@@ -135,12 +135,12 @@ def register_handlers(
                 else:
                     is_relevant = reply_manager.is_group_message_relevant(chat_id, text, chat_title)
                     if is_relevant:
-                        # Relevant to group topic: ~45% reply, ~25% reaction, ~30% passive reading
+                        # Relevant to group topic: ~65% reply, ~20% reaction, ~15% passive reading
                         roll = random.random()
-                        if roll < 0.45:
-                            logger.info(f"[GROUP TOPIC ENGAGEMENT] Message in {chat_id} is relevant to group topic. Replying ({int(0.45*100)}%).")
+                        if roll < 0.65:
+                            logger.info(f"[GROUP TOPIC ENGAGEMENT] Message in {chat_id} is relevant to group topic. Replying ({int(0.65*100)}%).")
                             reply_manager.mark_group_activity(chat_id)
-                        elif roll < 0.70:
+                        elif roll < 0.85:
                             logger.info(f"[GROUP TOPIC REACTION] Message in {chat_id} is relevant. Reacting with emoji.")
                             await reply_manager.maybe_send_reaction(chat_id, message_id, text)
                             reply_manager.mark_group_activity(chat_id)
