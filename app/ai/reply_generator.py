@@ -13,28 +13,34 @@ logger = setup_logger(__name__)
 
 
 def create_ai_provider(config: AppConfig, database: Optional[Any] = None) -> AIProvider:
-    """Factory creating the configured AI provider backend."""
-    if not config.ai_enabled or config.ai_provider == "local":
+    """Factory creating the configured AI provider backend with runtime DB overrides."""
+    active_provider = (database.get_state("ai_provider", config.ai_provider) if database else config.ai_provider).strip().lower()
+    active_enabled = config.ai_enabled if active_provider == config.ai_provider else (active_provider != "local")
+
+    if not active_enabled or active_provider == "local":
         logger.info("Using LocalRuleProvider (offline, privacy-preserving draft mode).")
         return LocalRuleProvider()
 
     usage_callback = database.record_token_usage if database else None
+    active_api_key = (database.get_state("ai_api_key", config.ai_api_key) if database else config.ai_api_key).strip()
+    active_model = (database.get_state("ai_model", config.ai_model) if database else config.ai_model).strip()
+    active_base_url = (database.get_state("ai_base_url", config.ai_base_url) if database else config.ai_base_url).strip()
 
-    if config.ai_provider == "gemini":
+    if active_provider == "gemini":
         logger.info("Initializing Google Gemini AI provider.")
         return GeminiProvider(
-            api_key=config.ai_api_key,
-            model=config.ai_model or "gemini-2.5-flash",
+            api_key=active_api_key,
+            model=active_model or "gemini-2.5-flash",
             usage_callback=usage_callback,
         )
 
-    if config.ai_provider in ("openai", "custom", "nvidia", "groq", "together", "deepseek", "inception"):
-        target_name = config.ai_provider.upper()
+    if active_provider in ("openai", "custom", "nvidia", "groq", "together", "deepseek", "inception"):
+        target_name = active_provider.upper()
         default_model = "gpt-4o-mini"
-        default_base_url = config.ai_base_url
-        if config.ai_provider == "nvidia":
+        default_base_url = active_base_url
+        if active_provider == "nvidia":
             default_model = "meta/llama-3.1-70b-instruct"
-        elif config.ai_provider == "inception":
+        elif active_provider == "inception":
             default_model = "mercury-3,mercury-3-preview-1014,mercury-3-preview-1002"
             if not default_base_url:
                 default_base_url = "https://api.inceptionlabs.ai/v1"
@@ -55,8 +61,8 @@ def create_ai_provider(config: AppConfig, database: Optional[Any] = None) -> AIP
 
         logger.info(f"Initializing {target_name} OpenAI-compatible AI provider (base_url: {default_base_url or 'default'}).")
         return OpenAIProvider(
-            api_key=config.ai_api_key,
-            model=config.ai_model or default_model,
+            api_key=active_api_key,
+            model=active_model or default_model,
             base_url=default_base_url,
             usage_callback=usage_callback,
             reasoning_effort=reasoning_effort,
@@ -64,7 +70,7 @@ def create_ai_provider(config: AppConfig, database: Optional[Any] = None) -> AIP
             max_tokens=max_tokens,
         )
 
-    logger.warning(f"Unknown provider '{config.ai_provider}', falling back to LocalRuleProvider.")
+    logger.warning(f"Unknown provider '{active_provider}', falling back to LocalRuleProvider.")
     return LocalRuleProvider()
 
 
@@ -87,6 +93,10 @@ class ReplyGenerator:
     def set_owner_name(self, name: str) -> None:
         """Propagate owner name to prompt manager."""
         self.prompt_manager.set_owner_name(name)
+
+    def reload_provider(self) -> None:
+        """Reload and rebuild the active AI provider using current database and config settings."""
+        self.provider = create_ai_provider(self.config, database=self.db)
 
     def set_language(self, language: str) -> None:
         """Set language rule (dynamic, english, hindi, etc.)."""

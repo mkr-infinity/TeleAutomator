@@ -109,35 +109,40 @@ class TelegramService:
         # Send first-run onboarding welcome message to Saved Messages
         if not self.db.get_state("first_run_welcomed"):
             try:
+                curr_mode = self.db.get_state("reply_mode", self.config.reply_mode)
+                prov = self.db.get_state("ai_provider", self.config.ai_provider).upper()
+                mod = self.db.get_state("ai_model", self.config.ai_model or "default")
+
                 welcome_msg = (
-                    f"👋 *Welcome to TeleAutomator, {owner_name}!*\n"
-                    f"_Your Telegram account, powered by AI. 🤖_\n\n"
-                    f"Your personal MTProto client is connected and active.\n"
-                    f"• *Mode:* `{self.config.reply_mode}` (switch anytime with `/mode <draft|approval|auto>`)\n"
-                    f"• *Account:* `{name}` [ID: `{user_id}`]\n"
-                    f"• *AI Engine:* `{self.config.ai_provider}` (model: `{self.config.ai_model or 'default'}`)\n\n"
-                    f"💡 *How to Use:*\n"
-                    f"Whenever someone messages you from an allowlisted chat, TeleAutomator crafts natural, human context-aware replies.\n\n"
-                    f"📌 *Key Commands (send here anytime):*\n"
-                    f"• `/status` - Check health, mode, style & pause status\n"
-                    f"• `/mode <draft|approval|auto>` - Switch automation mode\n"
-                    f"• `/style <casual|concise|formal|humorous>` - Switch AI response style\n"
-                    f"• `/chats` - View allowlisted private chats & groups\n"
-                    f"• `/allowchat <id>` - Add a contact or group to allowlist\n"
-                    f"• `/addrule <word> => <reply>` - Auto-reply when a word is detected\n"
-                    f"• `/rules` - View active custom keyword triggers\n"
-                    f"• `/pause 2h` - Snooze automated replies for 2 hours\n"
-                    f"• `/resume` - Unpause and resume normal operation\n"
-                    f"• `/mentiononly on` - In groups: reply only when mentioned\n"
-                    f"• `/stop` - Emergency stop switch\n"
-                    f"• `/prompt` - View your active AI persona prompt\n"
-                    f"• `/setprompt <text>` - Update your prompt on the fly\n"
-                    f"• `/help` - View complete command guide\n\n"
-                    f"Enjoy your automated personal client! 🚀"
+                    f"👋 *Welcome to TeleAutomator v2.0.5*\n"
+                    f"_Personal AI Assistant for {owner_name}_\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📱 *Account Connection*\n"
+                    f"• *User:* `{name}` [ID: `{user_id}`]\n"
+                    f"• *Active Mode:* `{curr_mode}`\n"
+                    f"• *AI Engine:* `{prov}` (`{mod}`)\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"⚡ *Quick Setup Commands*\n"
+                    f"• `/mode auto` — Direct automated replies\n"
+                    f"• `/setai` — Configure custom AI endpoint & key\n"
+                    f"• `/chats` — View or manage allowlisted chats\n"
+                    f"• `/allowchat <id>` — Allow a contact or group\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🛠️ *Essential Remote Controls*\n"
+                    f"• `/status` — System health, models & cooldowns\n"
+                    f"• `/aiconfig` — Inspect AI engine & reasoning effort\n"
+                    f"• `/usage` — Track daily & total token consumption\n"
+                    f"• `/help` — Full interactive command reference\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🛑 *Safety Kill Switches*\n"
+                    f"• `/pause 2h` — Snooze replies for 2 hours\n"
+                    f"• `/stop` — Emergency stop (halts all messages)\n"
+                    f"• `/resume` — Unpause and resume operations\n\n"
+                    f"_Send any command right here in Saved Messages to control your assistant!_ 🚀"
                 )
                 await self.client.send_message("me", welcome_msg, parse_mode="md")
                 self.db.set_state("first_run_welcomed", "1")
-                logger.info("Sent first-run welcome and command guide to Saved Messages.")
+                logger.info("Sent structured first-run welcome and command guide to Saved Messages.")
             except Exception as e:
                 logger.warning(f"Could not send first-run welcome message: {e}")
 

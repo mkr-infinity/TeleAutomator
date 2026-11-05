@@ -26,7 +26,7 @@
 [![MTProto Telethon](https://img.shields.io/badge/protocol-MTProto%20Telethon-informational.svg)](https://github.com/LonamiWebs/Telethon)
 [![AI Supported](https://img.shields.io/badge/AI-Gemini%20%7C%20Mercury--3%20%7C%20OpenAI-orange.svg)](https://api.inceptionlabs.ai)
 [![License](https://img.shields.io/badge/license-Source--Available-red.svg)](LICENSE)
-[![Tests Passing](https://img.shields.io/badge/tests-63%2F63%20passed-brightgreen.svg)](test.sh)
+[![Tests Passing](https://img.shields.io/badge/tests-64%2F64%20passed-brightgreen.svg)](test.sh)
 
 > 🚀 **Deploying to Railway, Render, or Cloud VPS?**  
 > Check out the complete cloud setup guide below and in **[DEPLOYMENT.md](DEPLOYMENT.md)**.
@@ -145,11 +145,15 @@ Manage your automation straight from your phone by texting your **Saved Messages
 | Command | Action | Example |
 | :--- | :--- | :--- |
 | **`/aiconfig`** | Inspects provider, base URL, temperature, and reasoning parameters | `/aiconfig` |
+| **`/setai`** | Custom AI setup dashboard & 1-line configuration | `/setai mercury sk_...` or `/setai custom sk_... https://...` |
+| **`/apikey <key>`** | Update active AI API key directly from Telegram without restarts | `/apikey sk_2a7e825c4fb...` |
+| **`/baseurl <url>`** | Update custom endpoint URL | `/baseurl https://api.inceptionlabs.ai/v1` |
+| **`/provider <name>`** | Switch AI engine (`custom`, `gemini`, `openai`, `nvidia`, `local`) | `/provider custom` |
+| **`/model <name>`** | Switch AI candidate model (supports comma-separated fallbacks) | `/model mercury-3,mercury-3-preview-1014` |
 | **`/usage`** | Displays 24h consumption, total token usage, and remaining free quota | `/usage` |
 | **`/quotathreshold <tokens>`** | Sets 24h token warning alert limit (default: 100,000 tokens) | `/quotathreshold 50000` |
 | **`/quotaalert <on\|off>`** | Toggles daily quota alert warnings to Saved Messages | `/quotaalert on` |
 | **`/reasoning <low\|medium\|high\|off>`** | Adjusts reasoning effort for InceptionLabs / OpenAI models | `/reasoning low` |
-| **`/model <name>`** | Switches AI candidate model | `/model mercury-3-preview-1002` |
 | **`/reaction <on\|off>`** | Toggles natural emoji reactions (pool of 26 mobile emojis) | `/reaction on` |
 | **`/reactioncooldown <min> <max>`**| Sets randomized reaction interval (default: 3s–9s) | `/reactioncooldown 3 9` |
 | **`/chatcooldown <min> <max>`** | Sets randomized per-chat reply cooldown (default: 5s–60s) | `/chatcooldown 5 60` |

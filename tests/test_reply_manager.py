@@ -1102,3 +1102,46 @@ def test_ai_distill_group_context(tmp_path: Path):
     distilled = generator.distill_group_context("Solana Developers", "Announcement: We are building a DEX. Strict rule: no spam.")
     assert "- Purpose: Solana DEX development" in distilled
     assert "- Rules: No spam or scams" in distilled
+
+
+def test_custom_ai_remote_configuration(tmp_path: Path):
+    """Verify modifying custom AI, API keys, and endpoints remotely via Telegram commands."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "app_ai_cfg.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # 1. Update API key via /apikey
+        res1 = await mgr.handle_control_command("/apikey sk_test_1234567890abcdef")
+        assert "AI API key updated" in res1
+        assert db.get_state("ai_api_key") == "sk_test_1234567890abcdef"
+
+        # 2. Update baseurl via /baseurl
+        res2 = await mgr.handle_control_command("/baseurl https://api.mycustomai.com/v1")
+        assert "AI base URL updated" in res2
+        assert db.get_state("ai_base_url") == "https://api.mycustomai.com/v1"
+
+        # 3. Update model via /model
+        res3 = await mgr.handle_control_command("/model custom-fast-model")
+        assert "AI model switched" in res3
+        assert db.get_state("ai_model") == "custom-fast-model"
+
+        # 4. Quick setup Mercury via /setai mercury <key>
+        res4 = await mgr.handle_control_command("/setai mercury sk_2a7e825c4fb6745b35a56577131b62e50a55b9f0c523065f08cc785a77d4075c")
+        assert "Inception Labs Mercury Configured" in res4
+        assert db.get_state("ai_provider") == "custom"
+        assert db.get_state("ai_base_url") == "https://api.inceptionlabs.ai/v1"
+        assert "mercury-3" in db.get_state("ai_model")
+
+        # 5. Full custom setup via /setai custom <key> <url> <model>
+        res5 = await mgr.handle_control_command("/setai custom sk_new_key https://api.together.xyz/v1 meta-llama/Llama-3-70b")
+        assert "Custom AI Configured & Activated" in res5
+        assert db.get_state("ai_provider") == "custom"
+        assert db.get_state("ai_api_key") == "sk_new_key"
+        assert db.get_state("ai_base_url") == "https://api.together.xyz/v1"
+        assert db.get_state("ai_model") == "meta-llama/Llama-3-70b"
+
+    asyncio.run(_run())

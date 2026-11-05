@@ -546,11 +546,16 @@ class ReplyManager:
                 "• `/quiethours` - Check current quiet hours status\n\n"
                 "*AI Tuning, Usage & Personas:*\n"
                 "• `/aiconfig` - View provider, base URL, temperature, and reasoning parameters\n"
+                "• `/setai` - Custom AI dashboard & 1-step setup (e.g. `/setai mercury <key>`)\n"
+                "• `/apikey <key>` - Set/update AI API key directly from Telegram\n"
                 "• `/usage` - Live token tracker & remaining free 100M quota\n"
                 "• `/checkmodels` - Ping and verify candidate models in real time\n"
                 "• `/reasoning <low|medium|high|off>` - Adjust discrete reasoning effort\n"
                 "• `/temp <0.0-1.0>` - Adjust AI randomness/creativity\n"
                 "• `/maxtokens <tokens>` - Maximum output tokens per response\n"
+                "• `/model <name>` - Set model name or comma-separated fallback chain\n"
+                "• `/baseurl <url>` - Set custom API endpoint/base URL\n"
+                "• `/provider <name>` - Switch AI engine (custom, gemini, openai, nvidia, local)\n"
                 "• `/style [chat_id] <style>` - Global or per-chat persona override\n"
                 "• `/styles` - List all per-chat persona overrides\n"
                 "• `/quotathreshold <tokens>` - Set daily token warning limit\n"
@@ -952,6 +957,8 @@ class ReplyManager:
             eff = self.db.get_state("ai_reasoning_effort", "low")
             temp = self.db.get_state("ai_temperature", "0.6")
             mtok = self.db.get_state("ai_max_tokens", "200")
+            curr_key = self.db.get_state("ai_api_key", self.config.ai_api_key or "")
+            masked_key = f"`{curr_key[:7]}...{curr_key[-4:]}`" if len(curr_key) > 11 else ("`Configured`" if curr_key else "`Missing`")
             cands = []
             if hasattr(self.generator.provider, "get_candidate_models"):
                 cands = self.generator.provider.get_candidate_models()
@@ -963,9 +970,11 @@ class ReplyManager:
                 f"• Base URL: `{url}`\n"
                 f"• Active Model: `{getattr(self.generator.provider, 'model', mod)}`\n"
                 f"• Fallback Sequence: {cand_str}\n"
+                f"• API Key: {masked_key} (change via `/apikey <key>`)\n"
                 f"• Reasoning Effort: `{eff}` (change via `/reasoning <effort>`)\n"
                 f"• Temperature: `{temp}` (change via `/temp <0.0-1.0>`)\n"
                 f"• Max Output Tokens: `{mtok}` (change via `/maxtokens <tokens>`)\n\n"
+                f"_Quick Setup:_ `/setai <provider> <api_key> <endpoint> [model]` or `/setai mercury <key>`\n"
                 f"_Send `/checkmodels` to ping and verify candidate models in real-time._"
             )
 
@@ -1238,34 +1247,32 @@ class ReplyManager:
             except ValueError:
                 return "Error: Cooldown seconds must be valid integers."
 
-        if cmd in ("/model", "/setmodel"):
+        if cmd in ("/model", "/setmodel", "/custommodel"):
             if len(cmd_parts) < 2:
                 curr = self.db.get_state("ai_model", self.config.ai_model or "default")
                 return (
                     f"🤖 *Current AI Model:* `{curr}`\n\n"
-                    f"*Recommended Fast & Low-Credit Models:*\n"
-                    f"• `/model gemini-2.5-flash-lite` (Ultra-low credit cost, lightning fast)\n"
-                    f"• `/model gemini-2.5-flash` (Fast, hybrid reasoning)\n"
-                    f"• `/model gemini-3.5-flash-lite` (Next-gen lightweight)\n"
-                    f"• `/model gemini-3.5-flash` (Next-gen fast)\n"
-                    f"• `/model meta/llama-3.1-70b-instruct` (NVIDIA / custom)\n"
-                    f"• `/model gpt-4o-mini` (OpenAI)\n\n"
-                    f"Usage: `/model <model_name>`"
+                    f"*Recommended Models:*\n"
+                    f"• Inception Labs: `/model mercury-3,mercury-3-preview-1014,mercury-3-preview-1002`\n"
+                    f"• Google Gemini: `/model gemini-2.5-flash-lite`\n"
+                    f"• OpenAI: `/model gpt-4o-mini`\n"
+                    f"• NVIDIA: `/model meta/llama-3.1-70b-instruct`\n\n"
+                    f"Usage: `/model <model_name(s)>` (supports comma-separated fallback chain)"
                 )
             new_model = cmd_parts[1].strip()
             self.db.set_state("ai_model", new_model)
-            if hasattr(self.generator.provider, "model"):
-                self.generator.provider.model = new_model
-            return f"✅ AI model switched to *{new_model}*."
+            self.generator.reload_provider()
+            return f"✅ AI model switched to *{new_model}* (provider reloaded)."
 
-        if cmd in ("/baseurl", "/setbaseurl"):
+        if cmd in ("/baseurl", "/setbaseurl", "/endpoint"):
             if len(cmd_parts) < 2:
                 curr = self.db.get_state("ai_base_url", self.config.ai_base_url or "(default API)")
                 return (
-                    f"🔗 *Current AI Base URL:* `{curr}`\n\n"
-                    f"*Custom API Providers:*\n"
-                    f"• NVIDIA: `/baseurl https://integrate.api.nvidia.com/v1`\n"
+                    f"🔗 *Current AI Base URL / Endpoint:* `{curr}`\n\n"
+                    f"*Custom API Endpoints:*\n"
+                    f"• Inception Labs: `/baseurl https://api.inceptionlabs.ai/v1`\n"
                     f"• Groq: `/baseurl https://api.groq.com/openai/v1`\n"
+                    f"• NVIDIA: `/baseurl https://integrate.api.nvidia.com/v1`\n"
                     f"• DeepSeek: `/baseurl https://api.deepseek.com/v1`\n"
                     f"• Local Ollama: `/baseurl http://localhost:11434/v1`\n"
                     f"• Reset: `/baseurl default`"
@@ -1273,12 +1280,8 @@ class ReplyManager:
             raw_url = " ".join(cmd_parts[1:]).strip()
             target_url = "" if raw_url.lower() == "default" else raw_url
             self.db.set_state("ai_base_url", target_url)
-            if hasattr(self.generator.provider, "endpoint_url"):
-                clean_ep = target_url.rstrip("/")
-                if not clean_ep.endswith("/chat/completions"):
-                    clean_ep = f"{clean_ep}/chat/completions"
-                self.generator.provider.endpoint_url = clean_ep
-            return f"✅ AI base URL updated to: `{target_url or 'default'}`"
+            self.generator.reload_provider()
+            return f"✅ AI base URL updated to: `{target_url or 'default'}` (provider reloaded)."
 
         if cmd in ("/provider", "/setprovider"):
             if len(cmd_parts) < 2:
@@ -1286,29 +1289,95 @@ class ReplyManager:
                 return (
                     f"🧠 *Current AI Provider:* `{curr}`\n\n"
                     f"*Available Options:*\n"
+                    f"• `/provider custom` - Generic / Inception Labs OpenAI-compatible\n"
                     f"• `/provider gemini` - Google Gemini (Flash & Lite)\n"
                     f"• `/provider openai` - OpenAI (GPT-4o-mini)\n"
                     f"• `/provider nvidia` - NVIDIA API (via custom base URL)\n"
-                    f"• `/provider custom` - Generic OpenAI-compatible endpoint\n"
                     f"• `/provider local` - Offline rule-based (zero credit cost)"
                 )
             target = cmd_parts[1].lower().strip()
-            if target in ("gemini", "openai", "nvidia", "custom", "groq", "together", "deepseek", "local"):
+            if target in ("gemini", "openai", "nvidia", "custom", "groq", "together", "deepseek", "local", "inception"):
                 self.db.set_state("ai_provider", target)
-                from dataclasses import replace
-                curr_model = self.db.get_state("ai_model", self.config.ai_model)
-                curr_url = self.db.get_state("ai_base_url", self.config.ai_base_url)
-                new_cfg = replace(
-                    self.config,
-                    ai_provider=target,
-                    ai_model=curr_model,
-                    ai_base_url=curr_url,
-                    ai_enabled=True if target != "local" else False,
+                self.generator.reload_provider()
+                return f"🧠 AI provider switched to *{target.upper()}* (provider reloaded)."
+            return "Invalid provider. Available: custom, gemini, openai, nvidia, groq, local."
+
+        if cmd in ("/apikey", "/setkey", "/setapikey"):
+            if len(cmd_parts) < 2:
+                curr_key = self.db.get_state("ai_api_key", self.config.ai_api_key or "")
+                masked = f"`{curr_key[:7]}...{curr_key[-4:]}`" if len(curr_key) > 11 else ("`Set`" if curr_key else "`Not Configured`")
+                return (
+                    f"🔑 *Current AI API Key:* {masked}\n\n"
+                    f"Usage: `/apikey <your_api_key>`\n"
+                    f"_Example:_ `/apikey sk_2a7e825c4fb6745...`\n\n"
+                    f"_Updates your active AI key instantly on both local and cloud deployments without server restarts._"
                 )
-                from app.ai.reply_generator import create_ai_provider
-                self.generator.provider = create_ai_provider(new_cfg)
-                return f"🧠 AI provider switched to *{target.upper()}*."
-            return "Invalid provider. Available: gemini, openai, nvidia, custom, local."
+            new_key = cmd_parts[1].strip()
+            self.db.set_state("ai_api_key", new_key)
+            self.generator.reload_provider()
+            masked = f"`{new_key[:7]}...{new_key[-4:]}`" if len(new_key) > 11 else "`Set`"
+            return f"✅ AI API key updated to {masked} and provider reloaded."
+
+        if cmd in ("/setai", "/customai"):
+            if len(cmd_parts) < 2:
+                prov = self.db.get_state("ai_provider", self.config.ai_provider)
+                url = self.db.get_state("ai_base_url", self.config.ai_base_url or "(default API)")
+                mod = self.db.get_state("ai_model", self.config.ai_model or "(default model)")
+                curr_key = self.db.get_state("ai_api_key", self.config.ai_api_key or "")
+                masked_key = f"`{curr_key[:7]}...{curr_key[-4:]}`" if len(curr_key) > 11 else ("`Configured`" if curr_key else "`Missing`")
+                return (
+                    f"🛠️ *Custom AI Setup Dashboard:*\n\n"
+                    f"• **Provider:** `{prov.upper()}`\n"
+                    f"• **Endpoint URL:** `{url}`\n"
+                    f"• **Active Model(s):** `{mod}`\n"
+                    f"• **API Key:** {masked_key}\n\n"
+                    f"*Commands to customize from Telegram:*\n"
+                    f"• `/setai <provider> <api_key> <endpoint_url> [models]`\n"
+                    f"  _Example:_ `/setai custom sk_... https://api.inceptionlabs.ai/v1 mercury-3`\n"
+                    f"• `/setai mercury <api_key>` (one-step Inception Labs Mercury setup)\n"
+                    f"• `/apikey <key>` — Update API key directly\n"
+                    f"• `/baseurl <url>` — Update endpoint URL\n"
+                    f"• `/model <name>` — Update model name(s)\n"
+                    f"• `/provider <name>` — Switch provider"
+                )
+            p = cmd_parts[1].lower().strip()
+            if p in ("mercury", "inception") and len(cmd_parts) >= 3:
+                k = cmd_parts[2].strip()
+                self.db.set_state("ai_provider", "custom")
+                self.db.set_state("ai_api_key", k)
+                self.db.set_state("ai_base_url", "https://api.inceptionlabs.ai/v1")
+                self.db.set_state("ai_model", "mercury-3,mercury-3-preview-1014,mercury-3-preview-1002")
+                self.generator.reload_provider()
+                return (
+                    f"✅ *Inception Labs Mercury Configured & Activated!*\n\n"
+                    f"• Provider: `CUSTOM`\n"
+                    f"• Base URL: `https://api.inceptionlabs.ai/v1`\n"
+                    f"• Models: `mercury-3, mercury-3-preview-1014, mercury-3-preview-1002`\n"
+                    f"• Provider reloaded and active."
+                )
+            elif len(cmd_parts) >= 4:
+                k = cmd_parts[2].strip()
+                u = cmd_parts[3].strip()
+                m = cmd_parts[4].strip() if len(cmd_parts) >= 5 else ""
+                self.db.set_state("ai_provider", p)
+                self.db.set_state("ai_api_key", k)
+                self.db.set_state("ai_base_url", u)
+                if m:
+                    self.db.set_state("ai_model", m)
+                self.generator.reload_provider()
+                return (
+                    f"✅ *Custom AI Configured & Activated!*\n\n"
+                    f"• Provider: `{p.upper()}`\n"
+                    f"• Endpoint: `{u}`\n"
+                    f"• Model: `{m or 'default'}`\n"
+                    f"• Provider reloaded and active."
+                )
+            else:
+                return (
+                    "Usage:\n"
+                    "• `/setai <provider> <api_key> <endpoint_url> [models]`\n"
+                    "• Or one-step Mercury setup: `/setai mercury <api_key>`"
+                )
 
         if cmd in ("/chatty", "/banter"):
             if len(cmd_parts) < 2:
