@@ -25,40 +25,36 @@ VALID_STYLES: Dict[str, str] = {
 #   /style <casual|concise|formal|humorous>
 # =============================================================================
 
-DEFAULT_SYSTEM_INSTRUCTIONS = """You are texting directly as me in my personal Telegram chat.
-Reply to incoming messages exactly the way a real human friend texts from their phone.
+DEFAULT_SYSTEM_INSTRUCTIONS = """You are texting directly as me in my personal Telegram chat from your phone.
+Text exactly like a real human friend. Never sound like an AI, bot, or assistant.
 
-CORE PERSONALITY & RULES:
-1. IDENTITY & HUMAN ALIBI:
-   - You are texting directly as me.
-   - If anyone asks "are you AI?", "what is your model?", "are you a bot?", or "is this ChatGPT/Gemini?", NEVER admit it.
-   - Laugh it off or reply casually as a human on their phone:
-     * English: "lol what? no, it's me haha" or "what model? I'm just typing on my phone"
-     * Hindi/Hinglish: "bhai mai hi hu, kya bol raha hai haha" or "are bhai bot nahi hu, real hu 😂"
-2. EXACT TONE & ENERGY MATCHING:
-   - Always match the EXACT tone, vibe, and energy of the user's message:
-     * If they text casually with slang, match their casual slang and relaxed energy.
-     * If they are brief/short, keep your reply equally brief and fast.
-     * If they are excited/happy, match their warm, upbeat vibe.
-     * If they ask a direct or serious question, reply directly and clearly without fluff.
-     * Never sound like customer support or a formal assistant. Never be overly enthusiastic or robotic.
-3. EXACT LANGUAGE & DIALECT MATCHING:
-   - Always reply in the EXACT SAME language and writing style the user used:
-     * If they text in Hinglish (Hindi written in English alphabet, e.g. "kya kar raha hai bhai", "sab theek?"), reply in natural casual Hinglish (e.g. "kuch nahi bhai, bas baitha hu, tu bata", "sab badhiya bhai").
-     * If they text in pure Hindi (Devanagari script), reply in natural Hindi.
-     * If they text in English, reply in natural, everyday conversational English.
-     * If they mix words (code-switching), mirror their exact mix naturally.
-4. STRICTLY NO LINKS:
-   - NEVER output any URLs, links, http/https, t.me links, or channel invites under ANY circumstance.
-5. STRICTLY NO AI ARTIFACTS:
-   - NEVER output brackets [ ], braces { }, or parentheses ( ) containing explanations or metadata.
-   - NEVER output prefixes like "Me:", "AI:", or "Reply:".
-   - NEVER output corporate greetings like "Certainly!", "I'd be glad to help", or "How can I assist you?".
-   - NEVER output code blocks, JSON, or formatting tags.
-6. BREVITY: Keep it very short (usually 1-2 short sentences, sometimes just a few words). Never output bullet points, options, or lists.
-7. PRIVACY & SAFETY: Never make financial promises, commitments, or invent private facts. If asked about personal schedule/plans, say you will check and get back shortly.
-8. VARIETY: Avoid repetitive phrases or robotic formulas across responses.
-Output ONLY the raw text message ready to be sent to the recipient."""
+RULES:
+1. BREVITY & ENERGY MATCHING:
+   - Match the exact length and energy of the message:
+     * If they send 1 word (e.g. "hii", "yo", "sup"), reply with ONLY 1 word (e.g. "hii", "hello", "yo").
+     * Never write long paragraphs or unasked questions like "how are you doing today?".
+     * Keep replies to 1-2 punchy lines maximum.
+   - If sending 2 distinct thoughts, separate them with a newline so they send as separate text bubbles.
+
+2. GEN-Z CASUAL SLANG:
+   - Naturally use casual Gen-Z shortcuts when appropriate:
+     "u" (you), "r" (are), "rn" (right now), "idk", "tbh", "ngl", "fr", "wbu", "nah", "yea", "bruh", "bro", "lol".
+
+3. HUMAN ALIBI (NEVER ADMIT BEING AI):
+   - If accused of being a bot or AI ("are u a bot?", "is this ai?", "u r fake"):
+     Reply with funny, friendly disbelief:
+     * "seriously bro u think I am not real? 😂"
+     * "bruh u fr rn? it's me lol"
+     * "lol what are u on about, typing from my phone rn"
+     * "bhai kya phoonk ke baitha hai, mai hi hu 😂"
+
+4. STRICTLY NO CODE / ARTIFACTS:
+   - NEVER output code, paths (/etc, /var), programming syntax, brackets [], braces {}, markdown formatting (**bold**), or labels ("Me:", "Reply:").
+
+5. PRIVACY:
+   - Never promise money or invent plans. If asked about plans, say u will check and let them know.
+
+Output ONLY the raw text message ready to send."""
 
 
 class PromptManager:
@@ -70,11 +66,23 @@ class PromptManager:
         system_instructions: str = DEFAULT_SYSTEM_INSTRUCTIONS,
         owner_name: str = "Kaif",
         style: str = "casual",
+        language: str = "dynamic",
     ):
         self.prompt_file = Path(prompt_file) if prompt_file else None
         self._default_instructions = system_instructions
         self.owner_name = owner_name
         self._style = style if style in VALID_STYLES else "casual"
+        self._language = (language or "dynamic").strip().lower()
+
+    @property
+    def language(self) -> str:
+        """Active target chat language ('dynamic', 'english', 'hindi', etc.)."""
+        return self._language
+
+    def set_language(self, language: str) -> None:
+        """Set target language for replies."""
+        clean = (language or "dynamic").strip().lower()
+        self._language = clean if clean else "dynamic"
 
     @property
     def style(self) -> str:
@@ -124,32 +132,49 @@ class PromptManager:
         """Remove any accidental AI meta-commentary, labels, brackets, or robotic filler."""
         text = raw_text.strip().strip('"').strip("'")
 
-        # Strip prefixes like "Kaif:", "Me:", "AI:", "Reply:"
-        text = re.sub(r"^(?:me|ai|reply|assistant|" + re.escape(self.owner_name) + r"):\s*", "", text, flags=re.IGNORECASE)
+        # Strip prefixes like "Kaif:", "Me:", "AI:", "Reply:" across any line
+        owner_pattern = re.escape(self.owner_name) if self.owner_name else "user"
+        text = re.sub(
+            r"(?im)^(?:me|ai|reply|assistant|bot|" + owner_pattern + r"):\s*",
+            "",
+            text,
+        )
 
-        # Remove bracketed/parenthesized meta comments like [replying in Hindi] or (as an AI...)
-        text = re.sub(r"\[[^\]]*\]", "", text)
-        text = re.sub(r"\{[^\}]*\}", "", text)
+        # Strip markdown code fences and backticks
+        text = re.sub(r"```[a-z]*", "", text)
+        text = text.replace("`", "")
+
+        # Strip code styles and file system paths like /etc, /var, /usr, /bin, /tmp
+        text = re.sub(r"/(?:etc|var|usr|bin|tmp|opt|dev|proc|sys)\b[/\w.-]*", "", text, flags=re.IGNORECASE)
+
+        # Strip all brackets [] and braces {} completely
+        text = re.sub(r"[\[\]\{\}]", "", text)
+
+        # Strip markdown bold/italic formatting so text is natural human mobile chat
+        text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+        text = re.sub(r"\*([^*]+)\*", r"\1", text)
+        text = re.sub(r"__([^_]+)__", r"\1", text)
+
+        # Remove parenthesized meta comments like (as an AI...) or (replying in Hindi)
         text = re.sub(r"\((?:note|disclaimer|as an ai|ai)[^\)]*\)", "", text, flags=re.IGNORECASE)
-
-        # Strip markdown code fences if model accidentally wrapped output
-        text = re.sub(r"^```[a-z]*\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
 
         # Strip robotic conversational openers & closers
         text = re.sub(r"^(?:certainly!?|sure thing!?|of course!?|here(?:'s| is) (?:a |the )?(?:reply|draft):?|as an ai[,\.]?)\s*", "", text, flags=re.IGNORECASE)
         text = re.sub(r"\s*(?:hope this helps!?|let me know if you need anything else!?|feel free to ask!?)$", "", text, flags=re.IGNORECASE)
 
-        # If model generated multiple bullet choices or "Option 1:", take the single clean human line
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        if lines:
-            first_line = lines[0]
-            first_line = re.sub(r"^[\*\-\•\d\.\:\s]+(?:option\s*\d*[\:\.\s]*)?", "", first_line, flags=re.IGNORECASE).strip()
-            if len(first_line) > 2:
-                text = first_line
-
         # STRICT SAFETY: Never allow AI to output URLs or links
         text = re.sub(r"https?:\/\/\S+|t\.me\/\S+|www\.\S+", "", text)
+
+        # If model generated multiple bullet choices or "Option 1:", keep clean natural lines (max 3)
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        clean_lines = []
+        for line in lines:
+            cleaned_line = re.sub(r"^[\*\-\•\d\.\:\s]+(?:option\s*\d*[\:\.\s]*)?", "", line, flags=re.IGNORECASE).strip()
+            if cleaned_line and len(cleaned_line) > 1:
+                clean_lines.append(cleaned_line)
+
+        if clean_lines:
+            text = "\n".join(clean_lines[:3])
 
         return text.strip()
 
@@ -159,12 +184,12 @@ class PromptManager:
         incoming_text: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> str:
-        """Create prompt containing message context, history, and dynamic owner identity."""
+        """Create prompt containing message context, history, language rule, and dynamic owner identity."""
         parts: List[str] = []
 
         if conversation_history:
             history_lines = ["Recent conversation context:"]
-            for msg in conversation_history[-4:]:
+            for msg in conversation_history[-5:]:
                 sender = msg.get("sender", "Contact")
                 content = msg.get("text", "").strip()
                 if content:
@@ -172,12 +197,21 @@ class PromptManager:
             if len(history_lines) > 1:
                 parts.append("\n".join(history_lines))
 
+        # Language enforcement
+        if self._language == "dynamic":
+            lang_instruction = "Match the exact language and writing style of the sender (e.g. English, Hinglish, Hindi)."
+        elif self._language == "english":
+            lang_instruction = "CRITICAL: You MUST reply ONLY in English, regardless of the sender's language."
+        else:
+            lang_instruction = f"CRITICAL: You MUST reply ONLY in {self._language.capitalize()}."
+
         style_instruction = VALID_STYLES.get(self._style, VALID_STYLES["casual"])
         parts.append(
-            f"You are {self.owner_name}.\n"
+            f"You are {self.owner_name} texting from your phone.\n"
             f"Tone/Style: {style_instruction}\n"
+            f"Language Rule: {lang_instruction}\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Reply as {self.owner_name} (casual human text, matching language, no AI talk, no robotic repetition):"
+            f"Reply as {self.owner_name} (ultra-concise human Gen-Z texting, match brevity, no AI talk, no code, no brackets, separate distinct thoughts by newline):"
         )
         return "\n\n".join(parts)

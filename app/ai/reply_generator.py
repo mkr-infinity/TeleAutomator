@@ -20,7 +20,7 @@ def create_ai_provider(config: AppConfig) -> AIProvider:
 
     if config.ai_provider == "gemini":
         logger.info("Initializing Google Gemini AI provider.")
-        return GeminiProvider(api_key=config.ai_api_key, model=config.ai_model or "gemini-3.5-flash")
+        return GeminiProvider(api_key=config.ai_api_key, model=config.ai_model or "gemini-2.5-flash")
 
     if config.ai_provider == "openai":
         logger.info("Initializing OpenAI AI provider.")
@@ -41,6 +41,15 @@ class ReplyGenerator:
     def set_owner_name(self, name: str) -> None:
         """Propagate owner name to prompt manager."""
         self.prompt_manager.set_owner_name(name)
+
+    def set_language(self, language: str) -> None:
+        """Set language rule (dynamic, english, hindi, etc.)."""
+        self.prompt_manager.set_language(language)
+
+    @property
+    def language(self) -> str:
+        """Active target chat language."""
+        return self.prompt_manager.language
 
     def set_style(self, style: str) -> bool:
         """Set AI response style (casual, concise, formal, humorous)."""

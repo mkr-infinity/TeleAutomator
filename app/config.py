@@ -79,6 +79,12 @@ class AppConfig:
     min_delay_seconds: float = 5.0
     max_delay_seconds: float = 60.0
 
+    # Language & Reactions
+    default_chat_language: str = "dynamic"
+    reaction_enabled: bool = True
+    reaction_max_per_window: int = 4
+    reaction_window_seconds: int = 600
+
     # Paths
     data_dir: Path = Path("data")
 
@@ -168,6 +174,10 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         typing_delay = max(0.0, float(os.getenv("TYPING_DELAY_SECONDS", "2.0")))
         min_delay = max(0.0, float(os.getenv("MIN_REPLY_DELAY_SECONDS", "5.0")))
         max_delay = max(min_delay, float(os.getenv("MAX_REPLY_DELAY_SECONDS", "60.0")))
+        default_chat_language = os.getenv("DEFAULT_CHAT_LANGUAGE", "dynamic").strip().lower() or "dynamic"
+        reaction_enabled = _parse_bool(os.getenv("REACTION_ENABLED"), default=True)
+        reaction_max_per_window = max(1, int(os.getenv("REACTION_MAX_PER_WINDOW", "4")))
+        reaction_window_seconds = max(10, int(os.getenv("REACTION_WINDOW_SECONDS", "600")))
     except ValueError as e:
         raise ValueError(f"Invalid rate limit or message delay configuration: {e}")
 
@@ -197,5 +207,9 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         typing_delay_seconds=typing_delay,
         min_delay_seconds=min_delay,
         max_delay_seconds=max_delay,
+        default_chat_language=default_chat_language,
+        reaction_enabled=reaction_enabled,
+        reaction_max_per_window=reaction_max_per_window,
+        reaction_window_seconds=reaction_window_seconds,
         data_dir=data_dir,
     )

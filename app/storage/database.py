@@ -56,6 +56,11 @@ class Database:
                     reply TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE TABLE IF NOT EXISTS reaction_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp REAL NOT NULL
+                );
                 """
             )
 
@@ -169,3 +174,26 @@ class Database:
             if re.search(r"\b" + re.escape(kw) + r"\b", lower_text) or kw in lower_text:
                 return rule["reply"]
         return None
+
+    def record_reaction(self, ts: float) -> None:
+        """Record timestamp of a sent reaction."""
+        with self._get_connection() as conn:
+            conn.execute("INSERT INTO reaction_events (timestamp) VALUES (?)", (ts,))
+
+    def get_recent_reaction_count(self, window_seconds: float) -> int:
+        """Count reactions sent within the last window_seconds."""
+        import time
+        cutoff = time.time() - max(1.0, window_seconds)
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) as cnt FROM reaction_events WHERE timestamp >= ?",
+                (cutoff,),
+            ).fetchone()
+            return int(row["cnt"]) if row else 0
+
+    def prune_old_reactions(self, max_age_seconds: float = 86400.0) -> None:
+        """Delete reaction timestamps older than max_age_seconds."""
+        import time
+        cutoff = time.time() - max_age_seconds
+        with self._get_connection() as conn:
+            conn.execute("DELETE FROM reaction_events WHERE timestamp < ?", (cutoff,))

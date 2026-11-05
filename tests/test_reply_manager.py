@@ -95,10 +95,10 @@ def test_approval_mode_and_commands(tmp_path: Path):
         # 2. /approve 1
         res = await mgr.handle_control_command("/approve 1")
         assert "sent successfully" in res
-        # Verified message was sent to the chat
-        assert mock_client.send_message.call_count == 2
-        second_call = mock_client.send_message.call_args_list[1]
-        assert second_call[0][0] == 100  # chat_id
+        # Verified message parts were sent to the chat
+        assert mock_client.send_message.call_count >= 2
+        sent_chat_ids = [c[0][0] for c in mock_client.send_message.call_args_list[1:]]
+        assert 100 in sent_chat_ids
 
         # 3. /stop and /resume
         stop_res = await mgr.handle_control_command("/stop")
@@ -300,5 +300,125 @@ def test_errors_and_fallbacks_never_sent_to_groups_or_chats(tmp_path: Path):
         assert "TeleAutomator Alert" in saved_call[1]
         assert "API rate limit exceeded 429" in saved_call[1]
         assert "Developer Group" in saved_call[1]
+
+    asyncio.run(_run())
+
+
+def test_message_splitting_meaning_and_bounds():
+    """Verify responses divide into 2 or 3 complete thoughts without breaking words or syntax."""
+    # 1. Single brief word or short phrase should stay single message
+    assert ReplyManager.split_reply_messages("hii") == ["hii"]
+    assert ReplyManager.split_reply_messages("hello bro") == ["hello bro"]
+
+    # 2. Divided by newline (multi-thought from prompt)
+    two_parts = ReplyManager.split_reply_messages("hii bro\nall ok bro what about you")
+    assert two_parts == ["hii bro", "all ok bro what about you"]
+
+    # 3. Divided by sentence boundaries
+    sent_parts = ReplyManager.split_reply_messages("hii bro. all ok bro what about you")
+    assert sent_parts == ["hii bro.", "all ok bro what about you"]
+
+    # 4. Never breaks words or tiny punctuation
+    single_word_dot = ReplyManager.split_reply_messages("ok.")
+    assert single_word_dot == ["ok."]
+
+    # 5. Cap at 3 messages max
+    four_parts = ReplyManager.split_reply_messages("part one\npart two\npart three\npart four")
+    assert len(four_parts) == 3
+
+
+def test_reaction_and_cooldown_controls(tmp_path: Path):
+    """Verify runtime customization of reactions, reaction cooldowns, and chat cooldowns."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            reply_mode="restricted_auto",
+            data_dir=tmp_path,
+        )
+        db = Database(tmp_path / "app.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        mock_client = AsyncMock()
+        mgr.set_telegram_client(mock_client)
+
+        # 1. /lang command
+        lang_res = await mgr.handle_control_command("/lang")
+        assert "Current Reply Language" in lang_res
+        await mgr.handle_control_command("/lang english")
+        assert generator.language == "english"
+        assert db.get_state("chat_language") == "english"
+
+        # 2. /reaction commands
+        react_res = await mgr.handle_control_command("/reaction")
+        assert "Auto-Reactions" in react_res
+        await mgr.handle_control_command("/reaction off")
+        assert db.get_state("reaction_enabled") == "0"
+        await mgr.handle_control_command("/reaction on")
+        assert db.get_state("reaction_enabled") == "1"
+
+        # 3. /reactioncooldown <count> <minutes>
+        cd_res = await mgr.handle_control_command("/reactioncooldown 4 10")
+        assert "Max *4* reactions" in cd_res
+        assert db.get_state("reaction_max_per_window") == "4"
+        assert db.get_state("reaction_window_seconds") == "600.0"
+
+        # 4. /chatcooldown and /globalcooldown
+        chat_res = await mgr.handle_control_command("/chatcooldown 25")
+        assert "25s" in chat_res
+        assert safety.per_chat_cooldown_seconds == 25
+
+        glob_res = await mgr.handle_control_command("/globalcooldown 12")
+        assert "12s" in glob_res
+        assert safety.global_cooldown_seconds == 12
+
+        # 5. Database reaction tracking and limit enforcement
+        import time
+        db.record_reaction(time.time())
+        assert db.get_recent_reaction_count(3600) >= 1
+
+    asyncio.run(_run())
+
+
+def test_cooldown_suppression_does_not_alert_saved_messages(tmp_path: Path):
+    """Verify that when a message is suppressed due to cooldown, zero alerts are sent to Saved Messages."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            reply_mode="restricted_auto",
+            allowed_private_chats={100},
+            global_cooldown_seconds=60,
+            per_chat_cooldown_seconds=60,
+            data_dir=tmp_path,
+        )
+        db = Database(tmp_path / "app.db")
+        safety = SafetyManager(cfg, db)
+        safety.set_auto_authorization(True)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        mock_client = AsyncMock()
+        mgr.set_telegram_client(mock_client)
+
+        # Simulate a reply was recently sent
+        safety.mark_reply_sent(100)
+
+        # Incoming eligible message arrives while cooldown is active
+        await mgr.handle_incoming_eligible_message(
+            chat_id=100,
+            chat_title="Friend",
+            message_id=200,
+            sender_id=123,
+            sender_name="Alice",
+            text="Are you there?",
+        )
+
+        # Neither the chat NOR Saved Messages ('me') should receive any message
+        mock_client.send_message.assert_not_called()
 
     asyncio.run(_run())

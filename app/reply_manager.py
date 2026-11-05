@@ -42,6 +42,12 @@ class ReplyManager:
         if saved_style:
             self.generator.set_style(saved_style)
 
+        # Restore saved language if stored in DB
+        default_lang = getattr(config, "default_chat_language", "dynamic")
+        saved_lang = self.db.get_state("chat_language", default_lang)
+        if saved_lang:
+            self.generator.set_language(saved_lang)
+
     @property
     def current_mode(self) -> str:
         """Active reply mode, prioritizing runtime database state over initial config."""
@@ -182,7 +188,10 @@ class ReplyManager:
             # Validate safety constraints
             can_send, reason = self.safety.can_reply(chat_id, draft)
             if not can_send:
-                logger.warning(f"[AUTO REPLY SUPPRESSED] Chat {chat_id}: {reason}")
+                logger.info(f"[AUTO REPLY SUPPRESSED] Chat {chat_id}: {reason}")
+                # Rate limit cooldowns are normal operating states; never alert Saved Messages
+                if "cooldown" in reason.lower():
+                    return
                 await self._notify_issue_to_saved_messages(
                     chat_id=chat_id,
                     chat_title=chat_title,
@@ -282,10 +291,16 @@ class ReplyManager:
                 "• `/status` - Health, active identity, pause timer, & mode\n"
                 "• `/mode <draft|approval|auto>` - Switch automation mode on the fly\n"
                 "• `/style <casual|concise|formal|humorous>` - Change AI reply style\n"
+                "• `/lang <dynamic|english|hindi|...>` - Chat language selection\n"
                 "• `/auto on` / `/auto off` - Authorize or revoke automated replies\n"
                 "• `/pause <time>` - Snooze replies (e.g. `/pause 2h`, `/pause 30m`)\n"
                 "• `/resume` - Resume operations (clears pause & stop)\n"
                 "• `/stop` - Emergency stop switch (halts all replies)\n\n"
+                "*Reactions & Cooldowns:*\n"
+                "• `/reaction on` / `/reaction off` - Enable or disable auto-reactions\n"
+                "• `/reactioncooldown <count> <mins>` - Set reaction cooldown (e.g. `4 10`)\n"
+                "• `/chatcooldown <seconds>` - Custom per-chat reply cooldown\n"
+                "• `/globalcooldown <seconds>` - Custom global reply cooldown\n\n"
                 "*Custom Keyword Auto-Replies:*\n"
                 "• `/addrule <word> => <reply>` - Auto-reply when a word is detected\n"
                 "• `/delrule <word>` - Delete keyword trigger\n"
@@ -450,17 +465,107 @@ class ReplyManager:
             owner = self.generator.prompt_manager.owner_name
             mode_display = self.current_mode
             style_display = self.generator.style
+            lang_display = self.generator.language
+            react_enabled = self.db.get_state(
+                "reaction_enabled",
+                "1" if getattr(self.config, "reaction_enabled", True) else "0"
+            ) == "1"
+            react_status = "ON" if react_enabled else "OFF"
+            max_r = self.db.get_state("reaction_max_per_window", str(getattr(self.config, "reaction_max_per_window", 4)))
+            win_m = int(float(self.db.get_state("reaction_window_seconds", str(getattr(self.config, "reaction_window_seconds", 600.0)))) // 60)
             return (
                 f"📊 *TeleAutomator Status:*\n"
                 f"• Identity Name: `{owner}`\n"
                 f"• Automation: *{pause_str}*\n"
                 f"• Reply Mode: `{mode_display}` (change with `/mode <draft|approval|auto>`)\n"
                 f"• AI Style: `{style_display}` (change with `/style <casual|concise|formal|humorous>`)\n"
+                f"• Language: `{lang_display}` (change with `/lang <dynamic|english|hindi|...>`)\n"
+                f"• Reactions: *{react_status}* (max {max_r} in {win_m}m, customize via `/reaction`)\n"
+                f"• Cooldowns: Chat=`{self.safety.per_chat_cooldown_seconds}s`, Global=`{self.safety.global_cooldown_seconds}s`\n"
                 f"• Auto Authorized: *{auto_status}*\n"
                 f"• Emergency Stop: *{stop_status}*\n"
                 f"• Pending Approvals: `{pending_count}`\n"
                 f"• AI Provider: `{self.config.ai_provider}` (model={self.config.ai_model or 'default'})"
             )
+
+        if cmd in ("/lang", "/language", "/setlang"):
+            if len(cmd_parts) < 2:
+                curr = self.generator.language
+                return (
+                    f"🌐 *Current Reply Language:* `{curr}`\n\n"
+                    f"*Available Options:*\n"
+                    f"• `/lang dynamic` - Automatically detects sender's language (English, Hinglish, Hindi, etc.) and replies in the same language.\n"
+                    f"• `/lang english` - Forces AI to reply ONLY in English.\n"
+                    f"• `/lang hindi` - Forces AI to reply in Hindi / Hinglish.\n"
+                    f"• `/lang <language>` - Set to any language (e.g. `/lang spanish`, `/lang french`)"
+                )
+            target_lang = cmd_parts[1].lower().strip()
+            self.generator.set_language(target_lang)
+            self.db.set_state("chat_language", target_lang)
+            return f"🌐 Chat language set to *{target_lang}*."
+
+        if cmd in ("/reaction", "/reactions"):
+            if len(cmd_parts) < 2:
+                enabled = self.db.get_state(
+                    "reaction_enabled",
+                    "1" if getattr(self.config, "reaction_enabled", True) else "0"
+                ) == "1"
+                status_str = "ON" if enabled else "OFF"
+                max_r = self.db.get_state("reaction_max_per_window", str(getattr(self.config, "reaction_max_per_window", 4)))
+                win_m = int(float(self.db.get_state("reaction_window_seconds", str(getattr(self.config, "reaction_window_seconds", 600.0)))) // 60)
+                return (
+                    f"⚡ *Auto-Reactions:* *{status_str}*\n"
+                    f"• Rate Limit: Max {max_r} reactions per {win_m} minutes\n\n"
+                    f"*Commands:*\n"
+                    f"• `/reaction on` - Enable natural reactions\n"
+                    f"• `/reaction off` - Disable reactions\n"
+                    f"• `/reactioncooldown <max_count> <minutes>` - Customize reaction cooldown (e.g. `/reactioncooldown 4 10`)"
+                )
+            target = cmd_parts[1].lower().strip()
+            if target == "on":
+                self.db.set_state("reaction_enabled", "1")
+                return "⚡ Auto-reactions *ENABLED*. Natural emoji reactions will be added within cooldown limits."
+            elif target == "off":
+                self.db.set_state("reaction_enabled", "0")
+                return "🔒 Auto-reactions *DISABLED*."
+            return "Usage: `/reaction on` or `/reaction off`"
+
+        if cmd in ("/reactioncooldown", "/reactionlimit"):
+            if len(cmd_parts) < 3:
+                return (
+                    "Usage: `/reactioncooldown <max_reactions> <window_minutes>`\n"
+                    "Example: `/reactioncooldown 4 10` (max 4 reactions in 10 minutes)"
+                )
+            try:
+                max_cnt = max(1, int(cmd_parts[1]))
+                win_mins = max(1, float(cmd_parts[2]))
+                self.db.set_state("reaction_max_per_window", str(max_cnt))
+                self.db.set_state("reaction_window_seconds", str(win_mins * 60.0))
+                return f"✅ Reaction rate limit updated: Max *{max_cnt}* reactions per *{win_mins:.0f}* minute(s)."
+            except ValueError:
+                return "Error: Both max_reactions and window_minutes must be valid numbers."
+
+        if cmd in ("/chatcooldown", "/chatcd"):
+            if len(cmd_parts) < 2:
+                curr = self.safety.per_chat_cooldown_seconds
+                return f"⏱️ *Current Per-Chat Cooldown:* `{curr}s`\nUsage: `/chatcooldown <seconds>` (e.g. `/chatcooldown 30`)"
+            try:
+                secs = max(0, int(cmd_parts[1]))
+                self.db.set_state("per_chat_cooldown_seconds", str(secs))
+                return f"✅ Per-chat cooldown updated to *{secs}s*."
+            except ValueError:
+                return "Error: Seconds must be an integer."
+
+        if cmd in ("/globalcooldown", "/globalcd"):
+            if len(cmd_parts) < 2:
+                curr = self.safety.global_cooldown_seconds
+                return f"⏱️ *Current Global Cooldown:* `{curr}s`\nUsage: `/globalcooldown <seconds>` (e.g. `/globalcooldown 15`)"
+            try:
+                secs = max(0, int(cmd_parts[1]))
+                self.db.set_state("global_cooldown_seconds", str(secs))
+                return f"✅ Global cooldown updated to *{secs}s*."
+            except ValueError:
+                return "Error: Seconds must be an integer."
 
         if cmd in ("/pause", "/off", "/sleep"):
             if len(cmd_parts) < 2:
@@ -593,6 +698,88 @@ class ReplyManager:
 
         return round(max(self.min_delay, min(self.max_delay, delay)), 2)
 
+    @staticmethod
+    def split_reply_messages(text: str) -> list[str]:
+        """Split a multi-thought reply into 2 or 3 natural messages without breaking word or clause meaning."""
+        import re
+        text = text.strip()
+        if not text:
+            return []
+
+        # If already separated by newlines, split by line
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        if len(lines) > 1:
+            return lines[:3]
+
+        # If a single line, check for clean sentence boundaries
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        if 1 < len(sentences) <= 3 and len(text) > 15:
+            # Ensure every sentence is a real thought (at least 2 chars), not broken words
+            if all(len(s) >= 2 for s in sentences):
+                return sentences
+
+        return [text]
+
+    async def maybe_send_reaction(self, chat_id: int, message_id: int, text: str) -> bool:
+        """Add an emoji reaction to the message if reaction features and cooldown permit."""
+        if not self._client:
+            return False
+
+        # Check if reactions are enabled
+        enabled = self.db.get_state(
+            "reaction_enabled",
+            "1" if getattr(self.config, "reaction_enabled", True) else "0"
+        ) == "1"
+        if not enabled:
+            return False
+
+        # Check reaction cooldown
+        max_reactions = int(self.db.get_state(
+            "reaction_max_per_window",
+            str(getattr(self.config, "reaction_max_per_window", 4))
+        ))
+        window_seconds = float(self.db.get_state(
+            "reaction_window_seconds",
+            str(getattr(self.config, "reaction_window_seconds", 600.0))
+        ))
+
+        recent_count = self.db.get_recent_reaction_count(window_seconds)
+        if recent_count >= max_reactions:
+            logger.debug(
+                f"[REACTION] Cooldown active: {recent_count}/{max_reactions} reactions used in last {int(window_seconds // 60)}m."
+            )
+            return False
+
+        # Pick natural emoji based on text tone
+        lower = text.lower()
+        if any(w in lower for w in ("haha", "lol", "lmao", "rofl", "😂", "xd", "funny")):
+            chosen = "😂"
+        elif any(w in lower for w in ("fire", "op", "w", "nice", "cool", "goat", "lit", "🔥")):
+            chosen = "🔥"
+        elif any(w in lower for w in ("thanks", "thx", "love", "heart", "❤️", "tysm")):
+            chosen = "❤️"
+        elif any(w in lower for w in ("ok", "okay", "done", "yes", "yeah", "yep", "sure", "alright", "got it")):
+            chosen = "👍"
+        elif any(w in lower for w in ("what", "why", "who", "where", "how", "?", "👀")):
+            chosen = "👀"
+        else:
+            chosen = random.choice(["👍", "❤️", "🔥", "😂", "🫡", "⚡"])
+
+        try:
+            from telethon.tl.functions.messages import SendReactionRequest
+            from telethon.tl.types import ReactionEmoji
+            import time
+
+            peer = await self._client.get_input_entity(chat_id)
+            await self._client(SendReactionRequest(peer=peer, msg_id=message_id, reaction=[ReactionEmoji(emoticon=chosen)]))
+            self.db.record_reaction(time.time())
+            logger.info(f"[REACTION] Reacted {chosen} to message {message_id} in chat {chat_id}.")
+            return True
+        except Exception as e:
+            logger.debug(f"[REACTION] Could not send reaction {chosen} to chat {chat_id}: {e}")
+            return False
+
     async def _send_reply(
         self,
         chat_id: int,
@@ -605,16 +792,22 @@ class ReplyManager:
             logger.error("Cannot send reply: Telegram client is not attached.")
             return False
 
+        msg_parts = self.split_reply_messages(text)
+        if not msg_parts:
+            return False
+
+        first_part = msg_parts[0]
+
         try:
-            # Calculate human-like delay adapting to group/DM environment
+            # Calculate human-like delay adapting to group/DM environment for first message
             if adaptive_delay and (self.min_delay > 0 or self.max_delay > 0):
-                total_delay = self.calculate_adaptive_delay(chat_id, text)
+                total_delay = self.calculate_adaptive_delay(chat_id, first_part)
             else:
                 total_delay = self.typing_delay
 
             if total_delay > 0:
                 # Realistic human simulation: pause for reading/thinking, then show typing action
-                typing_duration = min(total_delay, max(2.0, min(6.0, len(text) * 0.05)))
+                typing_duration = min(total_delay, max(2.0, min(6.0, len(first_part) * 0.05)))
                 reading_delay = max(0.0, total_delay - typing_duration)
 
                 env_type = "Group" if chat_id < 0 else "Private DM"
@@ -634,16 +827,50 @@ class ReplyManager:
                 # Phase 2: Active typing indicator
                 try:
                     if hasattr(self._client, "action") and callable(self._client.action):
-                        async with self._client.action(chat_id, "typing"):
+                        act = self._client.action(chat_id, "typing")
+                        if hasattr(act, "__aenter__"):
+                            async with act:
+                                await asyncio.sleep(typing_duration)
+                        else:
+                            if asyncio.iscoroutine(act):
+                                act.close()
                             await asyncio.sleep(typing_duration)
                     else:
                         await asyncio.sleep(typing_duration)
                 except Exception:
                     await asyncio.sleep(typing_duration)
 
-            await self._client.send_message(chat_id, text, reply_to=reply_to_msg_id)
+            # Send first message part
+            await self._client.send_message(chat_id, first_part, reply_to=reply_to_msg_id)
             self.safety.mark_reply_sent(chat_id)
-            logger.info(f"Successfully sent reply to chat {chat_id}.")
+            logger.info(f"Successfully sent reply part 1/{len(msg_parts)} to chat {chat_id}.")
+
+            # Send subsequent message parts (2 or 3) with short natural typing pause
+            for idx, part in enumerate(msg_parts[1:], start=2):
+                if self.safety.is_emergency_stopped:
+                    logger.warning(f"Follow-up message to chat {chat_id} aborted: emergency stop triggered.")
+                    break
+
+                followup_delay = random.uniform(1.0, 1.8)
+                try:
+                    if hasattr(self._client, "action") and callable(self._client.action):
+                        act = self._client.action(chat_id, "typing")
+                        if hasattr(act, "__aenter__"):
+                            async with act:
+                                await asyncio.sleep(followup_delay)
+                        else:
+                            if asyncio.iscoroutine(act):
+                                act.close()
+                            await asyncio.sleep(followup_delay)
+                    else:
+                        await asyncio.sleep(followup_delay)
+                except Exception:
+                    await asyncio.sleep(followup_delay)
+
+                await self._client.send_message(chat_id, part)
+                self.safety.mark_reply_sent(chat_id)
+                logger.info(f"Successfully sent reply part {idx}/{len(msg_parts)} to chat {chat_id}.")
+
             return True
         except Exception as e:
             self.safety.record_error()

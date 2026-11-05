@@ -79,3 +79,56 @@ def test_reply_generator_with_history(tmp_path: Path):
     history = [{"sender": "Bob", "text": "Hey"}]
     reply = generator.generate("Bob", "hello", conversation_history=history)
     assert len(reply) > 0
+
+
+def test_language_customization():
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+    assert pm.language == "dynamic"
+
+    prompt_dyn = pm.build_user_prompt(sender_name="Alex", incoming_text="hello")
+    assert "Match the exact language" in prompt_dyn
+
+    pm.set_language("english")
+    assert pm.language == "english"
+    prompt_en = pm.build_user_prompt(sender_name="Alex", incoming_text="kya haal hai")
+    assert "reply ONLY in English" in prompt_en
+
+    pm.set_language("hindi")
+    assert pm.language == "hindi"
+    prompt_hi = pm.build_user_prompt(sender_name="Alex", incoming_text="how are you")
+    assert "reply ONLY in Hindi" in prompt_hi
+
+
+def test_anti_code_and_formatting_scrubbing():
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+
+    # Strips code paths like /etc, /var, /usr
+    cleaned = pm.clean_reply("Check /etc/passwd and /var/log/syslog bro")
+    assert "/etc" not in cleaned
+    assert "/var" not in cleaned
+
+    # Strips brackets [] and braces {}
+    bracket_cleaned = pm.clean_reply("[Note: replying casually] {metadata: null} hey bro!")
+    assert "[" not in bracket_cleaned
+    assert "]" not in bracket_cleaned
+    assert "{" not in bracket_cleaned
+    assert "}" not in bracket_cleaned
+    assert "hey bro!" in bracket_cleaned
+
+    # Strips markdown bold, italic, and backticks
+    md_cleaned = pm.clean_reply("**bold statement** and *italic* with `inline code`")
+    assert "**" not in md_cleaned
+    assert "*" not in md_cleaned
+    assert "`" not in md_cleaned
+    assert "bold statement and italic with inline code" == md_cleaned
+
+
+def test_system_prompt_word_limit():
+    prompt_path = Path("system_prompt.txt")
+    assert prompt_path.exists()
+    content = prompt_path.read_text(encoding="utf-8")
+    words = [w for w in content.split() if not w.startswith("#")]
+    # Sweet spot is under 350 words to avoid instruction dilution
+    assert len(words) <= 350
+    assert "BREVITY" in content
+    assert "HUMAN ALIBI" in content

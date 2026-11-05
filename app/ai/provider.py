@@ -43,21 +43,21 @@ class LocalRuleProvider(AIProvider):
 class GeminiProvider(AIProvider):
     """Google Gemini API provider using standard library urllib."""
 
-    def __init__(self, api_key: str, model: str = "gemini-3.5-flash"):
+    def __init__(self, api_key: str, model: str = "gemini-2.5-flash"):
         self.api_key = api_key
         # Clean model name and default to latest fast flash model
-        clean = (model or "gemini-3.5-flash").strip()
+        clean = (model or "gemini-2.5-flash").strip()
         if clean.startswith("models/"):
             clean = clean[len("models/"):]
-        # Automatically upgrade legacy/deprecated models
-        if clean in ("gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.5-flash", "gemini-2.5-pro"):
-            clean = "gemini-3.5-flash"
+        # Normalize any non-existent 3.5 versions to the real Google 2.5 flash model
+        if "3.5" in clean:
+            clean = "gemini-2.5-flash"
         self.model = clean
 
     def generate_reply(self, prompt: str, system_instructions: str) -> str:
         # Candidate models to try in sequence if one returns 404 or 503
         candidate_models = [self.model]
-        for fallback in ("gemini-3.5-flash", "gemini-3.5-flash-lite"):
+        for fallback in ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"):
             if fallback not in candidate_models:
                 candidate_models.append(fallback)
 

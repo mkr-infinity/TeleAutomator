@@ -86,9 +86,14 @@ class MessageFilter:
                     is_mentioned = True
                 elif self.my_username and f"@{self.my_username}" in raw_text.lower():
                     is_mentioned = True
-                elif getattr(event, "is_reply", False):
-                    # Direct reply to a message in the group
-                    is_mentioned = True
+                else:
+                    import re
+                    owner_name = (self.db.get_state("owner_name", "") or "").strip().lower()
+                    if owner_name and len(owner_name) >= 3 and re.search(r"\b" + re.escape(owner_name) + r"\b", raw_text.lower()):
+                        is_mentioned = True
+                    elif getattr(event, "is_reply", False):
+                        # Candidate reply; refined in event handler with verified sender
+                        is_mentioned = True
 
                 if not is_mentioned:
                     return False, "Group message does not mention or reply to your account"

@@ -26,7 +26,7 @@
 [![MTProto Telethon](https://img.shields.io/badge/protocol-MTProto%20Telethon-informational.svg)](https://github.com/LonamiWebs/Telethon)
 [![Google Gemini](https://img.shields.io/badge/AI-Google%20Gemini%203.5--Flash-orange.svg)](https://aistudio.google.com/)
 [![License](https://img.shields.io/badge/license-Source--Available-red.svg)](LICENSE)
-[![Tests Passing](https://img.shields.io/badge/tests-29%2F29%20passed-brightgreen.svg)](test.sh)
+[![Tests Passing](https://img.shields.io/badge/tests-35%2F35%20passed-brightgreen.svg)](test.sh)
 
 > 🚀 **Deploying to a Cloud VPS, Docker, or Render.com?**  
 > Check out the complete step-by-step beginner guide with Render Blueprint support: **[DEPLOYMENT.md](DEPLOYMENT.md)**.
@@ -142,12 +142,18 @@ Manage TeleAutomator straight from your phone by texting your **Saved Messages**
 
 | Command | Action | Example |
 | :--- | :--- | :--- |
-| **`/status`** | Displays active mode, style, and safety pause status | `/status` |
+| **`/status`** | Displays active mode, style, language, reactions, and cooldown status | `/status` |
 | **`/mode <draft\|approval\|auto>`** | Switches operating mode dynamically | `/mode auto` |
 | **`/style <casual\|concise\|formal\|humorous>`** | Changes AI speaking style on the fly | `/style concise` |
+| **`/lang <dynamic\|english\|hindi\|...>`** | Sets target language (dynamic detection or forced language) | `/lang dynamic` or `/lang english` |
+| **`/reaction <on\|off>`** | Toggles natural emoji reactions on messages | `/reaction on` |
+| **`/reactioncooldown <count> <mins>`** | Customizes reaction rate limit (default 4 per 10m) | `/reactioncooldown 4 10` |
+| **`/chatcooldown <seconds>`** | Sets per-chat reply cooldown timer | `/chatcooldown 30` |
+| **`/globalcooldown <seconds>`** | Sets global reply cooldown timer | `/globalcooldown 15` |
 | **`/chats`** | Lists allowlisted private contacts and groups | `/chats` |
 | **`/allowchat <id>`** | Adds a chat ID to allowlist | `/allowchat 123456789` |
 | **`/removechat <id>`** | Removes a chat from allowlist | `/removechat 123456789` |
+| **`/mentiononly <on\|off>`** | Reply only when mentioned or replied to in groups | `/mentiononly on` |
 | **`/prompt`** | Views active AI prompt instructions | `/prompt` |
 | **`/setprompt <text>`** | Updates prompt instructions in real time | `/setprompt Be chill and brief.` |
 | **`/addrule <trigger> => <reply>`** | Creates non-AI keyword auto-reply | `/addrule pricing => Details soon!` |
@@ -163,6 +169,10 @@ Manage TeleAutomator straight from your phone by texting your **Saved Messages**
 
 Customize how the AI talks using either method:
 
+### Recommended Max Word Limit
+> [!TIP]
+> **Recommended Word Limit:** Keep system prompt between **150 to 300 words** (~200–350 tokens). Small LLMs (like Gemini Flash) maintain the highest instruction adherence and avoid robotic verbosity when prompts stay concise.
+
 ### Method 1: Local File (`system_prompt.txt`)
 Edit [`system_prompt.txt`](system_prompt.txt) in the project root:
 ```bash
@@ -171,11 +181,14 @@ nano system_prompt.txt
 *Changes are hot-reloaded dynamically on every incoming message without restarting the server.*
 
 ### Method 2: Remote Control via Telegram
-Send `/prompt` to inspect, or `/setprompt <new rules>` to modify instructions instantly from your phone. Send `/setprompt reset` to restore defaults.
+Send `/prompt` to inspect, or `/setprompt <new rules>` to modify instructions instantly from your phone.
 
 ---
 
-## 8. Adaptive Human Delay & Tone Matching
+## 8. Adaptive Human Delay & Multi-Message Texting
+
+### Multi-Message Split Replies
+Real humans text in short, rapid bursts rather than giant monolithic essays. When TeleAutomator has more than one thought to share, it naturally divides the reply into **2 or 3 separate messages** separated by natural thought boundaries or newlines, with an organic 1.0-1.8s typing delay between them (never cutting off words or breaking meaning mid-sentence).
 
 ### Realistic 5-60 Second Delay
 To prevent bot-detection patterns, TeleAutomator adapts its delay to the environment:
@@ -184,11 +197,11 @@ To prevent bot-detection patterns, TeleAutomator adapts its delay to the environ
 - **Two-Phase Action**: Pauses silently to "read", then triggers Telegram's native `...typing` indicator for the final 2-6 seconds.
 - Configure in `.env`: `MIN_REPLY_DELAY_SECONDS=5` and `MAX_REPLY_DELAY_SECONDS=60`.
 
-### Exact Tone & Language Mirroring
-- **Hinglish**: `"kya scene hai bhai?"` ──► `"kuch nahi bhai bas chilling, tu bata"`
-- **Hindi (Devanagari)**: `"नमस्ते, कैसे हैं?"` ──► `"नमस्ते! सब बढ़िया है, आप बताइए?"`
-- **English**: `"yo did you check the commit?"` ──► `"yeah just reviewed it, looks solid"`
-- **Human Alibi**: If asked *"are you a bot?"*, it laughs it off casually (*"lol what? no it's me haha"*).
+### Gen-Z Slang & Tone Matching
+- Uses natural casual shortcuts: `"u"`, `"r"`, `"rn"`, `"idk"`, `"ngl"`, `"tbh"`, `"fr"`, `"wbu"`.
+- If someone texts `"hii"`, it replies `"hii"` or `"hello"` without unasked paragraphs.
+- **Human Alibi**: If asked *"are you a bot?"* or challenged about identity, it replies with friendly disbelief (*"seriously bro u think I am not real? 😂"* or *"bruh u fr rn? it's me lol"*).
+- **Anti-Code Scrubbing**: Never writes code blocks, `/etc` file paths, brackets `[]`, or braces `{}`.
 
 ---
 
@@ -209,7 +222,7 @@ Run the automated test suite locally:
 # Or via universal runner:
 python run.py --test
 ```
-**28 passing unit tests** covering configuration, safety guards, adaptive delay, and mock MTProto workflows without network side-effects.
+**35 passing unit tests** covering configuration, safety guards, adaptive delay, multi-message splitting, reactions, language control, and mock MTProto workflows without network side-effects.
 
 ---
 

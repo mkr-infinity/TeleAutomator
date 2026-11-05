@@ -133,6 +133,28 @@ class SafetyManager:
                 return True
         return False
 
+    @property
+    def global_cooldown_seconds(self) -> int:
+        """Effective global cooldown in seconds (runtime override > config)."""
+        db_val = self.db.get_state("global_cooldown_seconds")
+        if db_val:
+            try:
+                return max(0, int(db_val))
+            except ValueError:
+                pass
+        return self.config.global_cooldown_seconds
+
+    @property
+    def per_chat_cooldown_seconds(self) -> int:
+        """Effective per-chat cooldown in seconds (runtime override > config)."""
+        db_val = self.db.get_state("per_chat_cooldown_seconds")
+        if db_val:
+            try:
+                return max(0, int(db_val))
+            except ValueError:
+                pass
+        return self.config.per_chat_cooldown_seconds
+
     def can_reply(self, chat_id: int, text: str) -> tuple[bool, str]:
         """Verify whether an outgoing reply is safe and permitted."""
         if self.is_emergency_stopped:
@@ -155,16 +177,18 @@ class SafetyManager:
             return False, f"Message length ({len(text)}) exceeds maximum allowed ({self.config.max_message_length})"
 
         # Global cooldown check
+        global_cd = self.global_cooldown_seconds
         time_since_global = now - self._last_global_reply_time
-        if time_since_global < self.config.global_cooldown_seconds:
-            wait_time = int(self.config.global_cooldown_seconds - time_since_global)
+        if time_since_global < global_cd:
+            wait_time = int(global_cd - time_since_global)
             return False, f"Global cooldown active ({wait_time}s remaining)"
 
         # Per-chat cooldown check
+        chat_cd = self.per_chat_cooldown_seconds
         last_chat_time = self._last_chat_reply_time.get(chat_id, 0.0)
         time_since_chat = now - last_chat_time
-        if time_since_chat < self.config.per_chat_cooldown_seconds:
-            wait_time = int(self.config.per_chat_cooldown_seconds - time_since_chat)
+        if time_since_chat < chat_cd:
+            wait_time = int(chat_cd - time_since_chat)
             return False, f"Per-chat cooldown active for chat {chat_id} ({wait_time}s remaining)"
 
         return True, "OK"
