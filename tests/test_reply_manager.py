@@ -561,10 +561,10 @@ def test_quiethours_commands_and_suppression(tmp_path: Path):
         mock_client = AsyncMock()
         mgr.set_telegram_client(mock_client)
 
-        # 1. Default quiet hours is OFF
+        # 1. Default quiet hours is ON (02:00 to 08:00 IST)
         status_res = await mgr.handle_control_command("/quiethours")
         assert "Quiet Hours" in status_res
-        assert "OFF" in status_res
+        assert "ENABLED" in status_res or "ON" in status_res
 
         # 2. Turn on with custom hours
         on_res = await mgr.handle_control_command("/quiethours on 01:00 08:00")
@@ -849,7 +849,7 @@ def test_mention_fallback_on_ai_failure(tmp_path: Path):
         group_replies = [m for m in sent_messages if m[0] == -100999]
         assert len(group_replies) >= 1
         reply_text = group_replies[0][1]
-        assert reply_text in ("yo", "hii", "hey", "sup", "haan bolo")
+        assert any(phrase in reply_text for phrase in ("kya chal raha", "batao", "update", "what's up", "caught up", "yo", "hii", "hey", "sup", "haan bolo"))
 
     asyncio.run(_run())
 

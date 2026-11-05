@@ -29,12 +29,12 @@ ANTI_AI_GUARDRAILS = """You are texting directly as {owner_name} from your perso
 You are a real human friend chatting casually on mobile. NEVER sound like an AI, bot, assistant, or customer rep.
 
 CRITICAL TEXTING RULES:
-1. BREVITY & ENERGY MATCHING:
-   - Match length and energy. If they send 1 word (e.g. "hii", "yo"), reply with 1 word.
-   - Never write essays. Keep replies to 1-2 punchy lines max.
+1. BREVITY & ENERGY MATCHING (NATURAL HUMAN ENGAGEMENT):
+   - Engage naturally in the chat like a real human friend. Respond meaningfully to what they say.
+   - Never write essays or send blunt 1-word shortcut replies (no lazy "nope", "dope", "yo"). Keep replies conversational and authentic (1-2 punchy lines max).
 
-2. BALANCED NATURAL SLANG:
-   - Use at most 1 or 2 casual shortcuts per text (e.g. "u", "rn", "lol"). Never overload with slang.
+2. CASUAL MOBILE TEXTING (NO SLANG OVERLOAD):
+   - Text casually and naturally. Keep language authentic, friendly, and human without slang overload.
 
 3. CASUAL MOBILE TYPING & NO CODE:
    - Text naturally like a real human on phone. Minor casual typos or lowercase slips (e.g. "dont", "yeaa") are fine.
@@ -176,7 +176,7 @@ class PromptManager:
             return False
 
     def get_fallback_reply(self, incoming_text: str = "") -> str:
-        """Generate an ultra-short natural human fallback when generation fails or cleans to empty."""
+        """Natural human fallback only when AI service is temporarily unavailable."""
         import random
         import re
         low = (incoming_text or "").strip().lower()
@@ -187,15 +187,12 @@ class PromptManager:
                 "seriously 😂 bro u think I am not real",
                 "lol typing from phone rn",
             ])
-        if any(w in tokens for w in ("hi", "hii", "hello", "hey", "yo", "sup", "hola", "namaste")) or "kya haal" in low:
-            return random.choice(["yo", "hii", "hey", "sup"])
-        if any(w in tokens for w in ("ok", "okay", "done", "got", "kk")):
-            return random.choice(["👍", "cool", "done", "ok", "gotcha"])
-        if any(w in tokens for w in ("thanks", "thx", "tysm")) or "thank you" in low or "thank u" in low:
-            return random.choice(["anytime bro", "no worries lol", "np"])
-        if any(w in tokens for w in ("what", "why", "how", "where")) or "?" in low:
-            return random.choice(["will check and let u know", "gimme a sec", "haan bolo"])
-        return random.choice(["haan bolo", "all good bro", "yea tell me", "yo"])
+        return random.choice([
+            "haan bolo batao kya chal raha",
+            "all good here, caught up with something will text properly in a bit",
+            "sahi hai bro, batao aur kya update hai",
+            "just saw your text, tell me what's up",
+        ])
 
     def clean_reply(self, raw_text: str) -> str:
         """Remove any accidental AI meta-commentary, labels, brackets, or robotic filler."""
@@ -355,26 +352,21 @@ class PromptManager:
         else:
             lang_instruction = f"CRITICAL: You MUST reply ONLY in {self._language.capitalize()}."
 
-        # Strict brevity matching for 1-2 word messages
-        clean_in = incoming_text.strip()
-        word_count = len(clean_in.split())
-        if word_count <= 2 and len(clean_in) <= 15:
-            brevity_instruction = (
-                f"CRITICAL 1-WORD BREVITY: The sender texted ONLY {word_count} word ('{clean_in}'). "
-                f"You MUST reply with ONLY 1 or 2 words (e.g. 'hii', 'yo', 'sup', 'hey'). DO NOT ask questions or add extra sentences."
-            )
-        else:
-            brevity_instruction = "Match brevity (1-2 punchy lines maximum, no AI talk, no code, separate distinct thoughts by newline)."
+        # Natural human engagement without blunt 1-word shortcuts
+        engagement_instruction = (
+            "Keep replies conversational, natural, and engaging (1-2 punchy lines, no robotic 1-word shortcuts like nope/dope/yo, "
+            "no AI talk, no code, separate distinct thoughts by newline). Engage genuinely in the conversation."
+        )
 
         style_instruction = VALID_STYLES.get(self._style, VALID_STYLES["casual"])
         parts.append(
             f"You are {self.owner_name} texting from your phone.\n"
             f"Tone/Style: {style_instruction}\n"
             f"Language Rule: {lang_instruction}\n"
-            f"Brevity Rule: {brevity_instruction}\n"
+            f"Engagement Rule: {engagement_instruction}\n"
             f"Punctuation & Emojis: NEVER use question marks (?). Place emojis in between words inside the message, NEVER at the very end.\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Reply as {self.owner_name} (ultra-concise human mobile texting, max 1-2 shortcuts, natural casual typing, no question marks, emojis in between words, match brevity, no AI talk, no code, no brackets, separate distinct thoughts by newline):"
+            f"Reply as {self.owner_name} (casual human mobile texting, engage genuinely in the conversation, natural typing, no question marks, emojis in between words, no AI talk, no code, no brackets, separate distinct thoughts by newline):"
         )
         return "\n\n".join(parts)

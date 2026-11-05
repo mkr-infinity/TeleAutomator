@@ -1764,27 +1764,8 @@ class ReplyManager:
             return False
 
     def _prevent_duplicate_reply(self, chat_id: int, text: str) -> str:
-        """Prevent repeating the exact same message or short phrase consecutively in the same chat."""
-        last_sent = self._last_sent_reply_by_chat.get(chat_id, "").strip().lower()
-        curr = text.strip().lower()
-        if not last_sent or not curr:
-            return text
-
-        if curr == last_sent or (len(curr.split()) <= 2 and curr == last_sent):
-            alternatives = {
-                "yo": ["hey", "sup", "haan", "bol"],
-                "hii": ["hey", "yo", "hello", "haan"],
-                "hey": ["yo", "sup", "haan", "bol"],
-                "haan": ["sahi hai", "haan bhai", "batao", "all good"],
-                "nice": ["great", "mast", "sahi", "cool"],
-                "cool": ["nice", "sahi hai", "mast", "great"],
-                "okay": ["done", "got it", "all good", "sure"],
-                "all good": ["sahi hai", "done", "chill hai", "mast"],
-            }
-            if curr in alternatives:
-                return random.choice(alternatives[curr])
-            return f"all good {text}".strip()
-        return text
+        """Allow AI to handle conversation dynamically without hardcoded keyword alternatives."""
+        return text.strip()
 
     def is_group_message_relevant(self, chat_id: int, text: str, chat_title: str = "") -> bool:
         """Check if an incoming group message is relevant to the group's permanent context, pinned summary, or topic."""

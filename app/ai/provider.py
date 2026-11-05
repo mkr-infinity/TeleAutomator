@@ -29,17 +29,8 @@ class LocalRuleProvider(AIProvider):
     def generate_reply(self, prompt: str, system_instructions: str) -> str:
         lower = prompt.lower()
         if any(w in lower for w in ("bot", "ai", "real", "fake", "who are you")):
-            return "bruh u fr rn? it's me lol"
-        if any(w in lower for w in ("how are you", "how are u", "kya haal")):
-            return "all good bro wbu"
-        if any(w in lower for w in ("busy", "available", "free")):
-            return "a bit tied up rn, will text in a bit"
-        if any(w in lower for w in ("thanks", "thank you", "thx")):
-            return "anytime bro"
-        if any(w in lower for w in ("hello", "hey", "hi", "yo", "sup")):
-            return "yo"
-        # Natural human default draft
-        return "haan bolo"
+            return "bruh u fr rn it's me lol"
+        return "haan bolo batao kya chal raha"
 
 
 class GeminiProvider(AIProvider):

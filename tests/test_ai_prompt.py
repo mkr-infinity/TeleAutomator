@@ -212,19 +212,20 @@ def test_ai_confession_interception():
     assert any(h in cleaned2 for h in ("it's me lol", "think I am not real", "typing from my phone", "bot lol"))
 
 
-def test_1_word_brevity_instruction_in_prompt():
-    """Verify build_user_prompt generates strict 1-word matching rule for single word inputs."""
+def test_conversational_engagement_instruction_in_prompt():
+    """Verify build_user_prompt instructs natural conversational engagement instead of blunt 1-word shortcuts."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
     prompt = pm.build_user_prompt(sender_name="Alex", incoming_text="hii")
-    assert "CRITICAL 1-WORD BREVITY" in prompt
-    assert "reply with ONLY 1 or 2 words" in prompt
+    assert "Engagement Rule" in prompt
+    assert "conversational, natural, and engaging" in prompt
+    assert "no robotic 1-word shortcuts" in prompt
 
 
 def test_fallback_reply_mechanism():
-    """Verify get_fallback_reply produces natural human texting lines."""
+    """Verify get_fallback_reply produces engaging human responses without blunt word-shortcut dictionaries."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
     greeting_fb = pm.get_fallback_reply("hi")
-    assert greeting_fb in ("yo", "hii", "hey", "sup")
+    assert any(h in greeting_fb for h in ("kya chal raha", "caught up", "batao aur", "tell me"))
 
     alibi_fb = pm.get_fallback_reply("are you a bot?")
     assert "lol" in alibi_fb or "real" in alibi_fb
