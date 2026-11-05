@@ -21,6 +21,8 @@ COPY scripts/ ./scripts/
 COPY system_prompt.txt* ./
 COPY entrypoint.sh ./entrypoint.sh
 COPY healthcheck.sh ./healthcheck.sh
+COPY Procfile* ./
+COPY railway.json* ./
 
 # Prepare data directory and enforce ownership
 RUN mkdir -p /app/data && \

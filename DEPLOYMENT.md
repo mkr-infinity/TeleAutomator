@@ -17,13 +17,14 @@
    - [Option B: Headless StringSession (For Docker & Cloud PaaS)](#option-b-headless-stringsession-for-docker--cloud-paas)
 8. [Step 7: Configure Environment Variables (.env)](#step-7-configure-environment-variables-env)
 9. [Step 8: Launch 24/7 with Docker Compose (VPS)](#step-8-launch-247-with-docker-compose)
-10. [Render.com Deployment (Free Cloud Hosting)](#rendercom-deployment-free-cloud-hosting)
+10. [Railway.app Deployment (Recommended Cloud PaaS)](#railwayapp-deployment-recommended-cloud-paas)
+11. [Render.com Deployment (Free Cloud Hosting)](#rendercom-deployment-free-cloud-hosting)
     - [Method 1: One-Click Render Blueprint (render.yaml)](#method-1-one-click-render-blueprint-renderyaml)
     - [Method 2: Manual Render Web Service Setup](#method-2-manual-render-web-service-setup)
     - [Keeping Render Free Tier Alive 24/7](#keeping-render-free-tier-alive-247)
-11. [Step 9: Test & Verify from Telegram](#step-9-test--verify-from-telegram)
-12. [Step 10: Server Management & Updates](#step-10-server-management--updates)
-13. [Troubleshooting & FAQ](#troubleshooting--faq)
+12. [Step 9: Test & Verify from Telegram](#step-9-test--verify-from-telegram)
+13. [Step 10: Server Management & Updates](#step-10-server-management--updates)
+14. [Troubleshooting & FAQ](#troubleshooting--faq)
 
 ---
 
@@ -221,6 +222,42 @@ You should see the startup banner and:
 ```
 
 Press `Ctrl + C` to detach from logs. The container will remain running 24/7 in the background and will restart automatically if the server reboots.
+
+---
+
+## Railway.app Deployment (Recommended Cloud PaaS)
+
+TeleAutomator comes pre-configured for **[Railway.app](https://railway.app)** with automated build detection via [`railway.json`](railway.json), [`Dockerfile`](Dockerfile), and [`Procfile`](Procfile).
+
+### Step 1: Export Your StringSession (Run Once Locally)
+Cloud platforms do not permit interactive terminal prompts for SMS/OTP codes. Generate your session string once locally:
+```bash
+./session.sh
+# Or: python run.py --session
+```
+Copy the exported string session.
+
+### Step 2: Deploy to Railway
+1. Log into **[Railway.app](https://railway.app)** and click **New Project** -> **Deploy from GitHub repo**.
+2. Select your repository. Railway will detect `railway.json` / `Dockerfile` and configure the build automatically.
+
+### Step 3: Enter Environment Variables in Railway Dashboard
+In your Railway service settings, go to the **Variables** tab and add the following:
+
+| Variable | Recommended Value / Description |
+| :--- | :--- |
+| `TG_API_ID` | Your numeric Telegram API ID from `my.telegram.org` |
+| `TG_API_HASH` | Your 32-character Telegram API Hash from `my.telegram.org` |
+| `TG_SESSION_STRING` | Your exported session string from `./session.sh` |
+| `AI_PROVIDER` | `custom` (or `gemini`, `openai`, `nvidia`) |
+| `CUSTOM_BASE_URL` | `https://api.inceptionlabs.ai/v1` |
+| `CUSTOM_API_KEY` | Your InceptionLabs API key (`sk_...`) |
+| `CUSTOM_MODEL` | `mercury-3` |
+| `REASONING_EFFORT`| `low` (options: `low`, `medium`, `high`, `off`) |
+| `REPLY_MODE` | `restricted_auto` (or `approval`, `draft`) |
+| `AUTO_AUTHORIZE` | `true` |
+
+Once saved, Railway will immediately trigger a build, pass health checks, and begin running 24/7!
 
 ---
 

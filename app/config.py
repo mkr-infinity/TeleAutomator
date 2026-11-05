@@ -145,12 +145,18 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
     register_secret(api_hash)
 
     # Session handling
-    session_mode = os.getenv("TG_SESSION_MODE", "local").strip().lower()
+    session_string = "".join(os.getenv("TG_SESSION_STRING", "").split()).strip("\"'")
+    raw_mode = os.getenv("TG_SESSION_MODE", "").strip().lower()
+    if not raw_mode:
+        # Auto-detect: if TG_SESSION_STRING is set, auto-switch to "string" mode (Cloud/Railway/Docker)
+        session_mode = "string" if session_string else "local"
+    else:
+        session_mode = raw_mode
+
     if session_mode not in ("local", "string"):
         raise ValueError(f"Invalid TG_SESSION_MODE: '{session_mode}'. Must be 'local' or 'string'.")
 
     session_name = os.getenv("TG_SESSION_NAME", "telegram_client").strip()
-    session_string = "".join(os.getenv("TG_SESSION_STRING", "").split()).strip("\"'")
     if session_mode == "string":
         if not session_string:
             raise ValueError("TG_SESSION_MODE is set to 'string', but TG_SESSION_STRING is empty.")

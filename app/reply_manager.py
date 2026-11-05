@@ -113,6 +113,26 @@ class ReplyManager:
             logger.debug(f"Could not auto-fetch name from Telegram: {e}")
         return self.generator.prompt_manager.owner_name
 
+    async def sync_pinned_context_from_telegram(self, chat_id: int) -> Optional[str]:
+        """Fetch pinned message from Telegram for chat_id and store as permanent context."""
+        if not self._client:
+            return None
+        try:
+            from telethon.tl.types import InputMessagesFilterPinned
+            pinned_msgs = await self._client.get_messages(chat_id, filter=InputMessagesFilterPinned, limit=3)
+            if pinned_msgs:
+                texts = [m.text.strip() for m in pinned_msgs if getattr(m, "text", None) and m.text.strip()]
+                if texts:
+                    pinned_content = "\n---\n".join(texts)
+                    if len(pinned_content) > 1500:
+                        pinned_content = pinned_content[:1500] + "..."
+                    self.db.set_permanent_context(chat_id, pinned_text=pinned_content)
+                    logger.info(f"Synced permanent pinned context for chat {chat_id} ({len(pinned_content)} chars)")
+                    return pinned_content
+        except Exception as e:
+            logger.debug(f"Could not fetch pinned messages for chat {chat_id}: {e}")
+        return None
+
     async def handle_incoming_eligible_message(
         self,
         chat_id: int,
@@ -142,6 +162,24 @@ class ReplyManager:
             draft = matched_rule
         else:
             try:
+                # Permanent chat context (pinned messages + important notes)
+                perm_ctx = self.db.get_permanent_context(chat_id)
+                pinned_text = perm_ctx.get("pinned_text", "")
+                notes = perm_ctx.get("notes", "")
+
+                # If this is a group and no pinned messages have been cached yet, auto-fetch
+                if chat_id < 0 and not pinned_text:
+                    fetched_pin = await self.sync_pinned_context_from_telegram(chat_id)
+                    if fetched_pin:
+                        pinned_text = fetched_pin
+
+                perm_parts = []
+                if pinned_text:
+                    perm_parts.append(f"📌 Pinned message / group rules:\n{pinned_text}")
+                if notes:
+                    perm_parts.append(f"📝 Important chat notes & background:\n{notes}")
+                permanent_context_str = "\n\n".join(perm_parts) if perm_parts else None
+
                 # Check for per-chat style/persona override; fallback to global default
                 chat_style = self.db.get_state(f"chat_style_{chat_id}")
                 draft = self.generator.generate(
@@ -149,6 +187,7 @@ class ReplyManager:
                     incoming_text=clean_text,
                     conversation_history=conversation_history,
                     style_override=chat_style or None,
+                    permanent_context=permanent_context_str,
                 )
             except Exception as e:
                 logger.error(f"Failed to generate AI reply for chat {chat_id}: {e}")
@@ -516,7 +555,11 @@ class ReplyManager:
                 "• `/blockchat <id>` - Block a chat ID\n"
                 "• `/mentiononly on|off` - Group safety: reply only when mentioned/replied to\n"
                 "• `/contextttl <hours>` - Set context auto-aging window (e.g. `/contextttl 2.0`)\n"
-                "• `/clearcontext <chat_id>` - Reset cached AI context for a chat (never deletes Telegram messages)\n\n"
+                "• `/clearcontext <chat_id>` - Reset cached AI context for a chat (never deletes Telegram messages)\n"
+                "• `/syncpins [chat_id]` - Sync pinned message(s) into permanent chat context\n"
+                "• `/setcontext <chat_id> <notes>` - Save permanent notes/guidelines for a group\n"
+                "• `/showcontext <chat_id>` - View permanent background context for a group\n"
+                "• `/delcontext <chat_id>` - Delete permanent context for a group\n\n"
                 "*Approvals & Drafts:*\n"
                 "• `/pending` - List drafts waiting for review\n"
                 "• `/approve <id>` - Approve & send pending draft\n"
@@ -727,6 +770,71 @@ class ReplyManager:
                     "The AI will start fresh on the next message without referencing older context.\n"
                     "_(Zero Telegram messages were touched or deleted)._"
                 )
+            except ValueError:
+                return "Error: Chat ID must be an integer."
+
+        if cmd in ("/syncpin", "/syncpins"):
+            if len(cmd_parts) >= 2:
+                try:
+                    target_cid = int(cmd_parts[1])
+                    pin_res = await self.sync_pinned_context_from_telegram(target_cid)
+                    if pin_res:
+                        preview = pin_res[:200] + ("..." if len(pin_res) > 200 else "")
+                        return f"📌 *Synced pinned context for chat `{target_cid}`:*\n_{preview}_\n\nThis is saved permanently and will never be deleted."
+                    return f"ℹ️ No pinned messages found or accessible for chat `{target_cid}`."
+                except ValueError:
+                    return "Error: Chat ID must be an integer."
+            groups = list(self.privacy.allowed_groups)
+            if not groups:
+                return "No allowlisted groups found. Usage: `/syncpins <chat_id>`"
+            synced_count = 0
+            for gid in groups:
+                res = await self.sync_pinned_context_from_telegram(gid)
+                if res:
+                    synced_count += 1
+            return f"📌 Synced pinned messages for {synced_count}/{len(groups)} allowlisted groups into permanent context."
+
+        if cmd == "/setcontext":
+            if len(cmd_parts) < 3:
+                return (
+                    "Usage: `/setcontext <chat_id> <important details / rules>`\n"
+                    "Example: `/setcontext -1001234567890 Solana trading group, focus on meme coins, keep replies brief.`\n"
+                    "_Permanently saves chat context and guidelines so the AI never replies with senseless answers._"
+                )
+            try:
+                target_cid = int(cmd_parts[1])
+                notes_text = " ".join(cmd_parts[2:]).strip()
+                self.db.set_permanent_context(target_cid, notes=notes_text)
+                return f"📌 Permanent context saved for chat `{target_cid}`:\n_{notes_text}_\n\nThis will be remembered permanently across all conversations."
+            except ValueError:
+                return "Error: Chat ID must be an integer."
+
+        if cmd == "/showcontext":
+            if len(cmd_parts) < 2:
+                return "Usage: `/showcontext <chat_id>`"
+            try:
+                target_cid = int(cmd_parts[1])
+                ctx = self.db.get_permanent_context(target_cid)
+                pinned = ctx.get("pinned_text") or "(No pinned message cached)"
+                notes = ctx.get("notes") or "(No custom notes set)"
+                return (
+                    f"📌 *Permanent Context for Chat `{target_cid}`:*\n\n"
+                    f"*Pinned Info / Rules:*\n{pinned}\n\n"
+                    f"*Custom Notes:*\n{notes}\n\n"
+                    f"_Use `/setcontext {target_cid} <notes>` to update notes, or `/syncpin {target_cid}` to refresh pins._"
+                )
+            except ValueError:
+                return "Error: Chat ID must be an integer."
+
+        if cmd == "/delcontext":
+            if len(cmd_parts) < 2:
+                return "Usage: `/delcontext <chat_id>`"
+            try:
+                target_cid = int(cmd_parts[1])
+                ok = self.db.delete_permanent_context(target_cid)
+                if ok:
+                    return f"🗑️ Permanent context for chat `{target_cid}` has been removed."
+                return f"No permanent context found for chat `{target_cid}`."
             except ValueError:
                 return "Error: Chat ID must be an integer."
 

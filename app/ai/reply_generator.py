@@ -112,10 +112,14 @@ class ReplyGenerator:
         incoming_text: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         style_override: Optional[str] = None,
+        permanent_context: Optional[str] = None,
     ) -> str:
         """Generate a draft reply text considering conversation context when provided."""
         prompt = self.prompt_manager.build_user_prompt(
-            sender_name, incoming_text, conversation_history=conversation_history
+            sender_name,
+            incoming_text,
+            conversation_history=conversation_history,
+            permanent_context=permanent_context,
         )
         instructions = self.prompt_manager.get_system_instructions(style_override=style_override)
         try:

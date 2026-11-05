@@ -295,9 +295,16 @@ class PromptManager:
         sender_name: str,
         incoming_text: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
+        permanent_context: Optional[str] = None,
     ) -> str:
-        """Create prompt containing message context, history, language rule, and dynamic owner identity."""
+        """Create prompt containing message context, history, permanent chat context, language rule, and dynamic owner identity."""
         parts: List[str] = []
+
+        if permanent_context and permanent_context.strip():
+            parts.append(
+                f"PERMANENT CHAT BACKGROUND & PINNED INFO (Always remember and stay consistent with this):\n"
+                f"{permanent_context.strip()}"
+            )
 
         if conversation_history:
             history_lines = ["Recent conversation context:"]

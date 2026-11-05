@@ -1029,3 +1029,60 @@ def test_automatic_owner_name_sync(tmp_path: Path):
         assert generator.prompt_manager.owner_name == "987654321"
 
     asyncio.run(_run())
+
+
+def test_permanent_group_context_and_pinned_sync(tmp_path: Path):
+    """Verify permanent chat context storage, pinned message syncing, and safe context clearing."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            allowed_groups={-100999},
+            data_dir=tmp_path,
+        )
+        db = Database(tmp_path / "app_perm.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        mock_msg = MagicMock()
+        mock_msg.text = "Pinned Announcement: Daily standup at 10 AM UTC. No promotions."
+        mock_client = MagicMock()
+        mock_client.get_messages = AsyncMock(return_value=[mock_msg])
+        mgr.set_telegram_client(mock_client)
+
+        # 1. Sync pinned context
+        res = await mgr.handle_control_command("/syncpin -100999")
+        assert "Synced pinned context" in res
+
+        # 2. Add custom notes
+        res2 = await mgr.handle_control_command("/setcontext -100999 CS graduation project team")
+        assert "Permanent context saved" in res2
+
+        # 3. View context
+        res3 = await mgr.handle_control_command("/showcontext -100999")
+        assert "Daily standup at 10 AM UTC" in res3
+        assert "CS graduation project team" in res3
+
+        # 4. Verify permanent context survives clear_chat_context
+        # Insert some rolling context and clear it
+        db.record_chat_message(-100999, 1, 10, "Alice", "hello", False)
+        assert len(db.get_recent_chat_messages(-100999)) == 1
+        clear_res = await mgr.handle_control_command("/clearcontext -100999")
+        assert "Cleared 1 cached context" in clear_res
+        assert len(db.get_recent_chat_messages(-100999)) == 0
+
+        # Permanent context MUST still be intact!
+        ctx_after = db.get_permanent_context(-100999)
+        assert "Daily standup at 10 AM UTC" in ctx_after["pinned_text"]
+        assert "CS graduation project team" in ctx_after["notes"]
+
+        # 5. Delete permanent context explicitly
+        del_res = await mgr.handle_control_command("/delcontext -100999")
+        assert "has been removed" in del_res
+        ctx_deleted = db.get_permanent_context(-100999)
+        assert ctx_deleted["pinned_text"] == ""
+        assert ctx_deleted["notes"] == ""
+
+    asyncio.run(_run())

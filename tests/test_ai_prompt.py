@@ -253,3 +253,17 @@ def test_relocate_trailing_emojis_to_middle():
     cleaned2 = pm.clean_reply("haan bhai 🔥")
     assert not cleaned2.endswith("🔥")
     assert "🔥" in cleaned2
+
+
+def test_permanent_context_in_prompt():
+    """Verify permanent chat background and pinned info are included in prompt."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+    perm = "Pinned Rule: No spam. Group Topic: AI development."
+    prompt = pm.build_user_prompt(
+        sender_name="Alex",
+        incoming_text="what's the update",
+        permanent_context=perm,
+    )
+    assert "PERMANENT CHAT BACKGROUND & PINNED INFO" in prompt
+    assert "Pinned Rule: No spam" in prompt
+    assert "AI development" in prompt

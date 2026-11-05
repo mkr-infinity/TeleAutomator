@@ -6,8 +6,8 @@
   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   "Your Telegram account, powered by AI. 🤖"
 
-  Production-grade Telegram user-account automation with Google Gemini AI,
-  human alibi persona, custom keyword triggers, and zero-spam safety guards.
+  Production-grade Telegram user-account automation with Google Gemini & Custom AI,
+  human alibi persona, permanent group context, and zero-spam safety guards.
 
   Repository: https://github.com/mkr-infinity/TeleAutomator
   Author:     Mohammad Kaif Raja (mkr-infinity)
@@ -24,202 +24,152 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MTProto Telethon](https://img.shields.io/badge/protocol-MTProto%20Telethon-informational.svg)](https://github.com/LonamiWebs/Telethon)
-[![Google Gemini](https://img.shields.io/badge/AI-Google%20Gemini%203.5--Flash-orange.svg)](https://aistudio.google.com/)
+[![AI Supported](https://img.shields.io/badge/AI-Gemini%20%7C%20Mercury--3%20%7C%20OpenAI-orange.svg)](https://api.inceptionlabs.ai)
 [![License](https://img.shields.io/badge/license-Source--Available-red.svg)](LICENSE)
-[![Tests Passing](https://img.shields.io/badge/tests-39%2F39%20passed-brightgreen.svg)](test.sh)
+[![Tests Passing](https://img.shields.io/badge/tests-61%2F61%20passed-brightgreen.svg)](test.sh)
 
-> 🚀 **Deploying to a Cloud VPS, Docker, or Render.com?**  
-> Check out the complete step-by-step beginner guide with Render Blueprint support: **[DEPLOYMENT.md](DEPLOYMENT.md)**.
+> 🚀 **Deploying to Railway, Render, or Cloud VPS?**  
+> Check out the complete cloud setup guide below and in **[DEPLOYMENT.md](DEPLOYMENT.md)**.
 
 ---
 
-## ⚡ Quickstart in 60 Seconds
+## ⚡ Quickstart (Local)
 
 ```bash
 # 1. Clone repository
 git clone https://github.com/mkr-infinity/TeleAutomator.git && cd TeleAutomator
 
-# 2. Run universal setup (auto-detects Arch, Ubuntu, Debian, macOS, Windows)
+# 2. Universal automated setup
 ./setup.sh
 
 # 3. Authenticate with your Telegram account (Phone, OTP, 2FA)
 ./authenticate.sh
 
-# (Optional) View your exported cloud session string in terminal (local mode):
+# 4. (Optional) Export your headless Cloud session string:
 ./session.sh
 
-# 4. Start TeleAutomator
+# 5. Start TeleAutomator
 ./start.sh
 ```
 *(Windows / cross-platform: `python run.py --setup` -> `python run.py --auth` -> `python run.py --session` -> `python run.py`)*
 
 ---
 
-## 📑 Table of Contents
-1. [Overview](#1-overview)
-2. [Bot vs. MTProto Client](#2-bot-vs-mtproto-client)
-3. [Key Features](#3-key-features)
-4. [Message Lifecycle](#4-message-lifecycle)
-5. [Operating Modes](#5-operating-modes)
-6. [Saved Messages Remote Control](#6-saved-messages-remote-control)
-7. [System Prompt & Persona Tuning](#7-system-prompt--persona-tuning)
-8. [Adaptive Human Delay & Tone Matching](#8-adaptive-human-delay--tone-matching)
-9. [Security & Anti-Leak Safety](#9-security--anti-leak-safety)
-10. [Testing & Verification](#10-testing--verification)
-11. [Troubleshooting](#11-troubleshooting)
-12. [License & Attribution](#12-license--attribution)
+## 🚂 Railway & Cloud Deployment (Zero-Config Auto-Detect)
 
----
+TeleAutomator comes pre-configured for **[Railway.app](https://railway.app)** with automated detection (`railway.json`, `Dockerfile`, and `Procfile`).
 
-## 1. Overview
+### 1. Generate Your Headless StringSession (Run Once Locally)
+Cloud platforms cannot prompt for interactive SMS/OTP codes in the terminal. Generate your session string once on your computer:
+```bash
+./session.sh
+# Or via universal runner:
+python run.py --session
+```
+Copy the printed session string (starts with `1...`).
 
-**TeleAutomator** automates your **real personal Telegram account** using Python and MTProto 2.0. It listens to incoming messages, evaluates privacy rules, detects tone and language, and drafts or sends context-aware replies using **Google Gemini AI**.
+### 2. Deploy to Railway
+1. Push this repository to GitHub or link it in **[Railway](https://railway.app)**.
+2. Click **New Project** -> **Deploy from GitHub repo**.
+3. Railway automatically detects `railway.json` / `Dockerfile` and builds the service.
 
----
+### 3. Enter Environment Variables in Railway Dashboard
+In Railway, open your project -> **Variables** tab -> click **Raw Editor** (or add one-by-one):
 
-## 2. Bot vs. MTProto Client
+```env
+# Required Telegram Credentials
+TG_API_ID=12345678
+TG_API_HASH=0123456789abcdef0123456789abcdef
+TG_SESSION_STRING=1ApWapzMBu4...your_exported_session_string...
 
-| Feature | Telegram Bot (`@BotFather`) | TeleAutomator Personal MTProto Client |
-| :--- | :--- | :--- |
-| **Account Identity** | Bot badge (`@example_bot`) | **Your real personal Telegram account** |
-| **Authentication** | Bot Token (`123456:ABC...`) | **MTProto Session** via Phone Login |
-| **Chat Reach** | Only where explicitly added | **Any chat or group you participate in** |
-| **Message Appearance**| Tagged as a bot | **Indistinguishable from you typing on phone** |
-| **Bot-to-Bot Chats** | Prohibited by Telegram | **Fully supported** |
+# AI Provider Configuration (InceptionLabs Mercury-3 / Custom Provider)
+AI_PROVIDER=custom
+CUSTOM_BASE_URL=https://api.inceptionlabs.ai/v1
+CUSTOM_API_KEY=sk_2a7e825c4fb6745b35a56577131b62e50a55b9f0c523065f08cc785a77d4075c
+CUSTOM_MODEL=mercury-3
+REASONING_EFFORT=low
 
----
-
-## 3. Key Features
-
-- **Context-Aware AI Generation**: Understands conversation flow, reply chains, and chat history.
-- **Tone & Language Mirroring**: Automatically matches Hindi (Devanagari), Hinglish, or casual English slang.
-- **Human Alibi Persona**: Strictly denies being an AI; casually laughs off bot inquiries.
-- **Adaptive Delay (5 to 60s)**: Fast group banter (5-25s) vs. relaxed 1-on-1 chats (10-60s) with active typing indicator simulation.
-- **Zero Group/Peer Error Leaks**: All errors, rate limits, and fallbacks route strictly to **Saved Messages**.
-- **Remote Telegram Control**: Manage modes, prompts, styles, and allowlists directly from **Saved Messages**.
-- **Scam & Link Defense**: Discards crypto bait and phishing invite links; strips outgoing URLs.
-
----
-
-## 4. Message Lifecycle
-
-```text
-[ Inbound Message ] ──► [ Scam & OTP Filters ] ──► [ Match Keyword Rules? ]
-                                                            │
-                                                     (No Keyword Match)
-                                                            │
-                                                            ▼
-                                                [ Context & History Assembly ]
-                                                            │
-                                                            ▼
-                                                [ Google Gemini Generation ]
-                                                            │
-                                                            ▼
-                             ┌──────────────────────────────┴─────────────────────────────┐
-                             ▼                                                            ▼
-                    [ Mode: Draft ]                                             [ Mode: Auto ]
-                    Logs to DB & terminal;                                      Applies 5-60s adaptive delay
-                    never sends to chat.                                        and sends via MTProto.
+# Mode & Safety Settings
+REPLY_MODE=restricted_auto
+AUTO_AUTHORIZE=true
+ALLOWED_PRIVATE_CHATS=
+ALLOWED_GROUPS=
 ```
 
+> [!NOTE]
+> When `TG_SESSION_STRING` is set in Railway or Docker, TeleAutomator automatically switches to headless cloud mode without needing extra flags.
+> To use Google Gemini instead, simply set `AI_PROVIDER=gemini` and `GEMINI_API_KEY=your_key`.
+
 ---
 
-## 5. Operating Modes
+## 📑 Operating Modes
 
-Switch modes at any time from terminal or Saved Messages:
+Switch modes on the fly from terminal or your Telegram **Saved Messages**:
 
 | Mode | Description | How to Activate |
 | :--- | :--- | :--- |
-| **`draft`** *(Default)* | Generates and logs drafts to database; **never sends to chat**. | `/mode draft` or `./start.sh --draft` |
+| **`draft`** *(Default)* | Generates and logs drafts to SQLite; **never sends to chat**. | `/mode draft` or `./start.sh --draft` |
 | **`approval`** | Sends drafts to your **Saved Messages** for `/approve <id>` dispatch. | `/mode approval` or `./start.sh --mode approval` |
-| **`restricted_auto`**| Automatically replies to allowlisted chats with adaptive delays. | `/mode auto` or set `REPLY_MODE=restricted_auto` in `.env` |
+| **`restricted_auto`**| Automatically replies to allowlisted chats with adaptive delays. | `/mode auto` or set `REPLY_MODE=restricted_auto` |
 
 ---
 
-## 6. Saved Messages Remote Control
+## 📱 Saved Messages Remote Control Reference
 
-Manage TeleAutomator straight from your phone by texting your **Saved Messages** (chat with yourself):
+Manage your automation straight from your phone by texting your **Saved Messages** (chat with yourself):
 
+### Permanent Group Context & Memory
 | Command | Action | Example |
 | :--- | :--- | :--- |
-| **`/status`** | Displays active mode, style, language, reactions, quiet hours, and cooldown status | `/status` |
+| **`/syncpins [chat_id]`** | Auto-fetches pinned messages from group(s) as permanent context | `/syncpins -1001234567890` or `/syncpins` |
+| **`/setcontext <id> <notes>`** | Saves permanent rules/facts for a group so AI never talks nonsense | `/setcontext -1001234 Tech team, building AI agents.` |
+| **`/showcontext <chat_id>`** | Inspects active pinned info and custom permanent notes for a group | `/showcontext -1001234567890` |
+| **`/delcontext <chat_id>`** | Removes permanent context for a group | `/delcontext -1001234567890` |
+| **`/contextttl <hours>`** | Sets conversation auto-aging window (default: 2.0 hours) | `/contextttl 2.0` |
+| **`/clearcontext <chat_id>`** | Resets rolling conversation cache (guaranteed zero Telegram message deletions) | `/clearcontext -1001234567890` |
+
+### Core Controls & Identity
+| Command | Action | Example |
+| :--- | :--- | :--- |
+| **`/status`** | Displays active mode, models, quota, quiet hours, and DataFrame table | `/status` |
+| **`/name <name\|sync>`** | Sets display persona name, or syncs automatically from Telegram profile | `/name sync` or `/name Kaif` |
 | **`/mode <draft\|approval\|auto>`** | Switches operating mode dynamically | `/mode auto` |
-| **`/style <casual\|concise\|formal\|humorous>`** | Changes AI speaking style on the fly | `/style concise` |
-| **`/lang <dynamic\|english\|hindi\|...>`** | Sets target language (dynamic detection or forced language) | `/lang dynamic` or `/lang english` |
-| **`/quiethours <on\|off\|start end>`** | Simulates human sleep schedule (pauses replies & reactions) | `/quiethours on 23:00 07:00` or `/quiethours off` |
-| **`/reaction <on\|off>`** | Toggles natural emoji reactions on messages | `/reaction on` |
-| **`/reactioncooldown <min> <max>`** | Sets randomized reaction interval (default 3s–9s) or rolling limit | `/reactioncooldown 3 9` or `/reactioncooldown limit 4 10` |
-| **`/chatcooldown <min> <max>`** | Sets randomized per-chat reply cooldown (default 5s–60s) | `/chatcooldown 5 60` or `/chatcooldown 30` |
-| **`/globalcooldown <min> <max>`** | Sets randomized global reply cooldown (default 5s–60s) | `/globalcooldown 5 60` or `/globalcooldown 15` |
-| **`/chats`** | Lists allowlisted private contacts and groups | `/chats` |
-| **`/allowchat <id>`** | Adds a chat ID to allowlist | `/allowchat 123456789` |
+| **`/style <casual\|concise\|formal\|humorous>`** | Changes AI speaking persona on the fly | `/style concise` |
+| **`/lang <dynamic\|english\|hindi\|...>`** | Sets target language (dynamic match or forced language) | `/lang dynamic` |
+| **`/chats`** | Displays active allowlisted chats in structured DataFrame format | `/chats` |
+| **`/allowchat <id>`** | Adds a chat ID to the allowlist directly from phone | `/allowchat 123456789` |
 | **`/removechat <id>`** | Removes a chat from allowlist | `/removechat 123456789` |
-| **`/mentiononly <on\|off>`** | Reply only when mentioned or replied to in groups | `/mentiononly on` |
-| **`/model <name>`** | Switches active AI model (e.g. `gemini-2.5-flash-lite`, `gpt-4o-mini`) | `/model gemini-2.5-flash-lite` |
-| **`/baseurl <url>`** | Custom base URL for NVIDIA, Groq, DeepSeek, or Ollama | `/baseurl https://integrate.api.nvidia.com/v1` |
-| **`/provider <name>`** | Switches AI provider backend (`gemini`, `openai`, `nvidia`, `custom`, `local`) | `/provider nvidia` |
-| **`/chatty <0-100>`** | Sets group banter participation % for non-mention messages | `/chatty 15` |
-| **`/prompt`** | Views active AI prompt instructions | `/prompt` |
-| **`/setprompt <text>`** | Updates prompt instructions in real time | `/setprompt Be chill and brief.` |
-| **`/addrule <trigger> => <reply>`** | Creates non-AI keyword auto-reply | `/addrule pricing => Details soon!` |
-| **`/rules`** | Lists all custom keyword triggers | `/rules` |
-| **`/pause <duration>`** | Snoozes auto-replies | `/pause 2h` or `/pause 30m` |
-| **`/resume`** | Resumes paused replies | `/resume` |
-| **`/stop`** | **Emergency kill switch**: halts all outgoing messages | `/stop` |
-| **`/help`** | Shows complete interactive command reference | `/help` |
+| **`/mentiononly <on\|off>`** | Reply in groups only when tagged or replied to | `/mentiononly on` |
+
+### AI Models, Quota & Cooldowns
+| Command | Action | Example |
+| :--- | :--- | :--- |
+| **`/aiconfig`** | Inspects provider, base URL, temperature, and reasoning parameters | `/aiconfig` |
+| **`/usage`** | Displays 24h consumption, total token usage, and remaining free quota | `/usage` |
+| **`/quotathreshold <tokens>`** | Sets 24h token warning alert limit (default: 100,000 tokens) | `/quotathreshold 50000` |
+| **`/quotaalert <on\|off>`** | Toggles daily quota alert warnings to Saved Messages | `/quotaalert on` |
+| **`/reasoning <low\|medium\|high\|off>`** | Adjusts reasoning effort for InceptionLabs / OpenAI models | `/reasoning low` |
+| **`/model <name>`** | Switches AI candidate model | `/model mercury-3-preview-1002` |
+| **`/reaction <on\|off>`** | Toggles natural emoji reactions (pool of 26 mobile emojis) | `/reaction on` |
+| **`/reactioncooldown <min> <max>`**| Sets randomized reaction interval (default: 3s–9s) | `/reactioncooldown 3 9` |
+| **`/chatcooldown <min> <max>`** | Sets randomized per-chat reply cooldown (default: 5s–60s) | `/chatcooldown 5 60` |
+| **`/quiethours <on\|off\|start end>`**| Simulates human sleep schedule (pauses replies & reactions) | `/quiethours on 23:00 07:00` |
+| **`/stop`** | **Emergency kill switch**: immediately halts all outgoing messages | `/stop` |
+| **`/resume`** | Resumes automation and clears all stops/pauses | `/resume` |
 
 ---
 
-## 7. System Prompt & Persona Tuning
+## 🧠 Human Alibi & Anti-AI Guardrails
 
-Customize how the AI talks using either method:
-
-### Recommended Max Word Limit
-> [!TIP]
-> **Recommended Word Limit:** Keep system prompt between **150 to 300 words** (~200–350 tokens). Small LLMs (like Gemini Flash) maintain the highest instruction adherence and avoid robotic verbosity when prompts stay concise.
-
-### Method 1: Local File (`system_prompt.txt`)
-Edit [`system_prompt.txt`](system_prompt.txt) in the project root:
-```bash
-nano system_prompt.txt
-```
-*Changes are hot-reloaded dynamically on every incoming message without restarting the server.*
-
-### Method 2: Remote Control via Telegram
-Send `/prompt` to inspect, or `/setprompt <new rules>` to modify instructions instantly from your phone.
+1. **Zero Question Marks (`?`)**: AI personas typically ask questions at the end of messages. TeleAutomator strictly bars and strips question marks from replies.
+2. **Emojis Between Words**: Emojis are placed in the middle of sentences between words, never trailing robotically at the end of messages.
+3. **Slang Restraint & Realistic Typo Slips**: Uses at most 1–2 Gen-Z abbreviations (`u`, `rn`, `idk`, `ngl`, `tbh`, `fr`), allows natural mobile typing slips, and strictly strips any code syntax, brackets `[]`, and braces `{}`.
+4. **Adaptive Typing Delay**: Simulates reading and typing duration (5s to 60s) with active Telegram typing status.
+5. **Zero Group Error Leaks**: API limits or timeouts route strictly to **Saved Messages**. Recipient chats never see error traces.
 
 ---
 
-## 8. Adaptive Human Delay & Multi-Message Texting
-
-### Multi-Message Split Replies
-Real humans text in short, rapid bursts rather than giant monolithic essays. When TeleAutomator has more than one thought to share, it naturally divides the reply into **2 or 3 separate messages** separated by natural thought boundaries or newlines, with an organic 1.0-1.8s typing delay between them (never cutting off words or breaking meaning mid-sentence).
-
-### Realistic 5-60 Second Delay
-To prevent bot-detection patterns, TeleAutomator adapts its delay to the environment:
-- **Group Chats**: Dynamic bracket of **5 to 25 seconds** to match fast group banter.
-- **Private DMs**: Relaxed bracket of **10 to 60 seconds** mimicking human reading habits.
-- **Two-Phase Action**: Pauses silently to "read", then triggers Telegram's native `...typing` indicator for the final 2-6 seconds.
-- Configure in `.env`: `MIN_REPLY_DELAY_SECONDS=5` and `MAX_REPLY_DELAY_SECONDS=60`.
-
-### Gen-Z Slang & Tone Matching
-- Uses natural casual shortcuts: `"u"`, `"r"`, `"rn"`, `"idk"`, `"ngl"`, `"tbh"`, `"fr"`, `"wbu"`.
-- If someone texts `"hii"`, it replies `"hii"` or `"hello"` without unasked paragraphs.
-- **Human Alibi**: If asked *"are you a bot?"* or challenged about identity, it replies with friendly disbelief (*"seriously bro u think I am not real? 😂"* or *"bruh u fr rn? it's me lol"*).
-- **Anti-Code Scrubbing**: Never writes code blocks, `/etc` file paths, brackets `[]`, or braces `{}`.
-
----
-
-## 9. Security & Anti-Leak Safety
-
-- **Zero Group Error Leaks**: Errors and API timeouts are sent strictly to **Saved Messages**. Zero error notices ever reach recipient chats.
-- **Link Stripping**: Regex sanitizers strip all outgoing URLs to prevent inadvertent spam.
-- **Scam Protection**: Discards invite traps (`t.me/+...`) and messages requesting OTPs or passwords.
-- **Rate Limiting**: Enforces global (30s) and per-chat (60s) cooldowns against FloodWait limits.
-
----
-
-## 10. Testing & Verification
+## 🧪 Testing & Verification
 
 Run the automated test suite locally:
 ```bash
@@ -227,33 +177,11 @@ Run the automated test suite locally:
 # Or via universal runner:
 python run.py --test
 ```
-**43 passing unit tests** covering configuration, safety guards, quiet hours sleep schedule, randomized reply & reaction cooldowns, adaptive typing delay, multi-message splitting, reactions, language control, custom OpenAI/NVIDIA endpoints, database context caching, and mock MTProto workflows without network side-effects.
+**61 passing unit tests** covering configuration, safety guards, quiet hours, randomized cooldowns, permanent context caching, pinned message syncing, adaptive typing, and mock MTProto workflows.
 
 ---
 
-## 11. Troubleshooting
+## 📄 License & Attribution
 
-| Issue | Cause & Solution |
-| :--- | :--- |
-| **"Chat not allowlisted"** | Send `/allowchat <id>` in Saved Messages or add ID to `ALLOWED_PRIVATE_CHATS` in `.env`. |
-| **"API Key Invalid"** | Verify your free Gemini key at [Google AI Studio](https://aistudio.google.com/app/apikey) and set in `.env`. |
-| **Need 24/7 Hosting?** | Follow the beginner guide in **[DEPLOYMENT.md](DEPLOYMENT.md)**. |
-
----
-
-## 12. License & Attribution
-
-```text
-Repository: https://github.com/mkr-infinity/TeleAutomator
-Author:     Mohammad Kaif Raja (mkr-infinity)
-Telegram:   @mkr_infinity (https://t.me/mkr_infinity)
-Instagram:  @mkr_infinity (https://instagram.com/mkr_infinity)
-Copyright:  Copyright (c) Mohammad Kaif Raja. All Rights Reserved.
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~  Unauthorized modification, redistribution, or commercial sale of this software       ~
-~  is strictly prohibited without prior written permission. Personal use permitted.     ~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Unauthorized removal of attribution is strictly prohibited.
-```
-
-Licensed under the [Proprietary Source-Available License](LICENSE). Free for personal use.
+Licensed under the [Proprietary Source-Available License](LICENSE). Free for personal use.  
+Author: **Mohammad Kaif Raja ([@mkr-infinity](https://github.com/mkr-infinity))**

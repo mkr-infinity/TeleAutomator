@@ -95,6 +95,13 @@ class Database:
                     total_tokens INTEGER NOT NULL DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE TABLE IF NOT EXISTS permanent_chat_context (
+                    chat_id INTEGER PRIMARY KEY,
+                    pinned_text TEXT NOT NULL DEFAULT '',
+                    notes TEXT NOT NULL DEFAULT '',
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
                 """
             )
 
@@ -420,3 +427,54 @@ class Database:
             )
             row = cursor.fetchone()
             return dict(row) if row else None
+
+    def set_permanent_context(
+        self,
+        chat_id: int,
+        pinned_text: Optional[str] = None,
+        notes: Optional[str] = None,
+    ) -> None:
+        """Store or update permanent context for a chat (never removed by context aging or TTL)."""
+        with self._get_connection() as conn:
+            existing = conn.execute(
+                "SELECT pinned_text, notes FROM permanent_chat_context WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchone()
+
+            if existing:
+                new_pinned = pinned_text if pinned_text is not None else existing["pinned_text"]
+                new_notes = notes if notes is not None else existing["notes"]
+                conn.execute(
+                    """
+                    UPDATE permanent_chat_context
+                    SET pinned_text = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE chat_id = ?
+                    """,
+                    (new_pinned, new_notes, chat_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO permanent_chat_context (chat_id, pinned_text, notes)
+                    VALUES (?, ?, ?)
+                    """,
+                    (chat_id, pinned_text or "", notes or ""),
+                )
+
+    def get_permanent_context(self, chat_id: int) -> Dict[str, str]:
+        """Retrieve permanent context (pinned message + custom notes) for chat_id."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT pinned_text, notes FROM permanent_chat_context WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchone()
+            if row:
+                return {"pinned_text": row["pinned_text"] or "", "notes": row["notes"] or ""}
+            return {"pinned_text": "", "notes": ""}
+
+    def delete_permanent_context(self, chat_id: int) -> bool:
+        """Explicitly remove permanent context for a chat upon owner request."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("DELETE FROM permanent_chat_context WHERE chat_id = ?", (chat_id,))
+            return cursor.rowcount > 0
+
