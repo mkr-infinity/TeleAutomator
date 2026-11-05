@@ -171,24 +171,30 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
     auto_authorize = _parse_bool(os.getenv("AUTO_AUTHORIZE"), default=False)
 
     # AI Configuration
-    ai_enabled = _parse_bool(os.getenv("AI_ENABLED"), default=False)
     ai_provider = os.getenv("AI_PROVIDER", "local").strip().lower()
     valid_providers = ("local", "gemini", "openai", "custom", "nvidia", "groq", "together", "deepseek", "inception")
     if ai_provider not in valid_providers:
         raise ValueError(f"Invalid AI_PROVIDER: '{ai_provider}'. Must be one of: {', '.join(valid_providers)}.")
 
-    ai_api_key = os.getenv("AI_API_KEY", "").strip()
+    raw_ai_enabled = os.getenv("AI_ENABLED")
+    if raw_ai_enabled is None:
+        # Auto-enable if external provider is selected
+        ai_enabled = (ai_provider != "local")
+    else:
+        ai_enabled = _parse_bool(raw_ai_enabled, default=False)
+
+    ai_api_key = (os.getenv("AI_API_KEY") or os.getenv("CUSTOM_API_KEY") or "").strip()
     if ai_enabled and ai_provider != "local":
         if not ai_api_key or ai_api_key in ("your_gemini_api_key_here", "your_openai_api_key_here"):
             raise ValueError(
                 f"AI_ENABLED is true with provider '{ai_provider}', but AI_API_KEY is not set. "
-                "Please add your API key into .env."
+                "Please add your API key into .env or Railway environment variables."
             )
     if ai_api_key:
         register_secret(ai_api_key)
 
-    ai_model = os.getenv("AI_MODEL", "").strip()
-    ai_base_url = os.getenv("AI_BASE_URL", "").strip()
+    ai_model = (os.getenv("AI_MODEL") or os.getenv("CUSTOM_MODEL") or "").strip()
+    ai_base_url = (os.getenv("AI_BASE_URL") or os.getenv("CUSTOM_BASE_URL") or "").strip()
 
     # Rate limits and bounds
     try:
