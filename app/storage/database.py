@@ -313,6 +313,18 @@ class Database:
                 "by_model": [dict(r) for r in by_model],
             }
 
+    def get_daily_token_usage(self) -> int:
+        """Get total tokens consumed across all models in the last 24 hours."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT COALESCE(SUM(total_tokens), 0) as daily_total
+                FROM token_usage
+                WHERE created_at >= datetime('now', '-24 hours')
+                """
+            ).fetchone()
+            return int(row["daily_total"]) if row else 0
+
     def get_recent_chat_messages(
         self, chat_id: int, limit: int = 5, max_age_seconds: Optional[int] = None
     ) -> List[Dict[str, str]]:

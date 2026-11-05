@@ -91,6 +91,24 @@ class ReplyManager:
         """Attach the active Telethon client."""
         self._client = client
 
+    async def sync_owner_name_from_telegram(self) -> str:
+        """Fetch current name from Telegram account and update owner persona name."""
+        if not self._client:
+            return self.generator.prompt_manager.owner_name
+        try:
+            me = await self._client.get_me()
+            if me:
+                first = (getattr(me, "first_name", "") or "").strip()
+                full = f"{first} {getattr(me, 'last_name', '') or ''}".strip()
+                resolved = first or full
+                if resolved:
+                    self.generator.set_owner_name(resolved)
+                    self.db.set_state("owner_name", resolved)
+                    return resolved
+        except Exception as e:
+            logger.debug(f"Could not auto-fetch name from Telegram: {e}")
+        return self.generator.prompt_manager.owner_name
+
     async def handle_incoming_eligible_message(
         self,
         chat_id: int,
@@ -258,7 +276,38 @@ class ReplyManager:
                 )
                 return
 
-            await self._send_reply(chat_id, message_id, draft, adaptive_delay=True)
+            sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True)
+            if sent:
+                asyncio.create_task(self.check_daily_quota_warning())
+
+    async def check_daily_quota_warning(self) -> None:
+        """Check if 24-hour token consumption exceeded user-defined threshold and alert Saved Messages."""
+        if not self._client or not self.db:
+            return
+        enabled = self.db.get_state("quota_alert_enabled", "1") == "1"
+        if not enabled:
+            return
+        try:
+            threshold = int(self.db.get_state("quota_threshold_tokens", "100000"))
+            daily_tokens = self.db.get_daily_token_usage()
+            if daily_tokens >= threshold:
+                last_alert = float(self.db.get_state("last_quota_alert_timestamp", "0"))
+                now = time.time()
+                # Alert once per 24 hours
+                if (now - last_alert) >= 86400:
+                    self.db.set_state("last_quota_alert_timestamp", str(now))
+                    rem = max(0, 100_000_000 - daily_tokens)
+                    alert_text = (
+                        f"⚠️ *Daily Token Quota Threshold Alert:*\n\n"
+                        f"• 24h Consumed: *{daily_tokens:,}* tokens\n"
+                        f"• Warning Threshold: `{threshold:,}` tokens\n"
+                        f"• Remaining Free Pool: *{rem:,}* tokens\n\n"
+                        f"_Adjust threshold via `/quotathreshold <tokens>` or toggle via `/quotaalert off`._"
+                    )
+                    await self._client.send_message("me", alert_text, parse_mode="md")
+                    logger.info(f"[QUOTA ALERT] Sent 24h threshold warning ({daily_tokens:,} tokens) to Saved Messages.")
+        except Exception as e:
+            logger.debug(f"Could not execute quota warning check: {e}")
 
     async def _schedule_deferred_reply(
         self,
@@ -284,7 +333,9 @@ class ReplyManager:
                     if self.safety.is_emergency_stopped:
                         return
 
-            await self._send_reply(chat_id, message_id, draft, adaptive_delay=True)
+            sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True)
+            if sent:
+                asyncio.create_task(self.check_daily_quota_warning())
             logger.info(f"[DEFERRED MENTION SENT] Successfully replied to mention in chat {chat_id} after cooldown.")
         except Exception as e:
             logger.error(f"Error in deferred mention reply: {e}")
@@ -447,7 +498,9 @@ class ReplyManager:
                 "• `/temp <0.0-1.0>` - Adjust AI randomness/creativity\n"
                 "• `/maxtokens <tokens>` - Maximum output tokens per response\n"
                 "• `/style [chat_id] <style>` - Global or per-chat persona override\n"
-                "• `/styles` - List all per-chat persona overrides\n\n"
+                "• `/styles` - List all per-chat persona overrides\n"
+                "• `/quotathreshold <tokens>` - Set daily token warning limit\n"
+                "• `/quotaalert <on|off>` - Toggle daily quota warning alerts\n\n"
                 "*Custom Keyword Auto-Replies:*\n"
                 "• `/addrule <word> => <reply>` - Auto-reply when a word is detected\n"
                 "• `/delrule <word>` - Delete keyword trigger\n"
@@ -683,6 +736,11 @@ class ReplyManager:
             rem_tokens = max(0, FREE_POOL - tot_tokens)
             used_pct = (tot_tokens / FREE_POOL) * 100
 
+            daily_tokens = self.db.get_daily_token_usage()
+            thresh = int(self.db.get_state("quota_threshold_tokens", "100000"))
+            alert_on = self.db.get_state("quota_alert_enabled", "1") == "1"
+            alert_status = f"ON (alert at {thresh:,} tokens)" if alert_on else "OFF"
+
             model_lines = []
             for bm in stats["by_model"]:
                 model_lines.append(f"• `{bm['model']}`: {bm['tokens']:,} tokens ({bm['calls']} requests)")
@@ -692,11 +750,32 @@ class ReplyManager:
                 f"📊 *Inception Labs / AI Token Tracker:*\n\n"
                 f"• Total AI Requests: `{reqs:,}`\n"
                 f"• Total Tokens Used: *{tot_tokens:,}* / 100,000,000 ({used_pct:.4f}%)\n"
+                f"• 24h Daily Consumption: *{daily_tokens:,}* tokens (Alert: `{alert_status}`)\n"
                 f"• Prompt Tokens: `{p_tokens:,}`\n"
                 f"• Completion Tokens: `{c_tokens:,}`\n"
                 f"• Remaining Free Quota: *{rem_tokens:,}* tokens\n\n"
                 f"*Breakdown by Model:*\n{by_model_str}"
             )
+
+        if cmd in ("/quotathreshold", "/threshold"):
+            if len(cmd_parts) < 2:
+                curr = self.db.get_state("quota_threshold_tokens", "100000")
+                return f"⚠️ *Daily Quota Warning Threshold:* `{int(curr):,} tokens`\nUsage: `/quotathreshold <tokens>` (e.g. `/quotathreshold 150000`)"
+            try:
+                val = max(1000, int(cmd_parts[1]))
+                self.db.set_state("quota_threshold_tokens", str(val))
+                return f"⚠️ Daily quota warning threshold set to *{val:,} tokens*."
+            except ValueError:
+                return "Error: Threshold must be a valid integer number of tokens."
+
+        if cmd in ("/quotaalert", "/thresholdalert"):
+            if len(cmd_parts) < 2 or cmd_parts[1].lower() not in ("on", "off"):
+                curr = "ON" if self.db.get_state("quota_alert_enabled", "1") == "1" else "OFF"
+                return f"Daily quota warning alerts are currently: *{curr}*\nUsage: `/quotaalert on` or `/quotaalert off`"
+            val = "1" if cmd_parts[1].lower() == "on" else "0"
+            self.db.set_state("quota_alert_enabled", val)
+            status_str = "ENABLED" if val == "1" else "DISABLED"
+            return f"⚠️ Daily quota warning alerts are now *{status_str}*."
 
         if cmd in ("/reasoning", "/effort"):
             if len(cmd_parts) < 2:
@@ -1159,8 +1238,9 @@ class ReplyManager:
             return "▶️ Automation RESUMED. Emergency stop and timed pauses cleared."
 
         if cmd == "/name":
-            if len(cmd_parts) < 2:
-                return f"Current identity name is `{self.generator.prompt_manager.owner_name}`.\nUsage: `/name <YourName>`"
+            if len(cmd_parts) < 2 or cmd_parts[1].lower() in ("sync", "fetch", "auto"):
+                synced = await self.sync_owner_name_from_telegram()
+                return f"✅ Identity name: *'{synced}'* (synced directly from Telegram profile).\nUsage: `/name <CustomName>` or `/name sync`"
             new_name = " ".join(cmd_parts[1:]).strip()
             self.generator.set_owner_name(new_name)
             self.db.set_state("owner_name", new_name)

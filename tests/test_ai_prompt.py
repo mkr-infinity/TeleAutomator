@@ -188,7 +188,7 @@ def test_custom_prompt_wrapping_and_anti_ai_guardrails():
     assert "BREVITY & ENERGY MATCHING" in instructions
     assert "HUMAN ALIBI" in instructions
     assert "SLANG" in instructions
-    assert "STRICTLY NO CODE / ARTIFACTS" in instructions
+    assert "NO CODE" in instructions
 
     # Resetting custom persona
     pm.reset_custom_prompt()
@@ -228,3 +228,28 @@ def test_fallback_reply_mechanism():
 
     alibi_fb = pm.get_fallback_reply("are you a bot?")
     assert "lol" in alibi_fb or "real" in alibi_fb
+
+
+def test_never_use_question_marks():
+    """Verify question marks are completely stripped from replies and barred in instructions."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+    raw = "What are you doing? Is everything ok? Let me know!"
+    cleaned = pm.clean_reply(raw)
+    assert "?" not in cleaned
+    assert "What are you doing" in cleaned
+
+    prompt = pm.build_user_prompt("Bob", "sup")
+    assert "NEVER use question marks" in prompt
+
+
+def test_relocate_trailing_emojis_to_middle():
+    """Verify trailing emojis at the end of messages are relocated between words inside the message."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+    # Trailing emoji moved inside words
+    cleaned1 = pm.clean_reply("all good bro 😂")
+    assert not cleaned1.endswith("😂")
+    assert "😂" in cleaned1
+
+    cleaned2 = pm.clean_reply("haan bhai 🔥")
+    assert not cleaned2.endswith("🔥")
+    assert "🔥" in cleaned2

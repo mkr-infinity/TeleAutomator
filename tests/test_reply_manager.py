@@ -914,9 +914,92 @@ def test_version_and_typing_speed_modulation(tmp_path: Path):
 
         # 2. Smart typing delay modulation
         # Banter reply ("haha lol cool") vs thoughtful question ("why do you think this happens?")
+        import random
+        random.seed(42)
         banter_delay = mgr.calculate_adaptive_delay(12345, reply_text="haha yeah lol", incoming_text="yo haha")
+        random.seed(42)
         thoughtful_delay = mgr.calculate_adaptive_delay(12345, reply_text="i think we need to carefully evaluate options", incoming_text="why do you think that?")
         # Thoughtful replies allow more reading & formulation time than quick banter
-        assert thoughtful_delay >= banter_delay
+        assert thoughtful_delay > banter_delay
+
+    asyncio.run(_run())
+
+
+def test_daily_quota_threshold_alert(tmp_path: Path):
+    """Verify daily quota alert triggers heads-up message to Saved Messages when consumption exceeds threshold."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            data_dir=tmp_path,
+        )
+        db = Database(tmp_path / "app_quota.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        sent_to_me = []
+        async def mock_send_message(chat_id, text, **kwargs):
+            if chat_id == "me":
+                sent_to_me.append(text)
+            msg = MagicMock()
+            msg.id = 888
+            return msg
+
+        mock_client = MagicMock()
+        mock_client.send_message = AsyncMock(side_effect=mock_send_message)
+        mgr.set_telegram_client(mock_client)
+
+        # 1. Configure threshold to 50,000 tokens
+        thresh_res = await mgr.handle_control_command("/quotathreshold 50000")
+        assert "50,000" in thresh_res
+        assert db.get_state("quota_threshold_tokens") == "50000"
+
+        # 2. Record 60,000 tokens consumed in the last 24h
+        db.record_token_usage("custom", "mercury-3", 20000, 40000, 60000)
+        daily = db.get_daily_token_usage()
+        assert daily == 60000
+
+        # 3. Check daily quota warning
+        await mgr.check_daily_quota_warning()
+        assert len(sent_to_me) == 1
+        assert "Daily Token Quota Threshold Alert" in sent_to_me[0]
+        assert "60,000" in sent_to_me[0]
+
+        # 4. Check that /usage reports 24h consumption
+        usage_res = await mgr.handle_control_command("/usage")
+        assert "24h Daily Consumption" in usage_res
+        assert "60,000" in usage_res
+
+    asyncio.run(_run())
+
+
+def test_automatic_owner_name_sync(tmp_path: Path):
+    """Verify owner name is automatically fetched and updated from Telegram profile."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            data_dir=tmp_path,
+        )
+        db = Database(tmp_path / "app_name.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # Mock client get_me()
+        mock_me = MagicMock()
+        mock_me.first_name = "Alex"
+        mock_me.last_name = "Mercer"
+        mock_client = MagicMock()
+        mock_client.get_me = AsyncMock(return_value=mock_me)
+        mgr.set_telegram_client(mock_client)
+
+        fetched_name = await mgr.sync_owner_name_from_telegram()
+        assert fetched_name == "Alex"
+        assert generator.prompt_manager.owner_name == "Alex"
+        assert db.get_state("owner_name") == "Alex"
 
     asyncio.run(_run())

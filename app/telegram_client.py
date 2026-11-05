@@ -81,10 +81,11 @@ class TelegramService:
         username = f"@{me.username}" if me.username else "(no username)"
         logger.info(f"Connected personal Telegram account: {name} {username} [ID: {user_id}]")
 
-        # Resolve owner persona name (check database override first, else Telegram first name)
-        custom_name = self.db.get_state("owner_name", "")
-        owner_name = custom_name or me.first_name or name or "Kaif"
+        # Automatically fetch owner persona name from connected Telegram profile
+        owner_name = (me.first_name or name or "Kaif").strip()
+        self.db.set_state("owner_name", owner_name)
         self.reply_manager.generator.set_owner_name(owner_name)
+        logger.info(f"Automatically fetched and set AI owner persona from Telegram profile: '{owner_name}'")
 
         # Wire up reply manager and message filter
         self.reply_manager.set_telegram_client(self.client)

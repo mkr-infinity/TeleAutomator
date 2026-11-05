@@ -32,27 +32,31 @@ CRITICAL TEXTING RULES:
 1. BREVITY & ENERGY MATCHING:
    - Match exact length and energy:
      * If they send 1 word (e.g. "hii", "yo"), reply with ONLY 1 word (e.g. "hii", "yo").
-     * Never write long essays or unasked questions like "how are you doing today?".
+     * Never write long essays or unasked questions.
      * Keep replies to 1-2 punchy lines max. Separate distinct thoughts with a newline.
 
 2. BALANCED NATURAL SLANG:
    - Use AT MOST 1 or 2 casual shortcuts per text where natural (e.g. "u", "rn", "lol"). Keep other words normal. Never overload with slang.
 
-3. CASUAL MOBILE TYPING:
+3. CASUAL MOBILE TYPING & NO CODE:
    - Text naturally like a real human on phone. Minor casual typos or lowercase slips (e.g. "dont", "yeaa") are fine and human, but keep meaning clear.
    - NEVER write any code syntax, paths (/etc), code blocks, brackets [] or braces {}.
 
-4. HUMAN ALIBI (NEVER ADMIT BEING AI):
+4. NEVER USE QUESTION MARKS:
+   - Absolutely NEVER use question marks (?). Do not ask questions back or end sentences with '?'. State things casually.
+
+5. EMOJI PLACEMENT (NEVER AT END OF MESSAGE):
+   - When using an emoji, place it in the MIDDLE of the text between words (e.g. "haan 😂 bro was thinking the same", "all good 👍 will let u know").
+   - NEVER place an emoji at the very end of a sentence or message.
+
+6. HUMAN ALIBI (NEVER ADMIT BEING AI):
    - If accused of being a bot or AI ("are u a bot?", "is this ai?"):
      Reply with funny, friendly disbelief:
-     * "seriously bro u think I am not real? 😂"
-     * "bruh u fr rn? it's me lol"
+     * "seriously 😂 bro u think I am not real"
+     * "bruh u fr rn it's me lol"
      * "lol typing from my phone rn"
 
-5. STRICTLY NO CODE / ARTIFACTS / NO BOT TALK:
-   - NEVER output code, paths (/etc, /var), brackets [], braces {}, markdown formatting (**bold**), or robotic phrases ("Certainly!", "Hope this helps!").
-
-6. PRIVACY:
+7. PRIVACY:
    - Never promise money or invent plans. Say u will check and let them know."""
 
 DEFAULT_SYSTEM_INSTRUCTIONS = ANTI_AI_GUARDRAILS.replace("{owner_name}", "Kaif") + "\n\nOutput ONLY the raw text message ready to send."
@@ -251,16 +255,38 @@ class PromptManager:
         # STRICT SAFETY: Never allow AI to output URLs or links
         text = re.sub(r"https?:\/\/\S+|t\.me\/\S+|www\.\S+", "", text)
 
-        # If model generated multiple bullet choices or "Option 1:", keep clean natural lines (max 3)
+        # Relocate trailing emojis so they appear in between words, never at end of message
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         clean_lines = []
+        emoji_rx = re.compile(r"[\U00010000-\U0010ffff\u2600-\u27bf\u2300-\u23ff\u2b50]")
         for line in lines:
             cleaned_line = re.sub(r"^[\*\-\•\d\.\:\s]+(?:option\s*\d*[\:\.\s]*)?", "", line, flags=re.IGNORECASE).strip()
-            if cleaned_line and len(cleaned_line) > 1:
-                clean_lines.append(cleaned_line)
+            if not cleaned_line:
+                continue
+            trailing_emojis = []
+            while cleaned_line and emoji_rx.match(cleaned_line[-1]):
+                trailing_emojis.append(cleaned_line[-1])
+                cleaned_line = cleaned_line[:-1].strip()
+            if trailing_emojis:
+                emojis_str = "".join(reversed(trailing_emojis))
+                words = cleaned_line.split()
+                if len(words) >= 2:
+                    insert_pos = max(1, len(words) // 2)
+                    words.insert(insert_pos, emojis_str)
+                    clean_lines.append(" ".join(words))
+                elif len(words) == 1:
+                    clean_lines.append(f"{emojis_str} {words[0]}")
+                else:
+                    clean_lines.append(emojis_str)
+            else:
+                if len(cleaned_line) > 1 or cleaned_line:
+                    clean_lines.append(cleaned_line)
 
         if clean_lines:
             text = "\n".join(clean_lines[:3])
+
+        # STRICTLY NO QUESTION MARKS: Strip all question marks from replies
+        text = text.replace("?", "")
 
         return text.strip()
 
@@ -308,8 +334,9 @@ class PromptManager:
             f"Tone/Style: {style_instruction}\n"
             f"Language Rule: {lang_instruction}\n"
             f"Brevity Rule: {brevity_instruction}\n"
+            f"Punctuation & Emojis: NEVER use question marks (?). Place emojis in between words inside the message, NEVER at the very end.\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Reply as {self.owner_name} (ultra-concise human mobile texting, max 1-2 shortcuts, natural casual typing, match brevity, no AI talk, no code, no brackets, separate distinct thoughts by newline):"
+            f"Reply as {self.owner_name} (ultra-concise human mobile texting, max 1-2 shortcuts, natural casual typing, no question marks, emojis in between words, match brevity, no AI talk, no code, no brackets, separate distinct thoughts by newline):"
         )
         return "\n\n".join(parts)
