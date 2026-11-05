@@ -130,26 +130,35 @@ class ReplyManager:
                 )
             except Exception as e:
                 logger.error(f"Failed to generate AI reply for chat {chat_id}: {e}")
-                # Strictly send issue/error to Saved Messages only; never leak to peer chat or group
+                if is_mention:
+                    # For mentions, NEVER drop or send error to Saved Messages! Use human fallback reply
+                    logger.info(f"[MENTION FALLBACK] Using natural human fallback for mention in chat {chat_id}.")
+                    draft = self.generator.prompt_manager.get_fallback_reply(clean_text)
+                else:
+                    # Strictly send issue/error to Saved Messages only; never leak to peer chat or group
+                    await self._notify_issue_to_saved_messages(
+                        chat_id=chat_id,
+                        chat_title=chat_title,
+                        sender_name=sender_name,
+                        error_msg=f"AI generation failed: {e}",
+                        incoming_text=clean_text,
+                    )
+                    return
+
+        if not draft:
+            if is_mention:
+                logger.info(f"[MENTION FALLBACK] Empty AI draft, using natural human fallback for mention in chat {chat_id}.")
+                draft = self.generator.prompt_manager.get_fallback_reply(clean_text)
+            else:
+                logger.warning(f"No draft generated for chat {chat_id}.")
                 await self._notify_issue_to_saved_messages(
                     chat_id=chat_id,
                     chat_title=chat_title,
                     sender_name=sender_name,
-                    error_msg=f"AI generation failed: {e}",
+                    error_msg="Empty response from AI engine; reply was dropped safely.",
                     incoming_text=clean_text,
                 )
                 return
-
-        if not draft:
-            logger.warning(f"No draft generated for chat {chat_id}.")
-            await self._notify_issue_to_saved_messages(
-                chat_id=chat_id,
-                chat_title=chat_title,
-                sender_name=sender_name,
-                error_msg="Empty response from AI engine; reply was dropped safely.",
-                incoming_text=clean_text,
-            )
-            return
 
         mode = self.current_mode
 
@@ -1123,16 +1132,39 @@ class ReplyManager:
             return f"✅ Identity updated! The AI will now reply as '{new_name}'."
 
         if cmd == "/prompt":
-            current_prompt = self.generator.prompt_manager.system_instructions
-            return f"📜 *Active System Prompt:*\n\n{current_prompt[:1500]}"
+            custom = self.generator.prompt_manager.custom_prompt
+            mode_str = f"Custom Persona ({len(custom.split())} words)" if custom else "Default Persona"
+            full_inst = self.generator.prompt_manager.system_instructions
+            custom_display = f'"{custom}"' if custom else "None (using default instructions)"
+            return (
+                f"📜 *Active System Instructions ({mode_str}):*\n\n"
+                f"• *Anti-AI Guardrails:* ACTIVE 🛡️ (1-word brevity matching, Gen-Z slang, human alibi, zero code/brackets)\n"
+                f"• *Custom Persona:* {custom_display}\n"
+                f"• *Active Style:* `{self.generator.style}`\n"
+                f"• *Language:* `{self.generator.language}`\n\n"
+                f"*Compiled Prompt (sent to AI):*\n"
+                f"```\n{full_inst[:1200]}\n```\n\n"
+                f"_Use `/setprompt <text>` to customize persona, or `/setprompt default` to reset._"
+            )
 
         if cmd == "/setprompt":
             if len(cmd_parts) < 2:
-                return "Usage: `/setprompt <new prompt text>`"
+                return "Usage: `/setprompt <new prompt text>` or `/setprompt default` to reset."
             new_prompt = text[len(cmd_parts[0]):].strip()
+            if new_prompt.lower() in ("default", "reset", "clear"):
+                self.generator.prompt_manager.reset_custom_prompt()
+                self.db.set_state("custom_system_prompt", "")
+                return "🔄 System prompt reset to default persona with all anti-bot guardrails active."
+
             ok = self.generator.prompt_manager.save_system_instructions(new_prompt)
+            self.db.set_state("custom_system_prompt", new_prompt)
+            wc = len(new_prompt.split())
+            tip = "\n⚠️ _Tip: Keep custom persona under 200–300 words for optimal speed and human-like texting._" if wc > 300 else ""
             if ok:
-                return "✅ System prompt updated successfully! The AI will now follow your new instructions immediately."
+                return (
+                    f"✅ System prompt updated ({wc} words)!{tip}\n"
+                    f"The AI will now follow your custom persona immediately while strictly obeying all anti-bot guardrails."
+                )
             else:
                 return "❌ Failed to save new system prompt to disk."
 
@@ -1315,6 +1347,7 @@ class ReplyManager:
 
         # Natural sentiment & tone mapping with full emoji variety
         lower = text.lower()
+        has_sentiment = True
         if any(w in lower for w in ("haha", "lol", "lmao", "rofl", "xd", "funny", "lmfao", "joke")):
             chosen = random.choice(["😂", "🤣", "😁", "🤪", "🤡", "😎"])
         elif any(w in lower for w in ("fire", "op", "w", "nice", "cool", "goat", "lit", "win", "awesome", "pro")):
@@ -1332,7 +1365,13 @@ class ReplyManager:
         elif any(w in lower for w in ("sad", "rip", "sorry", "unfortunate", "cry", "pain")):
             chosen = random.choice(["😢", "😭", "💔"])
         else:
-            chosen = random.choice(all_telegram_reactions)
+            has_sentiment = False
+            # Natural human reactions for general text (never weird out-of-context emojis)
+            chosen = random.choice(["👍", "👌", "❤️", "🔥", "💯", "👀", "🙌", "🤝", "😎", "😂"])
+
+        # When no explicit sentiment is detected, react occasionally (~40% chance) so quota isn't exhausted immediately
+        if not has_sentiment and random.random() > 0.40:
+            return False
 
         try:
             from telethon.tl.functions.messages import SendReactionRequest

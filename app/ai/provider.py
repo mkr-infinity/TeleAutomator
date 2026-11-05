@@ -24,20 +24,22 @@ class AIProvider(ABC):
 
 
 class LocalRuleProvider(AIProvider):
-    """Local, offline draft generator that transmits zero data to third-party APIs."""
+    """Local, offline draft generator using natural human texting patterns (zero API calls)."""
 
     def generate_reply(self, prompt: str, system_instructions: str) -> str:
         lower = prompt.lower()
-        if any(w in lower for w in ("hello", "hey", "hi")):
-            return "Hey! Thanks for reaching out. What's up?"
-        if any(w in lower for w in ("how are you", "how are u")):
-            return "Doing well, thanks for asking! Hope you're having a good day."
+        if any(w in lower for w in ("bot", "ai", "real", "fake", "who are you")):
+            return "bruh u fr rn? it's me lol"
+        if any(w in lower for w in ("how are you", "how are u", "kya haal")):
+            return "all good bro wbu"
         if any(w in lower for w in ("busy", "available", "free")):
-            return "Got your message, currently a bit tied up but will get back to you soon!"
-        if any(w in lower for w in ("thanks", "thank you")):
-            return "You're welcome!"
-        # Fallback polite draft
-        return "Thanks for your message! I've noted this and will reply shortly."
+            return "a bit tied up rn, will text in a bit"
+        if any(w in lower for w in ("thanks", "thank you", "thx")):
+            return "anytime bro"
+        if any(w in lower for w in ("hello", "hey", "hi", "yo", "sup")):
+            return "yo"
+        # Natural human default draft
+        return "haan bolo"
 
 
 class GeminiProvider(AIProvider):

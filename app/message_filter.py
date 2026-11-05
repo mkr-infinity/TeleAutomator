@@ -96,7 +96,11 @@ class MessageFilter:
                         is_mentioned = True
 
                 if not is_mentioned:
-                    return False, "Group message does not mention or reply to your account"
+                    # Allow message through if group banter or passive reactions are enabled
+                    chatty_prob = float(self.db.get_state("chatty_probability", "0.0"))
+                    react_only_prob = float(self.db.get_state("react_only_probability", "0.0"))
+                    if chatty_prob <= 0.0 and react_only_prob <= 0.0:
+                        return False, "Group message does not mention or reply to your account"
 
         # 8. Check sensitive content / OTPs & Scammer links
         if self.safety.is_sensitive(raw_text):

@@ -173,3 +173,58 @@ def test_openai_provider_candidate_models_and_fallback():
         # Verified provider switched active model to the working fallback
         assert provider.model == "mercury-3"
         assert call_count == 2
+
+
+def test_custom_prompt_wrapping_and_anti_ai_guardrails():
+    """Verify custom persona from Telegram wraps inside unbreakable anti-AI guardrails."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+    # Setting custom persona
+    pm.custom_prompt = "I am a crypto trader and gamer who talks sarcastically"
+    instructions = pm.system_instructions
+
+    # Custom persona is present
+    assert "crypto trader and gamer" in instructions
+    # Core anti-AI guardrails are strictly preserved
+    assert "BREVITY & ENERGY MATCHING" in instructions
+    assert "HUMAN ALIBI" in instructions
+    assert "GEN-Z CASUAL SLANG" in instructions
+    assert "STRICTLY NO CODE / ARTIFACTS" in instructions
+
+    # Resetting custom persona
+    pm.reset_custom_prompt()
+    assert pm.custom_prompt == ""
+    assert "crypto trader" not in pm.system_instructions
+    assert "BREVITY & ENERGY MATCHING" in pm.system_instructions
+
+
+def test_ai_confession_interception():
+    """Verify that any accidental AI admission is intercepted and replaced with human alibi banter."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+
+    bot_output = "As an AI language model, I cannot fulfill this request."
+    cleaned = pm.clean_reply(bot_output)
+    assert "as an ai" not in cleaned.lower()
+    assert any(h in cleaned for h in ("it's me lol", "think I am not real", "typing from my phone", "bot lol"))
+
+    bot_output2 = "I am a virtual assistant created to help you."
+    cleaned2 = pm.clean_reply(bot_output2)
+    assert "virtual assistant" not in cleaned2.lower()
+    assert any(h in cleaned2 for h in ("it's me lol", "think I am not real", "typing from my phone", "bot lol"))
+
+
+def test_1_word_brevity_instruction_in_prompt():
+    """Verify build_user_prompt generates strict 1-word matching rule for single word inputs."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+    prompt = pm.build_user_prompt(sender_name="Alex", incoming_text="hii")
+    assert "CRITICAL 1-WORD BREVITY" in prompt
+    assert "reply with ONLY 1 or 2 words" in prompt
+
+
+def test_fallback_reply_mechanism():
+    """Verify get_fallback_reply produces natural human texting lines."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+    greeting_fb = pm.get_fallback_reply("hi")
+    assert greeting_fb in ("yo", "hii", "hey", "sup")
+
+    alibi_fb = pm.get_fallback_reply("are you a bot?")
+    assert "lol" in alibi_fb or "real" in alibi_fb

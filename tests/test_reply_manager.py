@@ -759,3 +759,96 @@ def test_token_usage_tracker_and_ai_parameters(tmp_path: Path):
         assert "high" in config_res
 
     asyncio.run(_run())
+
+
+def test_telegram_setprompt_and_prompt_commands(tmp_path: Path):
+    """Verify customizing system prompt from Telegram Saved Messages and resetting to default."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            data_dir=tmp_path,
+        )
+        db = Database(tmp_path / "app_prompt.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # 1. Initially default
+        p_res = await mgr.handle_control_command("/prompt")
+        assert "*Anti-AI Guardrails:* ACTIVE" in p_res
+        assert "Default Persona" in p_res
+
+        # 2. Update prompt via /setprompt
+        update_res = await mgr.handle_control_command("/setprompt I am a game developer who loves retro games")
+        assert "updated" in update_res
+        assert db.get_state("custom_system_prompt") == "I am a game developer who loves retro games"
+
+        # 3. Check /prompt shows custom persona
+        p_res2 = await mgr.handle_control_command("/prompt")
+        assert "game developer" in p_res2
+        assert "Custom Persona" in p_res2
+        assert "*Anti-AI Guardrails:* ACTIVE" in p_res2
+
+        # 4. Reset prompt via /setprompt default
+        reset_res = await mgr.handle_control_command("/setprompt default")
+        assert "reset to default" in reset_res.lower()
+        assert db.get_state("custom_system_prompt") == ""
+
+    asyncio.run(_run())
+
+
+def test_mention_fallback_on_ai_failure(tmp_path: Path):
+    """Verify mentions never leak error notifications to Saved Messages on AI failure and receive human fallbacks."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            allowed_groups={-100999},
+            reply_mode="restricted_auto",
+            auto_authorize=True,
+            data_dir=tmp_path,
+        )
+        db = Database(tmp_path / "app_mention.db")
+        safety = SafetyManager(cfg, db)
+        safety.set_auto_authorization(True)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        # Mock generator to simulate API failure
+        generator.generate = MagicMock(side_effect=RuntimeError("Inception Labs rate limit"))
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        sent_messages = []
+        async def mock_send_message(chat_id, text, **kwargs):
+            sent_messages.append((chat_id, text))
+            msg = MagicMock()
+            msg.id = 777
+            return msg
+
+        mock_client = MagicMock()
+        mock_client.send_message = AsyncMock(side_effect=mock_send_message)
+        mgr.set_telegram_client(mock_client)
+
+        # Incoming mention message
+        await mgr.handle_incoming_eligible_message(
+            chat_id=-100999,
+            chat_title="Dev Group",
+            message_id=501,
+            sender_id=12345,
+            sender_name="Alice",
+            text="@Kaif hii",
+            is_mention=True,
+        )
+
+        # Verify: Did NOT send error to Saved Messages ("me")
+        saved_msg_errors = [m for m in sent_messages if m[0] == "me"]
+        assert len(saved_msg_errors) == 0
+
+        # Verify: Sent a natural human fallback reply to the group
+        group_replies = [m for m in sent_messages if m[0] == -100999]
+        assert len(group_replies) >= 1
+        reply_text = group_replies[0][1]
+        assert reply_text in ("yo", "hii", "hey", "sup", "haan bolo")
+
+    asyncio.run(_run())
