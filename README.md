@@ -1,8 +1,8 @@
-# TeleAutomator - Telegram Chat Automation v1.0
+# TeleAutomator - Telegram Chat Automation v2.0.5
 
 ```text
 ========================================================================================
-  TeleAutomator - Telegram Chat Automation v1.0
+  TeleAutomator - Telegram Chat Automation v2.0.5
   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   "Your Telegram account, powered by AI. 🤖"
 

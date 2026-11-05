@@ -852,3 +852,71 @@ def test_mention_fallback_on_ai_failure(tmp_path: Path):
         assert reply_text in ("yo", "hii", "hey", "sup", "haan bolo")
 
     asyncio.run(_run())
+
+
+def test_context_aging_and_clearcontext_safety(tmp_path: Path):
+    """Verify context auto-aging and /clearcontext command safely resets local context without touching Telegram."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            data_dir=tmp_path,
+        )
+        db = Database(tmp_path / "app_aging.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        chat_id = 998877
+        db.record_chat_message(chat_id, 1, 111, "Bob", "Hello context", is_outgoing=False)
+        db.record_chat_message(chat_id, 2, None, "Kaif", "Hey Bob", is_outgoing=True)
+
+        history = db.get_recent_chat_messages(chat_id)
+        assert len(history) == 2
+
+        # 1. /contextttl command
+        ttl_res = await mgr.handle_control_command("/contextttl 1.5")
+        assert "1.5 hours" in ttl_res
+        assert db.get_state("context_ttl_hours") == "1.5"
+
+        # 2. /clearcontext command
+        clear_res = await mgr.handle_control_command(f"/clearcontext {chat_id}")
+        assert "Cleared" in clear_res
+        assert "Zero Telegram messages were touched or deleted" in clear_res
+
+        # 3. Verified local cached context is cleared so AI starts fresh
+        history_after = db.get_recent_chat_messages(chat_id)
+        assert len(history_after) == 0
+
+    asyncio.run(_run())
+
+
+def test_version_and_typing_speed_modulation(tmp_path: Path):
+    """Verify v2.0.5 branding in status and smart typing speed modulation."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            min_delay_seconds=3.0,
+            max_delay_seconds=30.0,
+            data_dir=tmp_path,
+        )
+        db = Database(tmp_path / "app_mod.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # 1. Version v2.0.5 in /status
+        st = await mgr.handle_control_command("/status")
+        assert "TeleAutomator v2.0.5 Status:" in st
+
+        # 2. Smart typing delay modulation
+        # Banter reply ("haha lol cool") vs thoughtful question ("why do you think this happens?")
+        banter_delay = mgr.calculate_adaptive_delay(12345, reply_text="haha yeah lol", incoming_text="yo haha")
+        thoughtful_delay = mgr.calculate_adaptive_delay(12345, reply_text="i think we need to carefully evaluate options", incoming_text="why do you think that?")
+        # Thoughtful replies allow more reading & formulation time than quick banter
+        assert thoughtful_delay >= banter_delay
+
+    asyncio.run(_run())

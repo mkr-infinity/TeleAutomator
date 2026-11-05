@@ -457,7 +457,9 @@ class ReplyManager:
                 "• `/allowchat <id>` - Allow a contact or group directly from Telegram\n"
                 "• `/removechat <id>` - Remove chat from allowlist\n"
                 "• `/blockchat <id>` - Block a chat ID\n"
-                "• `/mentiononly on|off` - Group safety: reply only when mentioned/replied to\n\n"
+                "• `/mentiononly on|off` - Group safety: reply only when mentioned/replied to\n"
+                "• `/contextttl <hours>` - Set context auto-aging window (e.g. `/contextttl 2.0`)\n"
+                "• `/clearcontext <chat_id>` - Reset cached AI context for a chat (never deletes Telegram messages)\n\n"
                 "*Approvals & Drafts:*\n"
                 "• `/pending` - List drafts waiting for review\n"
                 "• `/approve <id>` - Approve & send pending draft\n"
@@ -638,6 +640,39 @@ class ReplyManager:
             lines.append("\n_Customize per chat with `/style <chat_id> <style>` or `/style <chat_id> default`._")
             return "\n".join(lines)
 
+        if cmd in ("/contextttl", "/aging"):
+            if len(cmd_parts) < 2:
+                curr = self.db.get_state("context_ttl_hours", "2.0")
+                return (
+                    f"⏳ *Conversation Context Auto-Aging:* `{curr} hours`\n"
+                    "After this period of inactivity, older conversation context expires so the AI starts fresh.\n"
+                    "Usage: `/contextttl <hours>` (e.g. `/contextttl 2.0`)"
+                )
+            try:
+                val = max(0.1, float(cmd_parts[1]))
+                self.db.set_state("context_ttl_hours", str(val))
+                return f"⏳ Context aging window set to *{val} hours*. Messages older than this will expire from AI prompt memory."
+            except ValueError:
+                return "Error: Hours must be a positive number."
+
+        if cmd in ("/clearcontext", "/resetcontext"):
+            if len(cmd_parts) < 2:
+                return (
+                    "Usage: `/clearcontext <chat_id>`\n"
+                    "_Safely clears local AI context cache for the chat so the next reply starts fresh._\n"
+                    "_CRITICAL SAFETY: This NEVER deletes any Telegram messages._"
+                )
+            try:
+                target_cid = int(cmd_parts[1])
+                count = self.db.clear_chat_context(target_cid)
+                return (
+                    f"🧹 Cleared {count} cached context messages for chat `{target_cid}`.\n"
+                    "The AI will start fresh on the next message without referencing older context.\n"
+                    "_(Zero Telegram messages were touched or deleted)._"
+                )
+            except ValueError:
+                return "Error: Chat ID must be an integer."
+
         if cmd in ("/usage", "/tokens", "/quota"):
             stats = self.db.get_token_usage_stats()
             reqs = stats["request_count"]
@@ -780,7 +815,7 @@ class ReplyManager:
             global_cd_range = f"{int(self.safety.min_global_cooldown)}s–{int(self.safety.max_global_cooldown)}s"
             chats_df = await self.get_allowed_chats_dataframe()
             return (
-                f"📊 *TeleAutomator Status:*\n"
+                f"📊 *TeleAutomator v2.0.5 Status:*\n"
                 f"• Identity Name: `{owner}`\n"
                 f"• Automation: *{pause_str}*\n"
                 f"• Reply Mode: `{mode_display}` (change with `/mode <draft|approval|auto>`)\n"
@@ -1255,6 +1290,15 @@ class ReplyManager:
             # Longer thoughtful responses take more formulation time
             delay = min(self.max_delay, delay + random.uniform(3.0, 8.0))
 
+        # Smart Typing Speed Modulation (Suggestion 5)
+        combo_text = (reply_text + " " + incoming_text).lower()
+        if any(w in combo_text for w in ("haha", "lol", "lmao", "rofl", "xd", "yo", "sup", "nice", "cool", "yeah", "yea")):
+            # Fast casual banter: 30% faster response
+            delay = max(self.min_delay, delay * 0.70)
+        elif any(w in combo_text for w in ("why", "how", "explain", "think", "what do you", "opinion", "serious")):
+            # Thoughtful inquiry: 25% longer pause
+            delay = min(self.max_delay, delay * 1.25)
+
         # Add human typing speed jitter (±15% randomized variation)
         jitter = random.uniform(-0.15, 0.15) * delay
         delay = delay + jitter
@@ -1366,8 +1410,12 @@ class ReplyManager:
             chosen = random.choice(["😢", "😭", "💔"])
         else:
             has_sentiment = False
-            # Natural human reactions for general text (never weird out-of-context emojis)
-            chosen = random.choice(["👍", "👌", "❤️", "🔥", "💯", "👀", "🙌", "🤝", "😎", "😂"])
+            # Natural human reactions for general text (26+ mobile everyday emojis)
+            chosen = random.choice([
+                "👍", "👌", "❤️", "🔥", "💯", "👀", "🙌", "🤝", "😎", "😂",
+                "✨", "🎉", "🤩", "👏", "🫡", "✌️", "💪", "⚡", "😁", "🥰",
+                "😍", "🙏", "🆒", "🤙", "🥳", "🌟"
+            ])
 
         # When no explicit sentiment is detected, react occasionally (~40% chance) so quota isn't exhausted immediately
         if not has_sentiment and random.random() > 0.40:
@@ -1419,7 +1467,10 @@ class ReplyManager:
 
             if total_delay > 0:
                 # Realistic human simulation: pause for reading/thinking, then show typing action
-                typing_duration = min(total_delay, max(2.0, min(6.0, len(first_part) * 0.05)))
+                combo_lower = first_part.lower()
+                is_quick_banter = any(w in combo_lower for w in ("haha", "lol", "yo", "sup", "ok", "yeah", "yea", "cool", "done"))
+                base_speed = 0.035 if is_quick_banter else 0.05
+                typing_duration = min(total_delay, max(1.5, min(5.0, len(first_part) * base_speed)))
                 reading_delay = max(0.0, total_delay - typing_duration)
 
                 env_type = "Group" if chat_id < 0 else "Private DM"

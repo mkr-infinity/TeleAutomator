@@ -313,19 +313,37 @@ class Database:
                 "by_model": [dict(r) for r in by_model],
             }
 
-    def get_recent_chat_messages(self, chat_id: int, limit: int = 5) -> List[Dict[str, str]]:
-        """Retrieve recent conversation context for chat_id in chronological order."""
+    def get_recent_chat_messages(
+        self, chat_id: int, limit: int = 5, max_age_seconds: Optional[int] = None
+    ) -> List[Dict[str, str]]:
+        """Retrieve recent conversation context for chat_id in chronological order.
+        
+        If max_age_seconds is specified, messages older than the threshold are ignored (context aging).
+        """
         with self._get_connection() as conn:
-            rows = conn.execute(
-                """
-                SELECT sender_name, text, is_outgoing
-                FROM chat_messages
-                WHERE chat_id = ?
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                (chat_id, max(1, limit)),
-            ).fetchall()
+            if max_age_seconds and max_age_seconds > 0:
+                modifier = f"-{int(max_age_seconds)} seconds"
+                rows = conn.execute(
+                    """
+                    SELECT sender_name, text, is_outgoing
+                    FROM chat_messages
+                    WHERE chat_id = ? AND created_at >= datetime('now', ?)
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (chat_id, modifier, max(1, limit)),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT sender_name, text, is_outgoing
+                    FROM chat_messages
+                    WHERE chat_id = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (chat_id, max(1, limit)),
+                ).fetchall()
 
             # Reverse to chronological order (oldest to newest)
             results = []
@@ -333,6 +351,16 @@ class Database:
                 sender = "You" if r["is_outgoing"] == 1 else (r["sender_name"] or "Contact")
                 results.append({"sender": sender, "text": r["text"]})
             return results
+
+    def clear_chat_context(self, chat_id: int) -> int:
+        """Clear locally cached conversation context for chat_id.
+        
+        CRITICAL SAFETY: This ONLY clears local SQLite context cache used for AI prompts;
+        it NEVER deletes any Telegram messages on Telegram servers.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute("DELETE FROM chat_messages WHERE chat_id = ?", (chat_id,))
+            return cursor.rowcount
 
     def prune_chat_messages(self, chat_id: int, keep_last: int = 50) -> None:
         """Prune old cached chat context keeping only the last N messages."""

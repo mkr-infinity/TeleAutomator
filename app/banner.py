@@ -6,7 +6,7 @@ import sys
 
 BANNER_TEXT = """
 \033[1;36m========================================================================================\033[0m
-\033[1;32m  TeleAutomator - Telegram Chat Automation v1.0\033[0m
+\033[1;32m  TeleAutomator - Telegram Chat Automation v2.0.5\033[0m
 \033[1;30m  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\033[0m
   \033[1;35m"Your Telegram account, powered by AI. 🤖"\033[0m
 

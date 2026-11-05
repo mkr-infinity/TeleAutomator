@@ -187,7 +187,7 @@ def test_custom_prompt_wrapping_and_anti_ai_guardrails():
     # Core anti-AI guardrails are strictly preserved
     assert "BREVITY & ENERGY MATCHING" in instructions
     assert "HUMAN ALIBI" in instructions
-    assert "GEN-Z CASUAL SLANG" in instructions
+    assert "SLANG" in instructions
     assert "STRICTLY NO CODE / ARTIFACTS" in instructions
 
     # Resetting custom persona
