@@ -267,3 +267,26 @@ def test_permanent_context_in_prompt():
     assert "PERMANENT CHAT BACKGROUND & PINNED INFO" in prompt
     assert "Pinned Rule: No spam" in prompt
     assert "AI development" in prompt
+
+
+def test_group_language_rules():
+    """Verify group chats enforce English primarily unless Hindi/Hinglish context is detected."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+
+    # 1. English group context
+    prompt_en_group = pm.build_user_prompt(
+        sender_name="Alex",
+        incoming_text="what is the release timeline for the project",
+        is_group=True,
+    )
+    assert "CRITICAL GROUP LANGUAGE RULE (English Only)" in prompt_en_group
+    assert "NEVER use Hindi" in prompt_en_group
+
+    # 2. Hindi / Hinglish group context
+    prompt_hi_group = pm.build_user_prompt(
+        sender_name="Rahul",
+        incoming_text="kya haal hai bhai sab theek",
+        is_group=True,
+    )
+    assert "GROUP LANGUAGE (Hindi/Hinglish)" in prompt_hi_group
+    assert "Hindi or Hinglish" in prompt_hi_group

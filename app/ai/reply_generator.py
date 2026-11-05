@@ -113,6 +113,7 @@ class ReplyGenerator:
         conversation_history: Optional[List[Dict[str, str]]] = None,
         style_override: Optional[str] = None,
         permanent_context: Optional[str] = None,
+        is_group: bool = False,
     ) -> str:
         """Generate a draft reply text considering conversation context when provided."""
         prompt = self.prompt_manager.build_user_prompt(
@@ -120,6 +121,7 @@ class ReplyGenerator:
             incoming_text,
             conversation_history=conversation_history,
             permanent_context=permanent_context,
+            is_group=is_group,
         )
         instructions = self.prompt_manager.get_system_instructions(style_override=style_override)
         try:
@@ -129,3 +131,30 @@ class ReplyGenerator:
             logger.error(f"Failed to generate draft reply: {e}")
             # Never return fallbacks to groups or peer chats; raise so caller alerts Saved Messages exclusively
             raise RuntimeError(f"AI generation failed: {e}") from e
+
+    def distill_group_context(self, chat_title: str, raw_text: str) -> str:
+        """Distill raw pinned messages and group announcements into concise permanent context using AI."""
+        if not raw_text or not raw_text.strip():
+            return ""
+        from app.ai.provider import LocalRuleProvider
+        if isinstance(self.provider, LocalRuleProvider):
+            return raw_text[:1000].strip()
+
+        prompt = (
+            f"Analyze these pinned announcements/rules for the Telegram group '{chat_title}':\n\n"
+            f"{raw_text}\n\n"
+            f"Extract the essential permanent context in 2-3 concise points:\n"
+            f"- Group Purpose/Topic\n"
+            f"- Key Rules & Guidelines\n"
+            f"- Behavior to follow\n"
+            f"Output ONLY the concise points without conversational preamble."
+        )
+        system_inst = "You are a factual context summarizer. Be extremely concise, factual, and direct."
+        try:
+            summary = self.provider.generate_reply(prompt, system_inst)
+            clean_summary = summary.strip()
+            if clean_summary:
+                return clean_summary
+        except Exception as e:
+            logger.debug(f"AI context distillation failed: {e}; falling back to raw text.")
+        return raw_text[:1000].strip()

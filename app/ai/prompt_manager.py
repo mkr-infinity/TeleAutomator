@@ -296,6 +296,7 @@ class PromptManager:
         incoming_text: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         permanent_context: Optional[str] = None,
+        is_group: bool = False,
     ) -> str:
         """Create prompt containing message context, history, permanent chat context, language rule, and dynamic owner identity."""
         parts: List[str] = []
@@ -317,7 +318,29 @@ class PromptManager:
                 parts.append("\n".join(history_lines))
 
         # Language enforcement
-        if self._language == "dynamic":
+        if is_group:
+            # Group language policy: default strictly to English unless the group conversation is in Hindi/Hinglish
+            has_devanagari = any("\u0900" <= c <= "\u097f" for c in incoming_text)
+            hindi_keywords = {
+                "kya", "bhai", "haan", "nahi", "kaise", "kuch", "hai", "karo", "raha", 
+                "rahe", "hota", "batao", "acha", "theek", "yaar", "bhaiya", "sahi", "bolo"
+            }
+            history_text = " ".join(m.get("text", "") for m in (conversation_history or []))
+            all_text_lower = f"{incoming_text} {history_text}".lower()
+            words_tokens = set(re.findall(r"\w+", all_text_lower))
+            is_hindi_group = has_devanagari or len(words_tokens.intersection(hindi_keywords)) >= 2
+
+            if is_hindi_group:
+                lang_instruction = (
+                    "GROUP LANGUAGE (Hindi/Hinglish): The group is conversing in Hindi/Hinglish. "
+                    "You may reply naturally in Hindi or Hinglish matching the group tone."
+                )
+            else:
+                lang_instruction = (
+                    "CRITICAL GROUP LANGUAGE RULE (English Only): This group is primarily in English. "
+                    "You MUST reply ONLY in English. NEVER use Hindi or any other language in this group."
+                )
+        elif self._language == "dynamic":
             lang_instruction = "Match the exact language and writing style of the sender (e.g. English, Hinglish, Hindi)."
         elif self._language == "english":
             lang_instruction = "CRITICAL: You MUST reply ONLY in English, regardless of the sender's language."

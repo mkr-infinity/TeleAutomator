@@ -114,20 +114,30 @@ class ReplyManager:
         return self.generator.prompt_manager.owner_name
 
     async def sync_pinned_context_from_telegram(self, chat_id: int) -> Optional[str]:
-        """Fetch pinned message from Telegram for chat_id and store as permanent context."""
+        """Fetch pinned messages from Telegram for chat_id, distill with AI, and store permanently."""
         if not self._client:
             return None
         try:
             from telethon.tl.types import InputMessagesFilterPinned
-            pinned_msgs = await self._client.get_messages(chat_id, filter=InputMessagesFilterPinned, limit=3)
+            chat_title = str(chat_id)
+            try:
+                entity = await self._client.get_entity(chat_id)
+                chat_title = getattr(entity, "title", "") or getattr(entity, "first_name", "") or str(chat_id)
+            except Exception:
+                pass
+
+            pinned_msgs = await self._client.get_messages(chat_id, filter=InputMessagesFilterPinned, limit=5)
             if pinned_msgs:
                 texts = [m.text.strip() for m in pinned_msgs if getattr(m, "text", None) and m.text.strip()]
                 if texts:
-                    pinned_content = "\n---\n".join(texts)
-                    if len(pinned_content) > 1500:
-                        pinned_content = pinned_content[:1500] + "..."
+                    raw_combined = "\n---\n".join(texts)
+                    loop = asyncio.get_running_loop()
+                    distilled = await loop.run_in_executor(
+                        None, self.generator.distill_group_context, chat_title, raw_combined
+                    )
+                    pinned_content = distilled if distilled else raw_combined[:1500]
                     self.db.set_permanent_context(chat_id, pinned_text=pinned_content)
-                    logger.info(f"Synced permanent pinned context for chat {chat_id} ({len(pinned_content)} chars)")
+                    logger.info(f"AI-distilled permanent pinned context for '{chat_title}' ({chat_id}): {len(pinned_content)} chars")
                     return pinned_content
         except Exception as e:
             logger.debug(f"Could not fetch pinned messages for chat {chat_id}: {e}")
@@ -188,6 +198,7 @@ class ReplyManager:
                     conversation_history=conversation_history,
                     style_override=chat_style or None,
                     permanent_context=permanent_context_str,
+                    is_group=(chat_id < 0),
                 )
             except Exception as e:
                 logger.error(f"Failed to generate AI reply for chat {chat_id}: {e}")

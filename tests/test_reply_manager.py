@@ -1086,3 +1086,19 @@ def test_permanent_group_context_and_pinned_sync(tmp_path: Path):
         assert ctx_deleted["notes"] == ""
 
     asyncio.run(_run())
+
+
+def test_ai_distill_group_context(tmp_path: Path):
+    """Verify AI distill_group_context summarizes raw pinned texts."""
+    cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+    db = Database(tmp_path / "app_distill.db")
+    generator = ReplyGenerator(cfg, database=db)
+
+    # With mock provider
+    mock_provider = MagicMock()
+    mock_provider.generate_reply.return_value = "- Purpose: Solana DEX development\n- Rules: No spam or scams"
+    generator.provider = mock_provider
+
+    distilled = generator.distill_group_context("Solana Developers", "Announcement: We are building a DEX. Strict rule: no spam.")
+    assert "- Purpose: Solana DEX development" in distilled
+    assert "- Rules: No spam or scams" in distilled
