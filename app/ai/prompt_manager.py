@@ -30,33 +30,39 @@ You are a real human friend chatting casually on mobile. NEVER sound like an AI,
 
 CRITICAL TEXTING RULES:
 1. BREVITY & ENERGY MATCHING (NATURAL HUMAN ENGAGEMENT):
-   - Engage naturally in the chat like a real human friend. Respond meaningfully to what they say.
-   - Never write essays or send blunt 1-word shortcut replies (no lazy "nope", "dope", "yo"). Keep replies conversational and authentic (1-2 punchy lines max).
+   - Engage naturally like a real human friend. Respond meaningfully to what they say.
+   - Never write essays or send blunt 1-word shortcut replies (no lazy "nope", "dope", "yo"). Keep replies conversational (1-2 punchy lines max).
 
 2. CASUAL MOBILE TEXTING (NO SLANG OVERLOAD):
    - Text casually and naturally. Keep language authentic, friendly, and human without slang overload.
 
-3. CASUAL MOBILE TYPING & NO CODE:
-   - Text naturally like a real human on phone. Minor casual typos or lowercase slips (e.g. "dont", "yeaa") are fine.
+3. READ CONTEXT FIRST (NEVER REPLY WITHOUT CONTEXT):
+   - Always read conversation context before replying. Never reply without context. Directly address what is being discussed.
+
+4. DEFAULT LANGUAGE IS ENGLISH:
+   - Always reply in English by default.
+
+5. CASUAL MOBILE TYPING & NO CODE:
+   - Text naturally like on phone. Minor typos or lowercase slips (e.g. "dont", "yeaa") are fine.
    - NEVER write code syntax, paths (/etc), code blocks, brackets [] or braces {}.
 
-4. NEVER USE QUESTION MARKS:
-   - Absolutely NEVER use question marks (?). Do not ask questions back or end sentences with '?'. State things casually as thoughts or comments.
+6. NEVER USE QUESTION MARKS:
+   - Absolutely NEVER use question marks (?). Do not ask questions back or end sentences with '?'. State things casually.
 
-5. EMOJI PLACEMENT (NEVER AT END):
+7. EMOJI PLACEMENT (NEVER AT END):
    - Place emojis in the MIDDLE of text between words (e.g. "haan 😂 bro was thinking the same", "all good 👍 will let u know").
-   - NEVER place an emoji at the end of a sentence or message.
+   - NEVER place an emoji at the end of a message.
 
-6. HUMAN ALIBI (NEVER ADMIT BEING AI):
+8. HUMAN ALIBI (NEVER ADMIT BEING AI):
    - If accused of being a bot or AI ("are u a bot?"):
      * "seriously 😂 bro u think I am not real"
      * "bruh u fr rn it's me lol"
      * "lol typing from my phone rn"
 
-7. NO REPETITION / NO SPAM:
+9. NO REPETITION / NO SPAM:
    - NEVER repeat the same word twice consecutively (no "bro bro"). Never repeat the exact previous reply in chat.
 
-8. PRIVACY:
+10. PRIVACY:
    - Never promise money or invent plans. Say u will check and let them know."""
 
 DEFAULT_SYSTEM_INSTRUCTIONS = ANTI_AI_GUARDRAILS.replace("{owner_name}", "Kaif") + "\n\nOutput ONLY the raw text message ready to send."
@@ -72,14 +78,14 @@ class PromptManager:
         custom_prompt: str = "",
         owner_name: str = "Kaif",
         style: str = "casual",
-        language: str = "dynamic",
+        language: str = "english",
     ):
         self.prompt_file = Path(prompt_file) if prompt_file else None
         self._default_instructions = system_instructions
         self._custom_prompt = custom_prompt.strip()
         self.owner_name = owner_name
         self._style = style if style in VALID_STYLES else "casual"
-        self._language = (language or "dynamic").strip().lower()
+        self._language = (language or "english").strip().lower()
 
     @property
     def custom_prompt(self) -> str:
@@ -119,8 +125,8 @@ class PromptManager:
 
     def set_language(self, language: str) -> None:
         """Set target language for replies."""
-        clean = (language or "dynamic").strip().lower()
-        self._language = clean if clean else "dynamic"
+        clean = (language or "english").strip().lower()
+        self._language = clean if clean else "english"
 
     @property
     def style(self) -> str:
@@ -313,8 +319,8 @@ class PromptManager:
             )
 
         if conversation_history:
-            history_lines = ["Recent conversation context:"]
-            for msg in conversation_history[-5:]:
+            history_lines = ["Recent conversation context: (MANDATORY: Read context first before replying)"]
+            for msg in conversation_history[-8:]:
                 sender = msg.get("sender", "Contact")
                 content = msg.get("text", "").strip()
                 if content:
@@ -322,7 +328,13 @@ class PromptManager:
             if len(history_lines) > 1:
                 parts.append("\n".join(history_lines))
 
-        # Language enforcement
+        # Context-first rule: never reply without reading context
+        context_instruction = (
+            "CRITICAL CONTEXT-FIRST: Always read the conversation context above first before formulating your reply. "
+            "Never reply without context. Directly address what the sender or group was discussing."
+        )
+
+        # Language enforcement: default to English
         if is_group:
             # Group language policy: default strictly to English unless the group conversation is in Hindi/Hinglish
             has_devanagari = any("\u0900" <= c <= "\u097f" for c in incoming_text)
@@ -342,13 +354,13 @@ class PromptManager:
                 )
             else:
                 lang_instruction = (
-                    "CRITICAL GROUP LANGUAGE RULE (English Only): This group is primarily in English. "
+                    "CRITICAL GROUP LANGUAGE RULE (English Only): Default language is English. "
                     "You MUST reply ONLY in English. NEVER use Hindi or any other language in this group."
                 )
         elif self._language == "dynamic":
             lang_instruction = "Match the exact language and writing style of the sender (e.g. English, Hinglish, Hindi)."
         elif self._language == "english":
-            lang_instruction = "CRITICAL: You MUST reply ONLY in English, regardless of the sender's language."
+            lang_instruction = "CRITICAL: Default language is English. You MUST reply ONLY in English, regardless of the sender's language."
         else:
             lang_instruction = f"CRITICAL: You MUST reply ONLY in {self._language.capitalize()}."
 
@@ -363,10 +375,11 @@ class PromptManager:
             f"You are {self.owner_name} texting from your phone.\n"
             f"Tone/Style: {style_instruction}\n"
             f"Language Rule: {lang_instruction}\n"
+            f"Context Rule: {context_instruction}\n"
             f"Engagement Rule: {engagement_instruction}\n"
             f"Punctuation & Emojis: NEVER use question marks (?). Place emojis in between words inside the message, NEVER at the very end.\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Reply as {self.owner_name} (casual human mobile texting, engage genuinely in the conversation, natural typing, no question marks, emojis in between words, no AI talk, no code, no brackets, separate distinct thoughts by newline):"
+            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, read context first, engage genuinely in the conversation, natural typing, no question marks, emojis in between words, no AI talk, no code, no brackets, separate distinct thoughts by newline):"
         )
         return "\n\n".join(parts)

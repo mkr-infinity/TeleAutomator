@@ -85,7 +85,7 @@ class AppConfig:
     max_global_cooldown_seconds: float = 60.0
 
     # Language & Reactions
-    default_chat_language: str = "dynamic"
+    default_chat_language: str = "english"
     reaction_enabled: bool = True
     reaction_max_per_window: int = 4
     reaction_window_seconds: int = 600
@@ -204,7 +204,7 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         typing_delay = max(0.0, float(os.getenv("TYPING_DELAY_SECONDS", "2.0")))
         min_delay = max(0.0, float(os.getenv("MIN_REPLY_DELAY_SECONDS", "5.0")))
         max_delay = max(min_delay, float(os.getenv("MAX_REPLY_DELAY_SECONDS", "60.0")))
-        default_chat_language = os.getenv("DEFAULT_CHAT_LANGUAGE", "dynamic").strip().lower() or "dynamic"
+        default_chat_language = os.getenv("DEFAULT_CHAT_LANGUAGE", "english").strip().lower() or "english"
         reaction_enabled = _parse_bool(os.getenv("REACTION_ENABLED"), default=True)
         reaction_max_per_window = max(1, int(os.getenv("REACTION_MAX_PER_WINDOW", "4")))
         reaction_window_seconds = max(10, int(os.getenv("REACTION_WINDOW_SECONDS", "600")))

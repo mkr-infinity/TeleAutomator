@@ -65,7 +65,7 @@ class ReplyManager:
             self.generator.set_style(saved_style)
 
         # Restore saved language if stored in DB
-        default_lang = getattr(config, "default_chat_language", "dynamic")
+        default_lang = getattr(config, "default_chat_language", "english")
         saved_lang = self.db.get_state("chat_language", default_lang)
         if saved_lang:
             self.generator.set_language(saved_lang)
@@ -336,7 +336,7 @@ class ReplyManager:
                 )
                 return
 
-            sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True)
+            sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True, is_mention=is_mention)
             if sent:
                 asyncio.create_task(self.check_daily_quota_warning())
 
@@ -393,7 +393,7 @@ class ReplyManager:
                     if self.safety.is_emergency_stopped:
                         return
 
-            sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True)
+            sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True, is_mention=True)
             if sent:
                 asyncio.create_task(self.check_daily_quota_warning())
             logger.info(f"[DEFERRED MENTION SENT] Successfully replied to mention in chat {chat_id} after cooldown.")
@@ -1583,10 +1583,21 @@ class ReplyManager:
 
         return None
 
-    def calculate_adaptive_delay(self, chat_id: int, reply_text: str = "", incoming_text: str = "") -> float:
-        """Calculate human-like randomized delay (5-60s) adapting to group vs DM and message complexity."""
+    def calculate_adaptive_delay(
+        self,
+        chat_id: int,
+        reply_text: str = "",
+        incoming_text: str = "",
+        is_mention: bool = False,
+    ) -> float:
+        """Calculate human-like randomized delay adapting to group vs DM, message complexity, and mentions."""
         if self.min_delay <= 0 and self.max_delay <= 0:
             return 0.0
+
+        # When mentioned: randomized response cooldown strictly between 5 and 30 seconds
+        if is_mention:
+            delay = random.uniform(5.0, 30.0)
+            return round(delay, 2)
 
         is_group = chat_id < 0
 
@@ -1733,15 +1744,10 @@ class ReplyManager:
             chosen = random.choice(["😢", "😭", "💔"])
         else:
             has_sentiment = False
-            # Natural human reactions for general text (26+ mobile everyday emojis)
-            chosen = random.choice([
-                "👍", "👌", "❤️", "🔥", "💯", "👀", "🙌", "🤝", "😎", "😂",
-                "✨", "🎉", "🤩", "👏", "🫡", "✌️", "💪", "⚡", "😁", "🥰",
-                "😍", "🙏", "🆒", "🤙", "🥳", "🌟"
-            ])
+            chosen = ""
 
-        # When no explicit sentiment is detected, react occasionally (~40% chance) so quota isn't exhausted immediately
-        if not has_sentiment and random.random() > 0.40:
+        # Only react when there is clear, relative sentiment to the message; never react unnecessarily
+        if not has_sentiment or not chosen:
             return False
 
         try:
@@ -1871,6 +1877,7 @@ class ReplyManager:
         reply_to_msg_id: int,
         text: str,
         adaptive_delay: bool = True,
+        is_mention: bool = False,
     ) -> bool:
         """Send message using Telethon client with adaptive human reading/typing delay and error handling."""
         if not self._client:
@@ -1884,9 +1891,9 @@ class ReplyManager:
         first_part = msg_parts[0]
 
         try:
-            # Calculate human-like delay adapting to group/DM environment for first message
+            # Calculate human-like delay adapting to group/DM environment and mentions (5-30s)
             if adaptive_delay and (self.min_delay > 0 or self.max_delay > 0):
-                total_delay = self.calculate_adaptive_delay(chat_id, first_part)
+                total_delay = self.calculate_adaptive_delay(chat_id, first_part, is_mention=is_mention)
             else:
                 total_delay = self.typing_delay
 
@@ -1899,8 +1906,9 @@ class ReplyManager:
                 reading_delay = max(0.0, total_delay - typing_duration)
 
                 env_type = "Group" if chat_id < 0 else "Private DM"
+                mention_str = " (Mention 5-30s Delay)" if is_mention else ""
                 logger.info(
-                    f"[{env_type} Delay] Waiting {total_delay:.1f}s (reading: {reading_delay:.1f}s, typing: {typing_duration:.1f}s) before replying to chat {chat_id}."
+                    f"[{env_type} Delay{mention_str}] Waiting {total_delay:.1f}s (reading: {reading_delay:.1f}s, typing: {typing_duration:.1f}s) before replying to chat {chat_id}."
                 )
 
                 # Phase 1: Reading/thinking pause

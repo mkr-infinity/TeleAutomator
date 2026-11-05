@@ -1257,3 +1257,43 @@ def test_prompt_command_displays_full_text(tmp_path: Path):
 
     asyncio.run(_run())
 
+
+def test_mention_delay_between_5_and_30_seconds(tmp_path: Path):
+    """Verify adaptive delay for mentions is strictly randomized between 5 and 30 seconds."""
+    cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+    db = Database(tmp_path / "test_delay.db")
+    safety = SafetyManager(cfg, db)
+    privacy = PrivacyManager(cfg, database=db)
+    generator = ReplyGenerator(cfg, database=db)
+    mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+    for _ in range(25):
+        delay = mgr.calculate_adaptive_delay(-1001, "reply text", "incoming mention", is_mention=True)
+        assert 5.0 <= delay <= 30.0, f"Mention delay out of 5-30s range: {delay}"
+
+
+def test_reactions_only_for_relative_sentiment(tmp_path: Path):
+    """Verify maybe_send_reaction returns False for neutral text without sentiment, and True for sentiment."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "test_react.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        mock_client = AsyncMock()
+        mock_client.get_input_entity = AsyncMock(return_value="peer")
+        mgr.set_telegram_client(mock_client)
+
+        # 1. Neutral message without sentiment: reaction is skipped (False)
+        neutral_res = await mgr.maybe_send_reaction(101, 1, "the table has four legs")
+        assert neutral_res is False
+
+        # 2. Message with explicit sentiment: reaction is sent (True)
+        sentiment_res = await mgr.maybe_send_reaction(101, 2, "haha that was so funny lol")
+        assert sentiment_res is True
+
+    asyncio.run(_run())
+
+

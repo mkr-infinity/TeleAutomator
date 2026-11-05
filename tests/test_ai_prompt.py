@@ -83,15 +83,16 @@ def test_reply_generator_with_history(tmp_path: Path):
 
 def test_language_customization():
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
-    assert pm.language == "dynamic"
-
-    prompt_dyn = pm.build_user_prompt(sender_name="Alex", incoming_text="hello")
-    assert "Match the exact language" in prompt_dyn
-
-    pm.set_language("english")
+    # English is default
     assert pm.language == "english"
+
     prompt_en = pm.build_user_prompt(sender_name="Alex", incoming_text="kya haal hai")
     assert "reply ONLY in English" in prompt_en
+
+    pm.set_language("dynamic")
+    assert pm.language == "dynamic"
+    prompt_dyn = pm.build_user_prompt(sender_name="Alex", incoming_text="hello")
+    assert "Match the exact language" in prompt_dyn
 
     pm.set_language("hindi")
     assert pm.language == "hindi"

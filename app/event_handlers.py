@@ -124,9 +124,7 @@ def register_handlers(
 
             import random
             if is_mention:
-                # Direct mention or reply to our account: always reply, with optional reaction
-                if random.random() < 0.25:
-                    await reply_manager.maybe_send_reaction(chat_id, message_id, text)
+                # Direct mention or reply to our account: always reply
                 reply_manager.mark_group_activity(chat_id)
             else:
                 # Smart human group engagement logic:
@@ -158,10 +156,10 @@ def register_handlers(
         # Retrieve recent conversation context with aging window (default: 2 hours TTL)
         ttl_hours = float(reply_manager.db.get_state("context_ttl_hours", "2.0"))
         max_age_secs = int(ttl_hours * 3600) if ttl_hours > 0 else None
-        conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=5, max_age_seconds=max_age_secs)
-        if len(conversation_history) <= 1:
+        conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=8, max_age_seconds=max_age_secs)
+        if len(conversation_history) <= 2:
             try:
-                recent_msgs = await client.get_messages(chat_id, limit=6)
+                recent_msgs = await client.get_messages(chat_id, limit=10)
                 if recent_msgs:
                     for m in reversed(recent_msgs):
                         m_id = getattr(m, "id", None)
@@ -186,7 +184,7 @@ def register_handlers(
                             text=m_text,
                             is_outgoing=m_out,
                         )
-                    conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=5, max_age_seconds=max_age_secs)
+                    conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=8, max_age_seconds=max_age_secs)
             except Exception as e:
                 logger.debug(f"Could not seed chat history from network: {e}")
 
@@ -201,10 +199,7 @@ def register_handlers(
             r_text = reply_msg.raw_text.strip()
             if r_text and not any(h.get("text") == r_text for h in conversation_history):
                 r_sender = "You" if (getattr(reply_msg, "out", False) or getattr(reply_msg, "sender_id", None) == my_user_id) else "Contact"
-                conversation_history.append({"sender": f"{r_sender} (replied-to)", "text": r_text})
-
-        # Optionally add a natural emoji reaction if allowed by reaction cooldown
-        await reply_manager.maybe_send_reaction(chat_id, message_id, text)
+                conversation_history.append({"sender": f"{r_sender} (in reply to)", "text": r_text})
 
         # Process reply generation and dispatch
         await reply_manager.handle_incoming_eligible_message(
