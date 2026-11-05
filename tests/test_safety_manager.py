@@ -73,3 +73,73 @@ def test_emergency_stop(tmp_path: Path):
     safety.set_emergency_stop(False)
     can_reply, _ = safety.can_reply(1001, "Normal reply")
     assert can_reply is True
+
+
+def test_randomized_cooldown_bounds(tmp_path: Path):
+    cfg = AppConfig(
+        api_id=123,
+        api_hash="dummy_hash",
+        data_dir=tmp_path,
+    )
+    db = Database(tmp_path / "test_cd.db")
+    safety = SafetyManager(cfg, db)
+
+    assert safety.min_chat_cooldown == 5.0
+    assert safety.max_chat_cooldown == 60.0
+    assert safety.min_global_cooldown == 5.0
+    assert safety.max_global_cooldown == 60.0
+
+    # Pick 20 randomized cooldowns; all must be between 5.0 and 60.0
+    for _ in range(20):
+        cd = safety._pick_random_chat_cooldown()
+        assert 5.0 <= cd <= 60.0
+        gcd = safety._pick_random_global_cooldown()
+        assert 5.0 <= gcd <= 60.0
+
+    # After sending reply, chat cooldown target is within [5.0, 60.0]
+    safety.mark_reply_sent(500)
+    assert 5.0 <= safety._next_chat_cooldown[500] <= 60.0
+
+
+def test_quiet_hours_schedule(tmp_path: Path):
+    import datetime
+    cfg = AppConfig(
+        api_id=123,
+        api_hash="dummy_hash",
+        data_dir=tmp_path,
+    )
+    db = Database(tmp_path / "test_qh.db")
+    safety = SafetyManager(cfg, db)
+
+    # Off by default
+    assert safety.quiet_hours_enabled is False
+    is_quiet, _ = safety.is_in_quiet_hours()
+    assert is_quiet is False
+
+    # Configure overnight schedule: 23:00 to 07:00
+    safety.set_quiet_hours(True, start="23:00", end="07:00")
+    assert safety.quiet_hours_enabled is True
+
+    # Check times
+    night_time = datetime.time(23, 30)
+    assert safety.is_in_quiet_hours(night_time)[0] is True
+
+    early_morning = datetime.time(4, 15)
+    assert safety.is_in_quiet_hours(early_morning)[0] is True
+
+    day_time = datetime.time(14, 0)
+    assert safety.is_in_quiet_hours(day_time)[0] is False
+
+    # Blocked by can_reply during quiet hours
+    can_reply, reason = safety.can_reply(101, "Hello",)
+    # If currently tested with night_time simulated:
+    safety.set_quiet_hours(True, start="00:00", end="23:59")
+    can_reply, reason = safety.can_reply(101, "Hello")
+    assert can_reply is False
+    assert "Quiet hours active" in reason
+
+    # Turn off quiet hours
+    safety.set_quiet_hours(False)
+    assert safety.quiet_hours_enabled is False
+    can_reply, _ = safety.can_reply(101, "Hello")
+    assert can_reply is True

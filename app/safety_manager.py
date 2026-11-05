@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import datetime
 import hashlib
+import random
 import re
 import time
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from app.config import AppConfig
 from app.logger import setup_logger
@@ -38,6 +40,8 @@ class SafetyManager:
         self.db = database
         self._last_global_reply_time: float = 0.0
         self._last_chat_reply_time: Dict[int, float] = {}
+        self._next_global_cooldown: float = 0.0
+        self._next_chat_cooldown: Dict[int, float] = {}
         self._consecutive_errors: int = 0
         self._error_pause_until: float = 0.0
 
@@ -134,26 +138,143 @@ class SafetyManager:
         return False
 
     @property
+    def min_chat_cooldown(self) -> float:
+        db_val = self.db.get_state("min_chat_cooldown_seconds")
+        if db_val:
+            try:
+                return max(0.0, float(db_val))
+            except ValueError:
+                pass
+        base = getattr(self.config, "min_chat_cooldown_seconds", 5.0)
+        if self.config.per_chat_cooldown_seconds < base:
+            return float(self.config.per_chat_cooldown_seconds)
+        return float(base)
+
+    @property
+    def max_chat_cooldown(self) -> float:
+        db_val = self.db.get_state("max_chat_cooldown_seconds")
+        if db_val:
+            try:
+                return max(self.min_chat_cooldown, float(db_val))
+            except ValueError:
+                pass
+        base = getattr(self.config, "max_chat_cooldown_seconds", 60.0)
+        if self.config.per_chat_cooldown_seconds < 5.0:
+            return float(self.config.per_chat_cooldown_seconds)
+        return max(self.min_chat_cooldown, float(base))
+
+    @property
+    def min_global_cooldown(self) -> float:
+        db_val = self.db.get_state("min_global_cooldown_seconds")
+        if db_val:
+            try:
+                return max(0.0, float(db_val))
+            except ValueError:
+                pass
+        base = getattr(self.config, "min_global_cooldown_seconds", 5.0)
+        if self.config.global_cooldown_seconds < base:
+            return float(self.config.global_cooldown_seconds)
+        return float(base)
+
+    @property
+    def max_global_cooldown(self) -> float:
+        db_val = self.db.get_state("max_global_cooldown_seconds")
+        if db_val:
+            try:
+                return max(self.min_global_cooldown, float(db_val))
+            except ValueError:
+                pass
+        base = getattr(self.config, "max_global_cooldown_seconds", 60.0)
+        if self.config.global_cooldown_seconds < 5.0:
+            return float(self.config.global_cooldown_seconds)
+        return max(self.min_global_cooldown, float(base))
+
+    def _pick_random_chat_cooldown(self) -> float:
+        """Choose a random cooldown between min (default 5s) and max (default 60s)."""
+        lo = self.min_chat_cooldown
+        hi = self.max_chat_cooldown
+        return random.uniform(lo, hi) if hi >= lo else lo
+
+    def _pick_random_global_cooldown(self) -> float:
+        """Choose a random global cooldown between min (default 5s) and max (default 60s)."""
+        lo = self.min_global_cooldown
+        hi = self.max_global_cooldown
+        return random.uniform(lo, hi) if hi >= lo else lo
+
+    @property
     def global_cooldown_seconds(self) -> int:
-        """Effective global cooldown in seconds (runtime override > config)."""
+        """Effective global cooldown in seconds (display/target)."""
         db_val = self.db.get_state("global_cooldown_seconds")
         if db_val:
             try:
                 return max(0, int(db_val))
             except ValueError:
                 pass
-        return self.config.global_cooldown_seconds
+        return int(self.max_global_cooldown)
 
     @property
     def per_chat_cooldown_seconds(self) -> int:
-        """Effective per-chat cooldown in seconds (runtime override > config)."""
+        """Effective per-chat cooldown in seconds (display/target)."""
         db_val = self.db.get_state("per_chat_cooldown_seconds")
         if db_val:
             try:
                 return max(0, int(db_val))
             except ValueError:
                 pass
-        return self.config.per_chat_cooldown_seconds
+        return int(self.max_chat_cooldown)
+
+    @property
+    def quiet_hours_enabled(self) -> bool:
+        """Whether quiet hours / sleep schedule is active."""
+        return self.db.get_state(
+            "quiet_hours_enabled",
+            "1" if getattr(self.config, "quiet_hours_enabled", False) else "0",
+        ) == "1"
+
+    @property
+    def quiet_hours_window(self) -> tuple[str, str]:
+        """Configured (start, end) time strings in HH:MM format."""
+        start = self.db.get_state("quiet_hours_start", getattr(self.config, "quiet_hours_start", "23:00"))
+        end = self.db.get_state("quiet_hours_end", getattr(self.config, "quiet_hours_end", "07:00"))
+        return start, end
+
+    def set_quiet_hours(self, enabled: bool, start: Optional[str] = None, end: Optional[str] = None) -> None:
+        """Update quiet hours enablement and optional schedule window."""
+        self.db.set_state("quiet_hours_enabled", "1" if enabled else "0")
+        if start:
+            self.db.set_state("quiet_hours_start", start)
+        if end:
+            self.db.set_state("quiet_hours_end", end)
+        logger.info(f"SAFETY: Quiet hours set to enabled={enabled}, start={start}, end={end}")
+
+    def is_in_quiet_hours(self, now_time: Optional[datetime.time] = None) -> tuple[bool, str]:
+        """
+        Check if the current time falls inside the configured Quiet Hours (sleep schedule).
+        Returns (is_active, status_message).
+        """
+        if not self.quiet_hours_enabled:
+            return False, "Quiet hours disabled"
+
+        start_str, end_str = self.quiet_hours_window
+        try:
+            sh, sm = map(int, start_str.strip().split(":"))
+            eh, em = map(int, end_str.strip().split(":"))
+            start_t = datetime.time(sh, sm)
+            end_t = datetime.time(eh, em)
+        except Exception:
+            return False, f"Invalid quiet hours format ({start_str}-{end_str})"
+
+        cur_t = now_time if now_time is not None else datetime.datetime.now().time()
+
+        if start_t <= end_t:
+            in_window = start_t <= cur_t < end_t
+        else:
+            # Crosses midnight (e.g. 23:00 to 07:00)
+            in_window = cur_t >= start_t or cur_t < end_t
+
+        if in_window:
+            return True, f"Quiet hours active (sleep schedule {start_str} - {end_str})"
+        return False, f"Outside quiet hours ({start_str} - {end_str})"
 
     def can_reply(self, chat_id: int, text: str) -> tuple[bool, str]:
         """Verify whether an outgoing reply is safe and permitted."""
@@ -166,6 +287,11 @@ class SafetyManager:
             secs = int(remaining_pause % 60)
             return False, f"Client is paused ({mins}m {secs}s remaining)"
 
+        # Quiet hours (sleep schedule)
+        is_quiet, quiet_reason = self.is_in_quiet_hours()
+        if is_quiet:
+            return False, quiet_reason
+
         now = time.time()
         if now < self._error_pause_until:
             return False, f"Safety pause active for {int(self._error_pause_until - now)}s"
@@ -176,26 +302,28 @@ class SafetyManager:
         if len(text) > self.config.max_message_length:
             return False, f"Message length ({len(text)}) exceeds maximum allowed ({self.config.max_message_length})"
 
-        # Global cooldown check
-        global_cd = self.global_cooldown_seconds
+        # Global cooldown check (randomized between min and max)
+        global_cd = self._next_global_cooldown or self._pick_random_global_cooldown()
         time_since_global = now - self._last_global_reply_time
         if time_since_global < global_cd:
-            wait_time = int(global_cd - time_since_global)
+            wait_time = max(1, int(global_cd - time_since_global))
             return False, f"Global cooldown active ({wait_time}s remaining)"
 
-        # Per-chat cooldown check
-        chat_cd = self.per_chat_cooldown_seconds
+        # Per-chat cooldown check (randomized between min 5s and max 60s)
+        chat_cd = self._next_chat_cooldown.get(chat_id) or self._pick_random_chat_cooldown()
         last_chat_time = self._last_chat_reply_time.get(chat_id, 0.0)
         time_since_chat = now - last_chat_time
         if time_since_chat < chat_cd:
-            wait_time = int(chat_cd - time_since_chat)
+            wait_time = max(1, int(chat_cd - time_since_chat))
             return False, f"Per-chat cooldown active for chat {chat_id} ({wait_time}s remaining)"
 
         return True, "OK"
 
     def mark_reply_sent(self, chat_id: int) -> None:
-        """Update cooldown timestamps after sending a reply."""
+        """Update cooldown timestamps after sending a reply and pick next randomized interval."""
         now = time.time()
         self._last_global_reply_time = now
         self._last_chat_reply_time[chat_id] = now
+        self._next_global_cooldown = self._pick_random_global_cooldown()
+        self._next_chat_cooldown[chat_id] = self._pick_random_chat_cooldown()
         self.record_success()

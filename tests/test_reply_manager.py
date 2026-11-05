@@ -539,3 +539,94 @@ def test_control_commands_model_baseurl_provider_chatty(tmp_path: Path):
         assert float(db.get_state("chatty_probability")) == 0.20
 
     asyncio.run(_run())
+
+
+def test_quiethours_commands_and_suppression(tmp_path: Path):
+    """Verify quiet hours customization from Telegram and auto-reply suppression during sleep schedule."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            reply_mode="restricted_auto",
+            allowed_private_chats={100},
+            data_dir=tmp_path,
+        )
+        db = Database(tmp_path / "app_qh.db")
+        safety = SafetyManager(cfg, db)
+        safety.set_auto_authorization(True)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        mock_client = AsyncMock()
+        mgr.set_telegram_client(mock_client)
+
+        # 1. Default quiet hours is OFF
+        status_res = await mgr.handle_control_command("/quiethours")
+        assert "Quiet Hours" in status_res
+        assert "OFF" in status_res
+
+        # 2. Turn on with custom hours
+        on_res = await mgr.handle_control_command("/quiethours on 01:00 08:00")
+        assert "ENABLED" in on_res
+        assert "01:00" in on_res and "08:00" in on_res
+        assert safety.quiet_hours_enabled is True
+        assert safety.quiet_hours_window == ("01:00", "08:00")
+
+        # 3. Turn off
+        off_res = await mgr.handle_control_command("/quiethours off")
+        assert "DISABLED" in off_res
+        assert safety.quiet_hours_enabled is False
+
+        # 4. Set direct schedule
+        set_res = await mgr.handle_control_command("/quiethours 23:00 07:00")
+        assert "23:00" in set_res and "07:00" in set_res
+        assert safety.quiet_hours_enabled is True
+
+        # 5. Verify suppression during quiet hours without spamming Saved Messages
+        # Set schedule spanning whole day to guarantee match
+        safety.set_quiet_hours(True, start="00:00", end="23:59")
+        await mgr.handle_incoming_eligible_message(
+            chat_id=100,
+            chat_title="Friend",
+            message_id=50,
+            sender_id=123,
+            sender_name="Alice",
+            text="Hello during sleep hours",
+        )
+        # No message sent to user chat or saved messages
+        mock_client.send_message.assert_not_called()
+
+    asyncio.run(_run())
+
+
+def test_reaction_randomized_interval_cooldown(tmp_path: Path):
+    """Verify that reaction cooldown randomizes between 3s and 9s and blocks rapid successive reactions."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            reaction_enabled=True,
+            reaction_min_cooldown_seconds=3.0,
+            reaction_max_cooldown_seconds=9.0,
+            data_dir=tmp_path,
+        )
+        db = Database(tmp_path / "app_react.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        mock_client = AsyncMock()
+        mgr.set_telegram_client(mock_client)
+
+        # First reaction succeeds
+        sent1 = await mgr.maybe_send_reaction(chat_id=100, message_id=1, text="Haha this is hilarious")
+        assert sent1 is True
+        assert 3.0 <= mgr._next_reaction_cooldown <= 9.0
+
+        # Immediate second reaction blocked by 3s-9s cooldown
+        sent2 = await mgr.maybe_send_reaction(chat_id=100, message_id=2, text="Another funny message")
+        assert sent2 is False
+
+    asyncio.run(_run())

@@ -79,16 +79,27 @@ class AppConfig:
     typing_delay_seconds: float = 2.0
     min_delay_seconds: float = 5.0
     max_delay_seconds: float = 60.0
+    min_chat_cooldown_seconds: float = 5.0
+    max_chat_cooldown_seconds: float = 60.0
+    min_global_cooldown_seconds: float = 5.0
+    max_global_cooldown_seconds: float = 60.0
 
     # Language & Reactions
     default_chat_language: str = "dynamic"
     reaction_enabled: bool = True
     reaction_max_per_window: int = 4
     reaction_window_seconds: int = 600
+    reaction_min_cooldown_seconds: float = 3.0
+    reaction_max_cooldown_seconds: float = 9.0
 
     # Group Dynamics & Participation
     chatty_probability: float = 0.15
     react_only_probability: float = 0.25
+
+    # Quiet Hours (Sleep Schedule Simulation)
+    quiet_hours_enabled: bool = False
+    quiet_hours_start: str = "23:00"
+    quiet_hours_end: str = "07:00"
 
     # Paths
     data_dir: Path = Path("data")
@@ -187,6 +198,15 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         reaction_window_seconds = max(10, int(os.getenv("REACTION_WINDOW_SECONDS", "600")))
         chatty_probability = max(0.0, min(1.0, float(os.getenv("CHATTY_PROBABILITY", "0.15"))))
         react_only_probability = max(0.0, min(1.0, float(os.getenv("REACT_ONLY_PROBABILITY", "0.25"))))
+        min_chat_cd = max(0.0, float(os.getenv("MIN_CHAT_COOLDOWN_SECONDS", "5.0")))
+        max_chat_cd = max(min_chat_cd, float(os.getenv("MAX_CHAT_COOLDOWN_SECONDS", "60.0")))
+        min_global_cd = max(0.0, float(os.getenv("MIN_GLOBAL_COOLDOWN_SECONDS", "5.0")))
+        max_global_cd = max(min_global_cd, float(os.getenv("MAX_GLOBAL_COOLDOWN_SECONDS", "60.0")))
+        reaction_min_cd = max(0.0, float(os.getenv("REACTION_MIN_COOLDOWN_SECONDS", "3.0")))
+        reaction_max_cd = max(reaction_min_cd, float(os.getenv("REACTION_MAX_COOLDOWN_SECONDS", "9.0")))
+        quiet_hours_enabled = _parse_bool(os.getenv("QUIET_HOURS_ENABLED"), default=False)
+        quiet_hours_start = os.getenv("QUIET_HOURS_START", "23:00").strip() or "23:00"
+        quiet_hours_end = os.getenv("QUIET_HOURS_END", "07:00").strip() or "07:00"
     except ValueError as e:
         raise ValueError(f"Invalid rate limit or message delay configuration: {e}")
 
@@ -223,5 +243,14 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         reaction_window_seconds=reaction_window_seconds,
         chatty_probability=chatty_probability,
         react_only_probability=react_only_probability,
+        min_chat_cooldown_seconds=min_chat_cd,
+        max_chat_cooldown_seconds=max_chat_cd,
+        min_global_cooldown_seconds=min_global_cd,
+        max_global_cooldown_seconds=max_global_cd,
+        reaction_min_cooldown_seconds=reaction_min_cd,
+        reaction_max_cooldown_seconds=reaction_max_cd,
+        quiet_hours_enabled=quiet_hours_enabled,
+        quiet_hours_start=quiet_hours_start,
+        quiet_hours_end=quiet_hours_end,
         data_dir=data_dir,
     )

@@ -142,14 +142,15 @@ Manage TeleAutomator straight from your phone by texting your **Saved Messages**
 
 | Command | Action | Example |
 | :--- | :--- | :--- |
-| **`/status`** | Displays active mode, style, language, reactions, and cooldown status | `/status` |
+| **`/status`** | Displays active mode, style, language, reactions, quiet hours, and cooldown status | `/status` |
 | **`/mode <draft\|approval\|auto>`** | Switches operating mode dynamically | `/mode auto` |
 | **`/style <casual\|concise\|formal\|humorous>`** | Changes AI speaking style on the fly | `/style concise` |
 | **`/lang <dynamic\|english\|hindi\|...>`** | Sets target language (dynamic detection or forced language) | `/lang dynamic` or `/lang english` |
+| **`/quiethours <on\|off\|start end>`** | Simulates human sleep schedule (pauses replies & reactions) | `/quiethours on 23:00 07:00` or `/quiethours off` |
 | **`/reaction <on\|off>`** | Toggles natural emoji reactions on messages | `/reaction on` |
-| **`/reactioncooldown <count> <mins>`** | Customizes reaction rate limit (default 4 per 10m) | `/reactioncooldown 4 10` |
-| **`/chatcooldown <seconds>`** | Sets per-chat reply cooldown timer | `/chatcooldown 30` |
-| **`/globalcooldown <seconds>`** | Sets global reply cooldown timer | `/globalcooldown 15` |
+| **`/reactioncooldown <min> <max>`** | Sets randomized reaction interval (default 3s–9s) or rolling limit | `/reactioncooldown 3 9` or `/reactioncooldown limit 4 10` |
+| **`/chatcooldown <min> <max>`** | Sets randomized per-chat reply cooldown (default 5s–60s) | `/chatcooldown 5 60` or `/chatcooldown 30` |
+| **`/globalcooldown <min> <max>`** | Sets randomized global reply cooldown (default 5s–60s) | `/globalcooldown 5 60` or `/globalcooldown 15` |
 | **`/chats`** | Lists allowlisted private contacts and groups | `/chats` |
 | **`/allowchat <id>`** | Adds a chat ID to allowlist | `/allowchat 123456789` |
 | **`/removechat <id>`** | Removes a chat from allowlist | `/removechat 123456789` |
@@ -226,7 +227,7 @@ Run the automated test suite locally:
 # Or via universal runner:
 python run.py --test
 ```
-**39 passing unit tests** covering configuration, safety guards, adaptive delay, multi-message splitting, reactions, language control, custom OpenAI/NVIDIA endpoints, database context caching, and mock MTProto workflows without network side-effects.
+**43 passing unit tests** covering configuration, safety guards, quiet hours sleep schedule, randomized reply & reaction cooldowns, adaptive typing delay, multi-message splitting, reactions, language control, custom OpenAI/NVIDIA endpoints, database context caching, and mock MTProto workflows without network side-effects.
 
 ---
 

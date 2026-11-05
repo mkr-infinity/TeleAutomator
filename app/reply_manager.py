@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import random
+import re
+import time
 from typing import Any, Optional
 
 from app.ai.reply_generator import ReplyGenerator
@@ -14,6 +17,17 @@ from app.safety_manager import SafetyManager
 from app.storage.database import Database
 
 logger = setup_logger(__name__)
+
+
+def _parse_time_str(val: str) -> Optional[str]:
+    """Parse and normalize HH:MM string."""
+    m = re.match(r"^(\d{1,2}):(\d{2})$", val.strip())
+    if not m:
+        return None
+    h, mins = int(m.group(1)), int(m.group(2))
+    if 0 <= h <= 23 and 0 <= mins <= 59:
+        return f"{h:02d}:{mins:02d}"
+    return None
 
 
 class ReplyManager:
@@ -36,6 +50,11 @@ class ReplyManager:
         self.typing_delay: float = getattr(config, "typing_delay_seconds", 2.0)
         self.min_delay: float = getattr(config, "min_delay_seconds", 5.0)
         self.max_delay: float = getattr(config, "max_delay_seconds", 60.0)
+        self._last_reaction_time: float = 0.0
+        self._next_reaction_cooldown: float = random.uniform(
+            float(self.db.get_state("reaction_min_cooldown_seconds", str(getattr(config, "reaction_min_cooldown_seconds", 3.0)))),
+            float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(config, "reaction_max_cooldown_seconds", 9.0)))),
+        )
 
         # Restore saved style if stored in DB
         saved_style = self.db.get_state("reply_style")
@@ -190,6 +209,9 @@ class ReplyManager:
             can_send, reason = self.safety.can_reply(chat_id, draft)
             if not can_send:
                 logger.info(f"[AUTO REPLY SUPPRESSED] Chat {chat_id}: {reason}")
+                if "quiet hours" in reason.lower():
+                    # Sleep schedule active: quietly suppress auto-reply without disturbing Saved Messages
+                    return
                 if "cooldown" in reason.lower():
                     # NEVER skip mention messages: schedule deferred reply after cooldown!
                     if is_mention:
@@ -339,9 +361,13 @@ class ReplyManager:
                 "• `/stop` - Emergency stop switch (halts all replies)\n\n"
                 "*Reactions & Cooldowns:*\n"
                 "• `/reaction on` / `/reaction off` - Enable or disable auto-reactions\n"
-                "• `/reactioncooldown <count> <mins>` - Set reaction cooldown (e.g. `4 10`)\n"
-                "• `/chatcooldown <seconds>` - Custom per-chat reply cooldown\n"
-                "• `/globalcooldown <seconds>` - Custom global reply cooldown\n\n"
+                "• `/reactioncooldown <min> <max>` - Set random reaction cooldown (e.g. `3 9` seconds)\n"
+                "• `/chatcooldown <min> <max>` - Custom per-chat reply cooldown (e.g. `5 60`)\n"
+                "• `/globalcooldown <min> <max>` - Custom global reply cooldown (e.g. `5 60`)\n\n"
+                "*Quiet Hours (Sleep Schedule):*\n"
+                "• `/quiethours on [start] [end]` - Turn ON sleep schedule (e.g. `/quiethours on 23:00 07:00`)\n"
+                "• `/quiethours off` - Turn OFF sleep schedule\n"
+                "• `/quiethours` - Check current quiet hours status\n\n"
                 "*Custom Keyword Auto-Replies:*\n"
                 "• `/addrule <word> => <reply>` - Auto-reply when a word is detected\n"
                 "• `/delrule <word>` - Delete keyword trigger\n"
@@ -526,6 +552,14 @@ class ReplyManager:
                 "chatty_probability",
                 str(getattr(self.config, "chatty_probability", 0.15))
             ))
+            qh_enabled = self.safety.quiet_hours_enabled
+            qh_start, qh_end = self.safety.quiet_hours_window
+            is_quiet, _ = self.safety.is_in_quiet_hours()
+            qh_desc = f"ON ({qh_start}–{qh_end}, {'Sleeping 💤' if is_quiet else 'Awake ☀️'})" if qh_enabled else "OFF"
+            min_r_sec = float(self.db.get_state("reaction_min_cooldown_seconds", str(getattr(self.config, "reaction_min_cooldown_seconds", 3.0))))
+            max_r_sec = float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(self.config, "reaction_max_cooldown_seconds", 9.0))))
+            chat_cd_range = f"{int(self.safety.min_chat_cooldown)}s–{int(self.safety.max_chat_cooldown)}s"
+            global_cd_range = f"{int(self.safety.min_global_cooldown)}s–{int(self.safety.max_global_cooldown)}s"
             return (
                 f"📊 *TeleAutomator Status:*\n"
                 f"• Identity Name: `{owner}`\n"
@@ -533,9 +567,10 @@ class ReplyManager:
                 f"• Reply Mode: `{mode_display}` (change with `/mode <draft|approval|auto>`)\n"
                 f"• AI Style: `{style_display}` (change with `/style <casual|concise|formal|humorous>`)\n"
                 f"• Language: `{lang_display}` (change with `/lang <dynamic|english|hindi|...>`)\n"
-                f"• Reactions: *{react_status}* (max {max_r} in {win_m}m, customize via `/reaction`)\n"
+                f"• Reactions: *{react_status}* ({int(min_r_sec)}s–{int(max_r_sec)}s interval, max {max_r} in {win_m}m)\n"
+                f"• Quiet Hours: *{qh_desc}* (change with `/quiethours <on|off|start end>`)\n"
                 f"• Group Banter: `{int(chatty_prob * 100)}%` (change with `/chatty <0-100>`)\n"
-                f"• Cooldowns: Chat=`{self.safety.per_chat_cooldown_seconds}s`, Global=`{self.safety.global_cooldown_seconds}s`\n"
+                f"• Cooldowns: Chat=`{chat_cd_range}`, Global=`{global_cd_range}`\n"
                 f"• Auto Authorized: *{auto_status}*\n"
                 f"• Emergency Stop: *{stop_status}*\n"
                 f"• Pending Approvals: `{pending_count}`\n"
@@ -584,42 +619,167 @@ class ReplyManager:
                 return "🔒 Auto-reactions *DISABLED*."
             return "Usage: `/reaction on` or `/reaction off`"
 
-        if cmd in ("/reactioncooldown", "/reactionlimit"):
-            if len(cmd_parts) < 3:
+        if cmd in ("/quiethours", "/quiet", "/sleep"):
+            if len(cmd_parts) < 2:
+                qh_enabled = self.safety.quiet_hours_enabled
+                qh_start, qh_end = self.safety.quiet_hours_window
+                is_quiet, _ = self.safety.is_in_quiet_hours()
+                now_str = datetime.datetime.now().strftime("%H:%M")
+                status_title = "ON" if qh_enabled else "OFF (Default)"
+                sleep_state = "Sleeping 💤 (Auto-replies & reactions paused)" if is_quiet else "Awake ☀️ (Active)"
                 return (
-                    "Usage: `/reactioncooldown <max_reactions> <window_minutes>`\n"
-                    "Example: `/reactioncooldown 4 10` (max 4 reactions in 10 minutes)"
+                    f"🌙 *Quiet Hours (Sleep Schedule):* *{status_title}*\n"
+                    f"• Schedule: `{qh_start}` to `{qh_end}`\n"
+                    f"• Current Local Time: `{now_str}`\n"
+                    f"• Current State: *{sleep_state}*\n\n"
+                    f"*Commands:*\n"
+                    f"• `/quiethours on [start] [end]` - Turn ON (e.g. `/quiethours on 23:00 07:00`)\n"
+                    f"• `/quiethours off` - Turn OFF sleep schedule\n"
+                    f"• `/quiethours <start> <end>` - Update schedule & enable (e.g. `/quiethours 01:00 08:00`)"
                 )
-            try:
-                max_cnt = max(1, int(cmd_parts[1]))
-                win_mins = max(1, float(cmd_parts[2]))
-                self.db.set_state("reaction_max_per_window", str(max_cnt))
-                self.db.set_state("reaction_window_seconds", str(win_mins * 60.0))
-                return f"✅ Reaction rate limit updated: Max *{max_cnt}* reactions per *{win_mins:.0f}* minute(s)."
-            except ValueError:
-                return "Error: Both max_reactions and window_minutes must be valid numbers."
+
+            sub = cmd_parts[1].lower().strip()
+            if sub == "off":
+                self.safety.set_quiet_hours(False)
+                return "☀️ Quiet hours *DISABLED*. Automated replies and reactions are now active 24/7."
+
+            if sub == "on":
+                if len(cmd_parts) >= 4:
+                    t_start = _parse_time_str(cmd_parts[2])
+                    t_end = _parse_time_str(cmd_parts[3])
+                    if not t_start or not t_end:
+                        return "Error: Times must be in valid 24h format HH:MM (e.g. `23:00 07:00` or `01:00 08:00`)."
+                    self.safety.set_quiet_hours(True, t_start, t_end)
+                    return f"🌙 Quiet hours *ENABLED* from *{t_start}* to *{t_end}*. Automated replies & reactions will pause during this sleep window."
+                else:
+                    self.safety.set_quiet_hours(True)
+                    s, e = self.safety.quiet_hours_window
+                    return f"🌙 Quiet hours *ENABLED* with schedule *{s}* to *{e}*. Automated replies & reactions will pause during sleep hours."
+
+            # Direct schedule update: e.g. /quiethours 23:00 07:00 or /quiethours set 23:00 07:00
+            time_args = cmd_parts[2:] if sub == "set" else cmd_parts[1:]
+            if len(time_args) >= 2:
+                t_start = _parse_time_str(time_args[0])
+                t_end = _parse_time_str(time_args[1])
+                if not t_start or not t_end:
+                    return "Error: Times must be in valid 24h format HH:MM (e.g. `23:00 07:00` or `01:00 08:00`)."
+                self.safety.set_quiet_hours(True, t_start, t_end)
+                return f"🌙 Quiet hours schedule set to *{t_start}* – *{t_end}* and *ENABLED*."
+
+            return "Usage: `/quiethours on [start] [end]`, `/quiethours off`, or `/quiethours <start> <end>`"
+
+        if cmd in ("/reactioncooldown", "/reactcd", "/reactionlimit", "/reactioninterval"):
+            min_react = float(self.db.get_state(
+                "reaction_min_cooldown_seconds",
+                str(getattr(self.config, "reaction_min_cooldown_seconds", 3.0))
+            ))
+            max_react = float(self.db.get_state(
+                "reaction_max_cooldown_seconds",
+                str(getattr(self.config, "reaction_max_cooldown_seconds", 9.0))
+            ))
+            max_r = self.db.get_state("reaction_max_per_window", str(getattr(self.config, "reaction_max_per_window", 4)))
+            win_m = int(float(self.db.get_state("reaction_window_seconds", str(getattr(self.config, "reaction_window_seconds", 600.0)))) // 60)
+
+            if len(cmd_parts) < 2:
+                return (
+                    f"⚡ *Reaction Cooldown Settings:*\n"
+                    f"• Interval: Random `{int(min_react)}s` to `{int(max_react)}s` between reactions\n"
+                    f"• Rolling Rate Limit: Max *{max_r}* reactions per *{win_m}* minutes\n\n"
+                    f"*Commands:*\n"
+                    f"• `/reactioncooldown <min_sec> <max_sec>` - Set random interval (e.g. `/reactioncooldown 3 9`)\n"
+                    f"• `/reactioncooldown limit <max_count> <window_mins>` - Set rolling limit (e.g. `/reactioncooldown limit 4 10`)"
+                )
+
+            if cmd_parts[1].lower() == "limit" and len(cmd_parts) >= 4:
+                try:
+                    max_cnt = max(1, int(cmd_parts[2]))
+                    win_mins = max(1, float(cmd_parts[3]))
+                    self.db.set_state("reaction_max_per_window", str(max_cnt))
+                    self.db.set_state("reaction_window_seconds", str(win_mins * 60.0))
+                    return f"✅ Reaction rolling limit updated: Max *{max_cnt}* reactions per *{win_mins:.0f}* minute(s)."
+                except ValueError:
+                    return "Error: Both count and minutes must be valid numbers."
+
+            # Check if 2 numbers provided (e.g. /reactioncooldown 4 10 or /reactioncooldown 3 9)
+            if len(cmd_parts) >= 3:
+                try:
+                    v1 = float(cmd_parts[1])
+                    v2 = float(cmd_parts[2])
+                    min_sec = max(1.0, min(v1, v2))
+                    max_sec = max(min_sec, max(v1, v2))
+                    self.db.set_state("reaction_min_cooldown_seconds", str(min_sec))
+                    self.db.set_state("reaction_max_cooldown_seconds", str(max_sec))
+                    self._next_reaction_cooldown = random.uniform(min_sec, max_sec)
+
+                    # Also update window limit
+                    max_cnt = max(1, int(v1))
+                    win_mins = max(1.0, float(v2))
+                    self.db.set_state("reaction_max_per_window", str(max_cnt))
+                    self.db.set_state("reaction_window_seconds", str(win_mins * 60.0))
+                    return (
+                        f"✅ Reaction rate limit updated: Max *{max_cnt}* reactions per *{win_mins:.0f}* minute(s) "
+                        f"(Random interval: *{int(min_sec)}s*–*{int(max_sec)}s*)."
+                    )
+                except ValueError:
+                    return "Error: Cooldown values must be valid numbers."
+
+            return "Usage: `/reactioncooldown 3 9` (seconds) or `/reactioncooldown limit 4 10` (rolling limit)"
 
         if cmd in ("/chatcooldown", "/chatcd"):
             if len(cmd_parts) < 2:
-                curr = self.safety.per_chat_cooldown_seconds
-                return f"⏱️ *Current Per-Chat Cooldown:* `{curr}s`\nUsage: `/chatcooldown <seconds>` (e.g. `/chatcooldown 30`)"
+                min_cd = self.safety.min_chat_cooldown
+                max_cd = self.safety.max_chat_cooldown
+                return (
+                    f"⏱️ *Current Chat Reply Cooldown:* Random `{int(min_cd)}s` – `{int(max_cd)}s`\n\n"
+                    f"Usage:\n"
+                    f"• `/chatcooldown <min> <max>` - Set random cooldown range (e.g. `/chatcooldown 5 60`)\n"
+                    f"• `/chatcooldown <seconds>` - Set cooldown (e.g. `/chatcooldown 30`)"
+                )
             try:
-                secs = max(0, int(cmd_parts[1]))
-                self.db.set_state("per_chat_cooldown_seconds", str(secs))
-                return f"✅ Per-chat cooldown updated to *{secs}s*."
+                if len(cmd_parts) >= 3:
+                    min_val = max(1, int(cmd_parts[1]))
+                    max_val = max(min_val, int(cmd_parts[2]))
+                    self.db.set_state("min_chat_cooldown_seconds", str(min_val))
+                    self.db.set_state("max_chat_cooldown_seconds", str(max_val))
+                    self.db.set_state("per_chat_cooldown_seconds", str(max_val))
+                    return f"✅ Chat reply cooldown randomized range set to *{min_val}s* – *{max_val}s*."
+                else:
+                    secs = max(1, int(cmd_parts[1]))
+                    min_val = min(5, secs)
+                    self.db.set_state("min_chat_cooldown_seconds", str(min_val))
+                    self.db.set_state("max_chat_cooldown_seconds", str(secs))
+                    self.db.set_state("per_chat_cooldown_seconds", str(secs))
+                    return f"✅ Chat reply cooldown updated to *{secs}s*."
             except ValueError:
-                return "Error: Seconds must be an integer."
+                return "Error: Cooldown seconds must be valid integers."
 
         if cmd in ("/globalcooldown", "/globalcd"):
             if len(cmd_parts) < 2:
-                curr = self.safety.global_cooldown_seconds
-                return f"⏱️ *Current Global Cooldown:* `{curr}s`\nUsage: `/globalcooldown <seconds>` (e.g. `/globalcooldown 15`)"
+                min_cd = self.safety.min_global_cooldown
+                max_cd = self.safety.max_global_cooldown
+                return (
+                    f"⏱️ *Current Global Cooldown:* Random `{int(min_cd)}s` – `{int(max_cd)}s`\n\n"
+                    f"Usage:\n"
+                    f"• `/globalcooldown <min> <max>` - Set random range (e.g. `/globalcooldown 5 60`)\n"
+                    f"• `/globalcooldown <seconds>` - Set cooldown (e.g. `/globalcooldown 15`)"
+                )
             try:
-                secs = max(0, int(cmd_parts[1]))
-                self.db.set_state("global_cooldown_seconds", str(secs))
-                return f"✅ Global cooldown updated to *{secs}s*."
+                if len(cmd_parts) >= 3:
+                    min_val = max(1, int(cmd_parts[1]))
+                    max_val = max(min_val, int(cmd_parts[2]))
+                    self.db.set_state("min_global_cooldown_seconds", str(min_val))
+                    self.db.set_state("max_global_cooldown_seconds", str(max_val))
+                    self.db.set_state("global_cooldown_seconds", str(max_val))
+                    return f"✅ Global cooldown randomized range set to *{min_val}s* – *{max_val}s*."
+                else:
+                    secs = max(1, int(cmd_parts[1]))
+                    min_val = min(5, secs)
+                    self.db.set_state("min_global_cooldown_seconds", str(min_val))
+                    self.db.set_state("max_global_cooldown_seconds", str(secs))
+                    self.db.set_state("global_cooldown_seconds", str(secs))
+                    return f"✅ Global cooldown updated to *{secs}s*."
             except ValueError:
-                return "Error: Seconds must be an integer."
+                return "Error: Cooldown seconds must be valid integers."
 
         if cmd in ("/model", "/setmodel"):
             if len(cmd_parts) < 2:
@@ -894,7 +1054,28 @@ class ReplyManager:
         if not enabled:
             return False
 
-        # Check reaction cooldown
+        # Check quiet hours (sleep schedule)
+        is_quiet, _ = self.safety.is_in_quiet_hours()
+        if is_quiet:
+            logger.debug("[REACTION] Suppressed reaction: quiet hours sleep schedule active.")
+            return False
+
+        # Check randomized interval cooldown (3s to 9s)
+        now = time.time()
+        min_react_cd = float(self.db.get_state(
+            "reaction_min_cooldown_seconds",
+            str(getattr(self.config, "reaction_min_cooldown_seconds", 3.0))
+        ))
+        max_react_cd = float(self.db.get_state(
+            "reaction_max_cooldown_seconds",
+            str(getattr(self.config, "reaction_max_cooldown_seconds", 9.0))
+        ))
+        if (now - self._last_reaction_time) < self._next_reaction_cooldown:
+            wait_rem = round(self._next_reaction_cooldown - (now - self._last_reaction_time), 1)
+            logger.debug(f"[REACTION] Cooldown active ({wait_rem}s remaining before next reaction).")
+            return False
+
+        # Check rolling rate limit
         max_reactions = int(self.db.get_state(
             "reaction_max_per_window",
             str(getattr(self.config, "reaction_max_per_window", 4))
@@ -907,7 +1088,7 @@ class ReplyManager:
         recent_count = self.db.get_recent_reaction_count(window_seconds)
         if recent_count >= max_reactions:
             logger.debug(
-                f"[REACTION] Cooldown active: {recent_count}/{max_reactions} reactions used in last {int(window_seconds // 60)}m."
+                f"[REACTION] Rate limit reached: {recent_count}/{max_reactions} reactions used in last {int(window_seconds // 60)}m."
             )
             return False
 
@@ -945,12 +1126,17 @@ class ReplyManager:
         try:
             from telethon.tl.functions.messages import SendReactionRequest
             from telethon.tl.types import ReactionEmoji
-            import time
 
             peer = await self._client.get_input_entity(chat_id)
             await self._client(SendReactionRequest(peer=peer, msg_id=message_id, reaction=[ReactionEmoji(emoticon=chosen)]))
-            self.db.record_reaction(time.time())
-            logger.info(f"[REACTION] Reacted {chosen} to message {message_id} in chat {chat_id}.")
+            now = time.time()
+            self.db.record_reaction(now)
+            self._last_reaction_time = now
+            self._next_reaction_cooldown = random.uniform(min_react_cd, max_react_cd)
+            logger.info(
+                f"[REACTION] Reacted {chosen} to message {message_id} in chat {chat_id}. "
+                f"Next reaction cooldown: {round(self._next_reaction_cooldown, 1)}s."
+            )
             return True
         except Exception as e:
             logger.debug(f"[REACTION] Could not send reaction {chosen} to chat {chat_id}: {e}")
