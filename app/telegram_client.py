@@ -178,13 +178,19 @@ class TelegramService:
         return self.client
 
     async def _heartbeat_loop(self) -> None:
-        """Periodically write health status file."""
+        """Periodically write health status file and trigger scheduled tasks."""
         while self._running:
             is_connected = bool(self.client and self.client.is_connected())
             self.health.update_heartbeat(
                 is_connected=is_connected,
                 emergency_stop=self.safety.is_emergency_stopped,
             )
+            # Check quiet hours goodnight sign-off for active groups
+            try:
+                await self.reply_manager.maybe_send_quiet_hours_goodnight()
+            except Exception as e:
+                logger.debug(f"Quiet hours goodnight check error: {e}")
+
             await asyncio.sleep(30)
 
     async def run(self) -> None:

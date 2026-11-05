@@ -290,3 +290,20 @@ def test_group_language_rules():
     )
     assert "GROUP LANGUAGE (Hindi/Hinglish)" in prompt_hi_group
     assert "Hindi or Hinglish" in prompt_hi_group
+
+
+def test_clean_reply_suppresses_none_and_word_repetition():
+    """Verify clean_reply handles literal None and cleans consecutive duplicate words."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+
+    # None and empty variations return empty string
+    assert pm.clean_reply("None") == ""
+    assert pm.clean_reply("none.") == ""
+    assert pm.clean_reply("null") == ""
+    assert pm.clean_reply("undefined") == ""
+
+    # Immediate word repetitions are condensed
+    assert pm.clean_reply("bro bro was thinking the same") == "bro was thinking the same"
+    assert pm.clean_reply("haan haan sahi hai") == "haan sahi hai"
+    assert pm.clean_reply("cool cool cool") == "cool"
+

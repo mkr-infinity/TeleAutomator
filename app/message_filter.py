@@ -76,11 +76,10 @@ class MessageFilter:
         if not self.privacy.is_chat_allowed(chat_id, is_group):
             return False, f"Chat {chat_id} is not allowlisted"
 
-        # 7. Group smart filtering: Avoid spamming noisy groups
+        # 7. Group smart filtering: Strict mention-only mode check
         if is_group and self.db:
-            # Default to mention_only=True ("1") unless user explicitly disables it
-            mention_only = self.db.get_state("group_mention_only", "1") == "1"
-            if mention_only:
+            strict_mention_only = self.db.get_state("group_mention_only", "0") == "1"
+            if strict_mention_only:
                 is_mentioned = False
                 if message_obj and getattr(message_obj, "mentioned", False):
                     is_mentioned = True
@@ -92,15 +91,10 @@ class MessageFilter:
                     if owner_name and len(owner_name) >= 3 and re.search(r"\b" + re.escape(owner_name) + r"\b", raw_text.lower()):
                         is_mentioned = True
                     elif getattr(event, "is_reply", False):
-                        # Candidate reply; refined in event handler with verified sender
                         is_mentioned = True
 
                 if not is_mentioned:
-                    # Allow message through if group banter or passive reactions are enabled
-                    chatty_prob = float(self.db.get_state("chatty_probability", "0.0"))
-                    react_only_prob = float(self.db.get_state("react_only_probability", "0.0"))
-                    if chatty_prob <= 0.0 and react_only_prob <= 0.0:
-                        return False, "Group message does not mention or reply to your account"
+                    return False, "Strict mention-only mode is enabled for groups"
 
         # 8. Check sensitive content / OTPs & Scammer links
         if self.safety.is_sensitive(raw_text):

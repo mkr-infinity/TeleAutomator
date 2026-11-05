@@ -1177,3 +1177,83 @@ def test_database_backup_and_data_persistence(tmp_path: Path):
         assert reloaded_ctx["notes"] == "Tech Project"
 
     asyncio.run(_run())
+
+
+def test_group_relevance_and_20m_idle(tmp_path: Path):
+    """Verify smart group relevance scoring and 20-minute idle tracker."""
+    import time
+    cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+    db = Database(tmp_path / "test_group_rel.db")
+    safety = SafetyManager(cfg, db)
+    privacy = PrivacyManager(cfg, database=db)
+    generator = ReplyGenerator(cfg, database=db)
+    mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+    chat_id = -100999888
+    # 1. 20m idle check initially false (marks first encounter)
+    assert mgr.check_group_20m_idle(chat_id) is False
+
+    # Simulate 21 minutes passing
+    mgr._last_group_activity[chat_id] = time.time() - 1300.0
+    assert mgr.check_group_20m_idle(chat_id) is True
+
+    # Mark activity resets timer
+    mgr.mark_group_activity(chat_id)
+    assert mgr.check_group_20m_idle(chat_id) is False
+
+    # 2. Relevance checking via permanent context & keywords
+    db.set_permanent_context(chat_id, pinned_text="Python automation project rules", notes="FastAPI backend")
+
+    # Message matching keywords is relevant
+    assert mgr.is_group_message_relevant(chat_id, "anyone worked with python here", "Dev Group") is True
+    assert mgr.is_group_message_relevant(chat_id, "how to resolve this error", "General") is True
+    # Off-topic chatter without questions or keywords is not relevant
+    assert mgr.is_group_message_relevant(chat_id, "random chat potato salad", "Music Lounge") is False
+
+
+def test_alerts_suppressed_when_paused_stopped_or_quiet(tmp_path: Path):
+    """Verify approval and issue alerts are suppressed when paused, stopped, in quiet hours, or in draft mode."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", reply_mode="draft", data_dir=tmp_path)
+        db = Database(tmp_path / "test_alerts.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        mock_client = MagicMock()
+        mock_client.send_message = AsyncMock()
+        mgr.set_telegram_client(mock_client)
+
+        # In draft mode: issue alert is suppressed
+        await mgr._notify_issue_to_saved_messages(101, "Test Chat", "Alice", "Test Error")
+        mock_client.send_message.assert_not_called()
+
+        # Switch to auto mode, but pause safety
+        mgr.db.set_state("reply_mode", "auto")
+        safety.set_timed_pause(300)
+        await mgr._notify_approval_needed(1, 101, "Test Chat", "Alice", "hi", "hey")
+        await mgr._notify_issue_to_saved_messages(101, "Test Chat", "Alice", "Test Error")
+        mock_client.send_message.assert_not_called()
+
+    asyncio.run(_run())
+
+
+def test_prompt_command_displays_full_text(tmp_path: Path):
+    """Verify /prompt command returns complete system instructions without slicing at 1200 chars."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "test_prompt.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        res = await mgr.handle_control_command("/prompt")
+        assert "CRITICAL TEXTING RULES" in res
+        assert "NEVER USE QUESTION MARKS" in res
+        assert "NO REPETITION / NO SPAM" in res
+        assert len(res) > 1200
+
+    asyncio.run(_run())
+

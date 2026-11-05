@@ -95,6 +95,10 @@ class GeminiProvider(AIProvider):
                     if candidates:
                         parts = candidates[0].get("content", {}).get("parts", [])
                         if parts:
+                            raw_text = parts[0].get("text")
+                            if raw_text is None or str(raw_text).strip().lower() in ("none", "none.", "null", "null.", "undefined", ""):
+                                logger.warning(f"Gemini model '{m}' returned empty/None text. Trying fallback...")
+                                continue
                             if self.usage_callback:
                                 try:
                                     meta = body.get("usageMetadata", {})
@@ -104,7 +108,7 @@ class GeminiProvider(AIProvider):
                                     self.usage_callback("gemini", m, pt, ct, tt)
                                 except Exception:
                                     pass
-                            return str(parts[0].get("text", "")).strip().strip('"')
+                            return str(raw_text).strip().strip('"')
             except urllib.error.HTTPError as e:
                 last_error = e
                 logger.warning(f"Gemini model '{m}' request failed ({e.code}). Trying fallback...")
@@ -200,7 +204,11 @@ class OpenAIProvider(AIProvider):
                     body = json.loads(resp.read().decode("utf-8"))
                     choices = body.get("choices", [])
                     if choices:
-                        content = str(choices[0].get("message", {}).get("content", "")).strip().strip('"')
+                        raw_content = choices[0].get("message", {}).get("content")
+                        if raw_content is None or str(raw_content).strip().lower() in ("none", "none.", "null", "null.", "undefined", ""):
+                            logger.warning(f"OpenAI-compatible model '{m}' returned empty/None content. Trying next candidate...")
+                            continue
+                        content = str(raw_content).strip().strip('"')
                         if m != self.model:
                             logger.info(f"AI model automatically switched from '{self.model}' to working fallback '{m}'.")
                             self.model = m

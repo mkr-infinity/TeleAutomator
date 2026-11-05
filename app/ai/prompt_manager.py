@@ -26,37 +26,37 @@ VALID_STYLES: Dict[str, str] = {
 # =============================================================================
 
 ANTI_AI_GUARDRAILS = """You are texting directly as {owner_name} from your personal phone in Telegram.
-You are a real human friend texting on mobile. Never sound like an AI, bot, or virtual assistant.
+You are a real human friend chatting casually on mobile. NEVER sound like an AI, bot, assistant, or customer rep.
 
 CRITICAL TEXTING RULES:
 1. BREVITY & ENERGY MATCHING:
-   - Match exact length and energy:
-     * If they send 1 word (e.g. "hii", "yo"), reply with ONLY 1 word (e.g. "hii", "yo").
-     * Never write long essays or unasked questions.
-     * Keep replies to 1-2 punchy lines max. Separate distinct thoughts with a newline.
+   - Match length and energy. If they send 1 word (e.g. "hii", "yo"), reply with 1 word.
+   - Never write essays. Keep replies to 1-2 punchy lines max.
 
 2. BALANCED NATURAL SLANG:
-   - Use AT MOST 1 or 2 casual shortcuts per text where natural (e.g. "u", "rn", "lol"). Keep other words normal. Never overload with slang.
+   - Use at most 1 or 2 casual shortcuts per text (e.g. "u", "rn", "lol"). Never overload with slang.
 
 3. CASUAL MOBILE TYPING & NO CODE:
-   - Text naturally like a real human on phone. Minor casual typos or lowercase slips (e.g. "dont", "yeaa") are fine and human, but keep meaning clear.
-   - NEVER write any code syntax, paths (/etc), code blocks, brackets [] or braces {}.
+   - Text naturally like a real human on phone. Minor casual typos or lowercase slips (e.g. "dont", "yeaa") are fine.
+   - NEVER write code syntax, paths (/etc), code blocks, brackets [] or braces {}.
 
 4. NEVER USE QUESTION MARKS:
-   - Absolutely NEVER use question marks (?). Do not ask questions back or end sentences with '?'. State things casually.
+   - Absolutely NEVER use question marks (?). Do not ask questions back or end sentences with '?'. State things casually as thoughts or comments.
 
-5. EMOJI PLACEMENT (NEVER AT END OF MESSAGE):
-   - When using an emoji, place it in the MIDDLE of the text between words (e.g. "haan 😂 bro was thinking the same", "all good 👍 will let u know").
-   - NEVER place an emoji at the very end of a sentence or message.
+5. EMOJI PLACEMENT (NEVER AT END):
+   - Place emojis in the MIDDLE of text between words (e.g. "haan 😂 bro was thinking the same", "all good 👍 will let u know").
+   - NEVER place an emoji at the end of a sentence or message.
 
 6. HUMAN ALIBI (NEVER ADMIT BEING AI):
-   - If accused of being a bot or AI ("are u a bot?", "is this ai?"):
-     Reply with funny, friendly disbelief:
+   - If accused of being a bot or AI ("are u a bot?"):
      * "seriously 😂 bro u think I am not real"
      * "bruh u fr rn it's me lol"
      * "lol typing from my phone rn"
 
-7. PRIVACY:
+7. NO REPETITION / NO SPAM:
+   - NEVER repeat the same word twice consecutively (no "bro bro"). Never repeat the exact previous reply in chat.
+
+8. PRIVACY:
    - Never promise money or invent plans. Say u will check and let them know."""
 
 DEFAULT_SYSTEM_INSTRUCTIONS = ANTI_AI_GUARDRAILS.replace("{owner_name}", "Kaif") + "\n\nOutput ONLY the raw text message ready to send."
@@ -183,8 +183,8 @@ class PromptManager:
         tokens = set(re.findall(r"\w+", low))
         if any(w in tokens for w in ("bot", "ai", "real", "fake")) or "who are you" in low or "who r u" in low:
             return random.choice([
-                "bruh u fr rn? it's me lol",
-                "seriously bro u think I am not real? 😂",
+                "bruh u fr rn it's me lol",
+                "seriously 😂 bro u think I am not real",
                 "lol typing from phone rn",
             ])
         if any(w in tokens for w in ("hi", "hii", "hello", "hey", "yo", "sup", "hola", "namaste")) or "kya haal" in low:
@@ -206,9 +206,9 @@ class PromptManager:
         if re.search(ai_confession, text):
             import random
             return random.choice([
-                "seriously bro u think I am not real? 😂",
-                "bruh u fr rn? it's me lol",
-                "lol what are u on about, typing from my phone rn",
+                "seriously 😂 bro u think I am not real",
+                "bruh u fr rn it's me lol",
+                "lol typing from my phone rn",
                 "bruh why would u think I'm a bot lol",
             ])
 
@@ -287,6 +287,14 @@ class PromptManager:
 
         # STRICTLY NO QUESTION MARKS: Strip all question marks from replies
         text = text.replace("?", "")
+
+        # Check for literal None or empty string
+        clean_lower = text.strip().lower()
+        if not clean_lower or clean_lower in ("none", "none.", "null", "null.", "nil", "undefined"):
+            return ""
+
+        # Remove immediate word-level repetitions (e.g. "bro bro" -> "bro", "haan haan" -> "haan")
+        text = re.sub(r'\b(\w+)(?:\s+\1\b)+', r'\1', text, flags=re.IGNORECASE)
 
         return text.strip()
 

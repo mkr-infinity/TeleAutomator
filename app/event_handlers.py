@@ -83,28 +83,6 @@ def register_handlers(
 
         is_mention = not is_group or (is_explicitly_mentioned or is_reply_to_me)
 
-        if is_group and reply_manager.db:
-            mention_only = reply_manager.db.get_state("group_mention_only", "1") == "1"
-            if mention_only and not is_mention:
-                # Improvement 2: Check random group banter chime-in probability
-                chatty_prob = float(reply_manager.db.get_state(
-                    "chatty_probability",
-                    str(getattr(reply_manager.config, "chatty_probability", 0.15))
-                ))
-                import random
-                if chatty_prob > 0.0 and random.random() < chatty_prob:
-                    logger.info(f"[GROUP BANTER] Random chatty trigger activated ({int(chatty_prob*100)}%) for chat {chat_id}.")
-                else:
-                    # Improvement 3: Randomized reaction participation without text reply!
-                    react_only_prob = float(reply_manager.db.get_state(
-                        "react_only_probability",
-                        str(getattr(reply_manager.config, "react_only_probability", 0.25))
-                    ))
-                    if random.random() < react_only_prob:
-                        await reply_manager.maybe_send_reaction(chat_id, message_id, text)
-                    logger.debug(f"Group message in {chat_id} ignored: not mentioned and not selected for banter.")
-                    return
-
         # Resolve chat title and sender name safely
         chat_title = f"Chat {chat_id}"
         try:
@@ -127,7 +105,7 @@ def register_handlers(
         except Exception:
             pass
 
-        # Cache current incoming message into local SQLite database
+        # Cache current incoming message into local SQLite database for conversation history
         reply_manager.db.record_chat_message(
             chat_id=chat_id,
             message_id=message_id,
@@ -136,6 +114,46 @@ def register_handlers(
             text=text,
             is_outgoing=False,
         )
+
+        # Group smart engagement decision
+        if is_group and reply_manager.db:
+            strict_mention = reply_manager.db.get_state("group_mention_only", "0") == "1"
+            if strict_mention and not is_mention:
+                logger.debug(f"Group message in {chat_id} ignored: strict mention-only active.")
+                return
+
+            import random
+            if is_mention:
+                # Direct mention or reply to our account: always reply, with optional reaction
+                if random.random() < 0.25:
+                    await reply_manager.maybe_send_reaction(chat_id, message_id, text)
+                reply_manager.mark_group_activity(chat_id)
+            else:
+                # Smart human group engagement logic:
+                is_idle_20m = reply_manager.check_group_20m_idle(chat_id)
+                if is_idle_20m:
+                    logger.info(f"[GROUP 20M ENGAGEMENT] 20 minutes elapsed without engagement in group {chat_id}. Engaging naturally.")
+                    reply_manager.mark_group_activity(chat_id)
+                else:
+                    is_relevant = reply_manager.is_group_message_relevant(chat_id, text, chat_title)
+                    if is_relevant:
+                        # Relevant to group topic: ~45% reply, ~25% reaction, ~30% passive reading
+                        roll = random.random()
+                        if roll < 0.45:
+                            logger.info(f"[GROUP TOPIC ENGAGEMENT] Message in {chat_id} is relevant to group topic. Replying ({int(0.45*100)}%).")
+                            reply_manager.mark_group_activity(chat_id)
+                        elif roll < 0.70:
+                            logger.info(f"[GROUP TOPIC REACTION] Message in {chat_id} is relevant. Reacting with emoji.")
+                            await reply_manager.maybe_send_reaction(chat_id, message_id, text)
+                            reply_manager.mark_group_activity(chat_id)
+                            return
+                        else:
+                            logger.debug(f"Group message in {chat_id} relevant, but choosing to read silently.")
+                            return
+                    else:
+                        # Message is not relevant to group topic, not a mention, and not after 20m idle
+                        logger.debug(f"Group message in {chat_id} ignored: not mentioned and not relevant to group topic.")
+                        return
 
         # Retrieve recent conversation context with aging window (default: 2 hours TTL)
         ttl_hours = float(reply_manager.db.get_state("context_ttl_hours", "2.0"))

@@ -52,6 +52,8 @@ class ReplyManager:
         self.min_delay: float = getattr(config, "min_delay_seconds", 5.0)
         self.max_delay: float = getattr(config, "max_delay_seconds", 60.0)
         self._last_reaction_time: float = 0.0
+        self._last_sent_reply_by_chat: dict[int, str] = {}
+        self._last_group_activity: dict[int, float] = {}
         self._next_reaction_cooldown: float = random.uniform(
             float(self.db.get_state("reaction_min_cooldown_seconds", str(getattr(config, "reaction_min_cooldown_seconds", 3.0)))),
             float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(config, "reaction_max_cooldown_seconds", 9.0)))),
@@ -218,20 +220,23 @@ class ReplyManager:
                     )
                     return
 
-        if not draft:
+        if not draft or draft.strip().lower() in ("none", "none.", "null", "null.", "undefined", ""):
             if is_mention:
-                logger.info(f"[MENTION FALLBACK] Empty AI draft, using natural human fallback for mention in chat {chat_id}.")
+                logger.info(f"[MENTION FALLBACK] Empty or None AI draft, using natural human fallback for mention in chat {chat_id}.")
                 draft = self.generator.prompt_manager.get_fallback_reply(clean_text)
             else:
-                logger.warning(f"No draft generated for chat {chat_id}.")
+                logger.warning(f"No valid draft generated for chat {chat_id}.")
                 await self._notify_issue_to_saved_messages(
                     chat_id=chat_id,
                     chat_title=chat_title,
                     sender_name=sender_name,
-                    error_msg="Empty response from AI engine; reply was dropped safely.",
+                    error_msg="Empty or None response from AI engine; reply was dropped safely.",
                     incoming_text=clean_text,
                 )
                 return
+
+        # Prevent repeating the same word or exact reply consecutively in this chat
+        draft = self._prevent_duplicate_reply(chat_id, draft)
 
         mode = self.current_mode
 
@@ -405,6 +410,16 @@ class ReplyManager:
         draft_text: str,
     ) -> None:
         """Notify the user in their private Saved Messages control channel."""
+        if not self._client:
+            return
+
+        # Suppress alerts when automation is paused, stopped, or in quiet hours
+        if self.safety.is_emergency_stopped or self.safety.get_remaining_pause_seconds() > 0:
+            return
+        is_quiet, _ = self.safety.is_in_quiet_hours()
+        if is_quiet:
+            return
+
         notification = (
             f"📝 *Pending Approval #{approval_id}*\n"
             f"• *Chat:* {chat_title} (`{chat_id}`)\n"
@@ -413,12 +428,11 @@ class ReplyManager:
             f"• *Suggested Reply:* \"{draft_text}\"\n\n"
             f"Send `/approve {approval_id}` to send, or `/reject {approval_id}` to discard."
         )
-        if self._client:
-            try:
-                # 'me' in Telethon resolves to the user's private Saved Messages
-                await self._client.send_message("me", notification, parse_mode="md")
-            except Exception as e:
-                logger.error(f"Failed to send approval notification to Saved Messages: {e}")
+        try:
+            # 'me' in Telethon resolves to the user's private Saved Messages
+            await self._client.send_message("me", notification, parse_mode="md")
+        except Exception as e:
+            logger.error(f"Failed to send approval notification to Saved Messages: {e}")
 
     async def _notify_issue_to_saved_messages(
         self,
@@ -431,6 +445,16 @@ class ReplyManager:
         """Send internal error/issue alerts exclusively to user's private Saved Messages."""
         if not self._client:
             return
+
+        # Suppress alerts if automation is paused, emergency stopped, in quiet hours, or in draft mode
+        if self.safety.is_emergency_stopped or self.safety.get_remaining_pause_seconds() > 0:
+            return
+        is_quiet, _ = self.safety.is_in_quiet_hours()
+        if is_quiet:
+            return
+        if self.current_mode == "draft":
+            return
+
         try:
             target_name = chat_title or f"Chat {chat_id}"
             sender = f" from *{sender_name}*" if sender_name else ""
@@ -629,8 +653,8 @@ class ReplyManager:
 
         if cmd in ("/chats", "/allowlist", "/listchats"):
             chats_df = await self.get_allowed_chats_dataframe()
-            mention_only = self.db.get_state("group_mention_only", "1") == "1"
-            filter_str = "@Mentions / Replies Only" if mention_only else "All Group Messages"
+            mention_only = self.db.get_state("group_mention_only", "0") == "1"
+            filter_str = "@Mentions / Replies Only" if mention_only else "Smart Human Engagement (Relevant Topics & 20m Idle)"
             return (
                 f"📋 *Active Allowlisted Chats (DataFrame):*\n"
                 f"{chats_df}\n\n"
@@ -671,14 +695,14 @@ class ReplyManager:
 
         if cmd in ("/mentiononly", "/mentions"):
             if len(cmd_parts) < 2 or cmd_parts[1].lower() not in ("on", "off"):
-                current = "ON (safe: only replies when mentioned/replied to)" if self.db.get_state("group_mention_only", "1") == "1" else "OFF (replies to all group messages)"
+                current = "ON (strict: only replies when mentioned/replied to)" if self.db.get_state("group_mention_only", "0") == "1" else "OFF (natural human engagement: replies/reacts to relevant topics, mentions, or after 20m idle)"
                 return f"Group mention filter is currently: *{current}*\nUsage: `/mentiononly on` or `/mentiononly off`"
             val = "1" if cmd_parts[1].lower() == "on" else "0"
             self.db.set_state("group_mention_only", val)
             if val == "1":
                 return "🛡️ Group automation: *Mentions Only* activated. The client will only reply in groups when someone mentions your @username or replies directly to your message."
             else:
-                return "⚠️ Group automation: *All Messages* activated. The client may reply to any message in allowlisted groups."
+                return "🌟 Group automation: *Smart Human Engagement* activated. The client will naturally reply or react to relevant group topics, answer mentions, and chime in after 20 minutes of idle time."
 
         if cmd in ("/mode", "/setmode"):
             if len(cmd_parts) < 2:
@@ -1476,7 +1500,7 @@ class ReplyManager:
                 f"• *Active Style:* `{self.generator.style}`\n"
                 f"• *Language:* `{self.generator.language}`\n\n"
                 f"*Compiled Prompt (sent to AI):*\n"
-                f"```\n{full_inst[:1200]}\n```\n\n"
+                f"```\n{full_inst[:3800]}\n```\n\n"
                 f"_Use `/setprompt <text>` to customize persona, or `/setprompt default` to reset._"
             )
 
@@ -1739,6 +1763,127 @@ class ReplyManager:
             logger.debug(f"[REACTION] Could not send reaction {chosen} to chat {chat_id}: {e}")
             return False
 
+    def _prevent_duplicate_reply(self, chat_id: int, text: str) -> str:
+        """Prevent repeating the exact same message or short phrase consecutively in the same chat."""
+        last_sent = self._last_sent_reply_by_chat.get(chat_id, "").strip().lower()
+        curr = text.strip().lower()
+        if not last_sent or not curr:
+            return text
+
+        if curr == last_sent or (len(curr.split()) <= 2 and curr == last_sent):
+            alternatives = {
+                "yo": ["hey", "sup", "haan", "bol"],
+                "hii": ["hey", "yo", "hello", "haan"],
+                "hey": ["yo", "sup", "haan", "bol"],
+                "haan": ["sahi hai", "haan bhai", "batao", "all good"],
+                "nice": ["great", "mast", "sahi", "cool"],
+                "cool": ["nice", "sahi hai", "mast", "great"],
+                "okay": ["done", "got it", "all good", "sure"],
+                "all good": ["sahi hai", "done", "chill hai", "mast"],
+            }
+            if curr in alternatives:
+                return random.choice(alternatives[curr])
+            return f"all good {text}".strip()
+        return text
+
+    def is_group_message_relevant(self, chat_id: int, text: str, chat_title: str = "") -> bool:
+        """Check if an incoming group message is relevant to the group's permanent context, pinned summary, or topic."""
+        clean_text = text.strip().lower()
+        if not clean_text:
+            return False
+
+        # 1. Check permanent context and pinned info
+        ctx = self.db.get_permanent_context(chat_id)
+        context_corpus = ""
+        if ctx:
+            context_corpus += f" {ctx.get('notes', '')} {ctx.get('pinned_text', '')} {ctx.get('pinned_summary', '')}"
+        if chat_title:
+            context_corpus += f" {chat_title}"
+
+        if context_corpus.strip():
+            import re
+            keywords = set(re.findall(r"\b[a-zA-Z]{4,}\b", context_corpus.lower()))
+            stopwords = {"group", "chat", "rules", "always", "this", "that", "with", "from", "have", "will", "what", "here"}
+            meaningful_kw = keywords - stopwords
+            if meaningful_kw:
+                msg_words = set(re.findall(r"\b[a-zA-Z]{4,}\b", clean_text))
+                if msg_words.intersection(meaningful_kw):
+                    return True
+
+        # 2. Check if the message is a genuine technical/topic question or discussion prompt
+        question_or_discussion_words = (
+            "how to", "how do", "anyone know", "any idea", "what is", "why is",
+            "can we", "does anyone", "help with", "thoughts on", "what do you think",
+            "kisi ko", "kaise kare", "batao", "kya lagta", "solution", "issue", "error",
+            "working on", "anyone tried", "suggestion", "opinions", "thoughts"
+        )
+        if any(phrase in clean_text for phrase in question_or_discussion_words):
+            return True
+
+        return False
+
+    def check_group_20m_idle(self, chat_id: int) -> bool:
+        """Check if 20 minutes (1200s) have passed without any reply or engagement in this group."""
+        now = time.time()
+        last_time = self._last_group_activity.get(chat_id)
+        if last_time is None:
+            self._last_group_activity[chat_id] = now
+            return False
+        return (now - last_time) >= 1200.0
+
+    def mark_group_activity(self, chat_id: int) -> None:
+        """Update last activity timestamp for group."""
+        self._last_group_activity[chat_id] = time.time()
+
+    async def maybe_send_quiet_hours_goodnight(self) -> None:
+        """Before or upon entering quiet hours (2:00 AM IST), write bye/goodnight to active allowlisted groups."""
+        if not self._client or not self.safety.quiet_hours_enabled:
+            return
+
+        ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+        now_ist = datetime.datetime.now(ist_tz)
+        today_str = now_ist.strftime("%Y-%m-%d")
+
+        last_goodnight = self.db.get_state("last_quiet_goodnight_date", "")
+        if last_goodnight == today_str:
+            return
+
+        start_str, _ = self.safety.quiet_hours_window
+        try:
+            sh, sm = map(int, start_str.strip().split(":"))
+        except Exception:
+            return
+
+        target_mins = sh * 60 + sm
+        curr_mins = now_ist.hour * 60 + now_ist.minute
+        # Trigger window: 15 minutes before start up to 15 minutes after (e.g. 01:45 to 02:15 IST)
+        diff = (curr_mins - target_mins) % 1440
+        if diff <= 15 or (1440 - diff) <= 15:
+            allowed_groups = list(self.privacy.allowed_groups)
+            if not allowed_groups:
+                known = self.db.get_known_chats()
+                allowed_groups = [c["chat_id"] for c in known if c.get("chat_id", 0) < 0 and self.privacy.is_chat_allowed(c["chat_id"], True)]
+
+            if allowed_groups:
+                phrases = [
+                    "bye guys, going to sleep rn",
+                    "aight guys heading to bed, talk tomorrow",
+                    "goodnight everyone, sleeping now",
+                    "gn guys, sleep time for me",
+                    "bye guys, off to sleep rn",
+                ]
+                text = random.choice(phrases)
+                for gid in allowed_groups:
+                    try:
+                        peer = await self._client.get_input_entity(gid)
+                        await self._client.send_message(peer, text)
+                        logger.info(f"[QUIET HOURS SIGN-OFF] Sent goodnight message to group {gid}: '{text}'")
+                        await asyncio.sleep(random.uniform(2.0, 4.0))
+                    except Exception as e:
+                        logger.debug(f"Could not send goodnight to group {gid}: {e}")
+
+                self.db.set_state("last_quiet_goodnight_date", today_str)
+
     async def _send_reply(
         self,
         chat_id: int,
@@ -1805,6 +1950,9 @@ class ReplyManager:
             # Send first message part
             first_sent = await self._client.send_message(chat_id, first_part, reply_to=reply_to_msg_id)
             self.safety.mark_reply_sent(chat_id)
+            self._last_sent_reply_by_chat[chat_id] = first_part
+            if chat_id < 0:
+                self.mark_group_activity(chat_id)
             first_msg_id = getattr(first_sent, "id", 0)
             if not isinstance(first_msg_id, int):
                 first_msg_id = 0

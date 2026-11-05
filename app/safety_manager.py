@@ -228,14 +228,14 @@ class SafetyManager:
         """Whether quiet hours / sleep schedule is active."""
         return self.db.get_state(
             "quiet_hours_enabled",
-            "1" if getattr(self.config, "quiet_hours_enabled", False) else "0",
+            "1" if getattr(self.config, "quiet_hours_enabled", True) else "0",
         ) == "1"
 
     @property
     def quiet_hours_window(self) -> tuple[str, str]:
         """Configured (start, end) time strings in HH:MM format."""
-        start = self.db.get_state("quiet_hours_start", getattr(self.config, "quiet_hours_start", "23:00"))
-        end = self.db.get_state("quiet_hours_end", getattr(self.config, "quiet_hours_end", "07:00"))
+        start = self.db.get_state("quiet_hours_start", getattr(self.config, "quiet_hours_start", "02:00"))
+        end = self.db.get_state("quiet_hours_end", getattr(self.config, "quiet_hours_end", "08:00"))
         return start, end
 
     def set_quiet_hours(self, enabled: bool, start: Optional[str] = None, end: Optional[str] = None) -> None:
@@ -250,6 +250,7 @@ class SafetyManager:
     def is_in_quiet_hours(self, now_time: Optional[datetime.time] = None) -> tuple[bool, str]:
         """
         Check if the current time falls inside the configured Quiet Hours (sleep schedule).
+        Evaluated in Indian Standard Time (IST, UTC+05:30) by default.
         Returns (is_active, status_message).
         """
         if not self.quiet_hours_enabled:
@@ -264,7 +265,9 @@ class SafetyManager:
         except Exception:
             return False, f"Invalid quiet hours format ({start_str}-{end_str})"
 
-        cur_t = now_time if now_time is not None else datetime.datetime.now().time()
+        # Default to Indian Standard Time (IST, UTC+05:30) for reliable 2am-8am sleep schedule across clouds
+        ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+        cur_t = now_time if now_time is not None else datetime.datetime.now(ist_tz).time()
 
         if start_t <= end_t:
             in_window = start_t <= cur_t < end_t

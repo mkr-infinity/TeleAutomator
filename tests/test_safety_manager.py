@@ -111,10 +111,13 @@ def test_quiet_hours_schedule(tmp_path: Path):
     db = Database(tmp_path / "test_qh.db")
     safety = SafetyManager(cfg, db)
 
-    # Off by default
-    assert safety.quiet_hours_enabled is False
-    is_quiet, _ = safety.is_in_quiet_hours()
-    assert is_quiet is False
+    # On by default (02:00 - 08:00 Indian Time)
+    assert safety.quiet_hours_enabled is True
+    assert safety.quiet_hours_window == ("02:00", "08:00")
+    early_morning_ist = datetime.time(4, 30)
+    assert safety.is_in_quiet_hours(early_morning_ist)[0] is True
+    afternoon_ist = datetime.time(15, 0)
+    assert safety.is_in_quiet_hours(afternoon_ist)[0] is False
 
     # Configure overnight schedule: 23:00 to 07:00
     safety.set_quiet_hours(True, start="23:00", end="07:00")

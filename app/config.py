@@ -96,10 +96,10 @@ class AppConfig:
     chatty_probability: float = 0.15
     react_only_probability: float = 0.25
 
-    # Quiet Hours (Sleep Schedule Simulation)
-    quiet_hours_enabled: bool = False
-    quiet_hours_start: str = "23:00"
-    quiet_hours_end: str = "07:00"
+    # Quiet Hours (Sleep Schedule Simulation - default 02:00 to 08:00 IST)
+    quiet_hours_enabled: bool = True
+    quiet_hours_start: str = "02:00"
+    quiet_hours_end: str = "08:00"
 
     # Paths
     data_dir: Path = Path("data")
@@ -216,9 +216,9 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         max_global_cd = max(min_global_cd, float(os.getenv("MAX_GLOBAL_COOLDOWN_SECONDS", "60.0")))
         reaction_min_cd = max(0.0, float(os.getenv("REACTION_MIN_COOLDOWN_SECONDS", "3.0")))
         reaction_max_cd = max(reaction_min_cd, float(os.getenv("REACTION_MAX_COOLDOWN_SECONDS", "9.0")))
-        quiet_hours_enabled = _parse_bool(os.getenv("QUIET_HOURS_ENABLED"), default=False)
-        quiet_hours_start = os.getenv("QUIET_HOURS_START", "23:00").strip() or "23:00"
-        quiet_hours_end = os.getenv("QUIET_HOURS_END", "07:00").strip() or "07:00"
+        quiet_hours_enabled = _parse_bool(os.getenv("QUIET_HOURS_ENABLED"), default=True)
+        quiet_hours_start = os.getenv("QUIET_HOURS_START", "02:00").strip() or "02:00"
+        quiet_hours_end = os.getenv("QUIET_HOURS_END", "08:00").strip() or "08:00"
     except ValueError as e:
         raise ValueError(f"Invalid rate limit or message delay configuration: {e}")
 
