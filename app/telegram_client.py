@@ -79,10 +79,12 @@ class TelegramService:
         user_id = me.id
         name = f"{me.first_name or ''} {me.last_name or ''}".strip()
         username = f"@{me.username}" if me.username else "(no username)"
+        raw_username = (me.username or "").strip().lstrip("@")
         logger.info(f"Connected personal Telegram account: {name} {username} [ID: {user_id}]")
 
         # Automatically fetch owner persona name from connected Telegram profile
-        owner_name = (me.first_name or name or "Kaif").strip()
+        # Fallback hierarchy: first_name -> full name / last_name -> username -> user ID
+        owner_name = (me.first_name or "").strip() or name or raw_username or str(user_id)
         self.db.set_state("owner_name", owner_name)
         self.reply_manager.generator.set_owner_name(owner_name)
         logger.info(f"Automatically fetched and set AI owner persona from Telegram profile: '{owner_name}'")

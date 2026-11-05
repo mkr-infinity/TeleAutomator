@@ -989,10 +989,12 @@ def test_automatic_owner_name_sync(tmp_path: Path):
         generator = ReplyGenerator(cfg, database=db)
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
-        # Mock client get_me()
+        # Case 1: Has first_name
         mock_me = MagicMock()
         mock_me.first_name = "Alex"
         mock_me.last_name = "Mercer"
+        mock_me.username = "alexmercer"
+        mock_me.id = 12345
         mock_client = MagicMock()
         mock_client.get_me = AsyncMock(return_value=mock_me)
         mgr.set_telegram_client(mock_client)
@@ -1001,5 +1003,29 @@ def test_automatic_owner_name_sync(tmp_path: Path):
         assert fetched_name == "Alex"
         assert generator.prompt_manager.owner_name == "Alex"
         assert db.get_state("owner_name") == "Alex"
+
+        # Case 2: No first_name, has last_name
+        mock_me.first_name = ""
+        mock_me.last_name = "Mercer"
+        fetched_name = await mgr.sync_owner_name_from_telegram()
+        assert fetched_name == "Mercer"
+        assert generator.prompt_manager.owner_name == "Mercer"
+
+        # Case 3: No first or last name, has username
+        mock_me.first_name = ""
+        mock_me.last_name = ""
+        mock_me.username = "@shadow_dev"
+        fetched_name = await mgr.sync_owner_name_from_telegram()
+        assert fetched_name == "shadow_dev"
+        assert generator.prompt_manager.owner_name == "shadow_dev"
+
+        # Case 4: No names, no username -> falls back to user ID
+        mock_me.first_name = ""
+        mock_me.last_name = ""
+        mock_me.username = ""
+        mock_me.id = 987654321
+        fetched_name = await mgr.sync_owner_name_from_telegram()
+        assert fetched_name == "987654321"
+        assert generator.prompt_manager.owner_name == "987654321"
 
     asyncio.run(_run())

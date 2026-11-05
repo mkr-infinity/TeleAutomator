@@ -92,15 +92,19 @@ class ReplyManager:
         self._client = client
 
     async def sync_owner_name_from_telegram(self) -> str:
-        """Fetch current name from Telegram account and update owner persona name."""
+        """Fetch current name from Telegram account and update owner persona name.
+        Fallback hierarchy: first_name -> full name / last_name -> username -> user ID."""
         if not self._client:
             return self.generator.prompt_manager.owner_name
         try:
             me = await self._client.get_me()
             if me:
                 first = (getattr(me, "first_name", "") or "").strip()
-                full = f"{first} {getattr(me, 'last_name', '') or ''}".strip()
-                resolved = first or full
+                last = (getattr(me, "last_name", "") or "").strip()
+                full = f"{first} {last}".strip()
+                username = (getattr(me, "username", "") or "").strip().lstrip("@")
+                user_id_str = str(getattr(me, "id", "") or "").strip()
+                resolved = first or full or username or user_id_str
                 if resolved:
                     self.generator.set_owner_name(resolved)
                     self.db.set_state("owner_name", resolved)
