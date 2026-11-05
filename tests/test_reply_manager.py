@@ -668,3 +668,94 @@ def test_status_and_chats_dataframe_display(tmp_path: Path):
         assert "2 |" in chats_res
 
     asyncio.run(_run())
+
+
+def test_per_chat_persona_override(tmp_path: Path):
+    """Verify per-chat style customization and fallback to default persona when not customized."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            allowed_private_chats={2001, 2002},
+            data_dir=tmp_path,
+        )
+        db = Database(tmp_path / "app_persona.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # 1. Default global style is casual
+        assert generator.style == "casual"
+
+        # 2. Set custom style for chat 2001 to formal
+        res_custom = await mgr.handle_control_command("/style 2001 formal")
+        assert "formal" in res_custom
+        assert db.get_state("chat_style_2001") == "formal"
+
+        # 3. /styles lists the override
+        styles_res = await mgr.handle_control_command("/styles")
+        assert "2001" in styles_res
+        assert "formal" in styles_res
+
+        # 4. Chat 2002 has no override; should fall back to default (empty state)
+        assert db.get_state("chat_style_2002") == ""
+
+        # 5. Reset chat 2001 to default
+        reset_res = await mgr.handle_control_command("/style 2001 default")
+        assert "reset to default" in reset_res.lower()
+        assert db.get_state("chat_style_2001") == ""
+
+    asyncio.run(_run())
+
+
+def test_token_usage_tracker_and_ai_parameters(tmp_path: Path):
+    """Verify token usage tracking against 100M free pool and dynamic AI parameters."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            ai_provider="custom",
+            ai_model="mercury-3,mercury-3-preview-1014",
+            ai_base_url="https://api.inceptionlabs.ai/v1",
+            data_dir=tmp_path,
+        )
+        db = Database(tmp_path / "app_usage.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # 1. Record simulated token usage
+        db.record_token_usage("custom", "mercury-3", prompt_tokens=15, completion_tokens=25, total_tokens=40)
+        db.record_token_usage("custom", "mercury-3-preview-1014", prompt_tokens=10, completion_tokens=10, total_tokens=20)
+
+        # 2. /usage command
+        usage_res = await mgr.handle_control_command("/usage")
+        assert "Token Tracker" in usage_res
+        assert "60" in usage_res  # total tokens 40+20
+        assert "100,000,000" in usage_res
+        assert "mercury-3" in usage_res
+
+        # 3. /reasoning command
+        effort_res = await mgr.handle_control_command("/reasoning high")
+        assert "high" in effort_res
+        assert db.get_state("ai_reasoning_effort") == "high"
+
+        # 4. /temp command
+        temp_res = await mgr.handle_control_command("/temp 0.85")
+        assert "0.85" in temp_res
+        assert db.get_state("ai_temperature") == "0.85"
+
+        # 5. /maxtokens command
+        tokens_res = await mgr.handle_control_command("/maxtokens 180")
+        assert "180" in tokens_res
+        assert db.get_state("ai_max_tokens") == "180"
+
+        # 6. /aiconfig command
+        config_res = await mgr.handle_control_command("/aiconfig")
+        assert "AI Engine Configuration" in config_res
+        assert "mercury-3" in config_res
+        assert "high" in config_res
+
+    asyncio.run(_run())

@@ -67,6 +67,10 @@ class ReplyManager:
         if saved_lang:
             self.generator.set_language(saved_lang)
 
+        # Wire token usage callback if provider supports it
+        if hasattr(self.generator.provider, "usage_callback") and not self.generator.provider.usage_callback:
+            self.generator.provider.usage_callback = self.db.record_token_usage
+
     @property
     def current_mode(self) -> str:
         """Active reply mode, prioritizing runtime database state over initial config."""
@@ -116,10 +120,13 @@ class ReplyManager:
             draft = matched_rule
         else:
             try:
+                # Check for per-chat style/persona override; fallback to global default
+                chat_style = self.db.get_state(f"chat_style_{chat_id}")
                 draft = self.generator.generate(
                     sender_name=sender_name,
                     incoming_text=clean_text,
                     conversation_history=conversation_history,
+                    style_override=chat_style or None,
                 )
             except Exception as e:
                 logger.error(f"Failed to generate AI reply for chat {chat_id}: {e}")
@@ -423,6 +430,15 @@ class ReplyManager:
                 "• `/quiethours on [start] [end]` - Turn ON sleep schedule (e.g. `/quiethours on 23:00 07:00`)\n"
                 "• `/quiethours off` - Turn OFF sleep schedule\n"
                 "• `/quiethours` - Check current quiet hours status\n\n"
+                "*AI Tuning, Usage & Personas:*\n"
+                "• `/aiconfig` - View provider, base URL, temperature, and reasoning parameters\n"
+                "• `/usage` - Live token tracker & remaining free 100M quota\n"
+                "• `/checkmodels` - Ping and verify candidate models in real time\n"
+                "• `/reasoning <low|medium|high|off>` - Adjust discrete reasoning effort\n"
+                "• `/temp <0.0-1.0>` - Adjust AI randomness/creativity\n"
+                "• `/maxtokens <tokens>` - Maximum output tokens per response\n"
+                "• `/style [chat_id] <style>` - Global or per-chat persona override\n"
+                "• `/styles` - List all per-chat persona overrides\n\n"
                 "*Custom Keyword Auto-Replies:*\n"
                 "• `/addrule <word> => <reply>` - Auto-reply when a word is detected\n"
                 "• `/delrule <word>` - Delete keyword trigger\n"
@@ -568,14 +584,157 @@ class ReplyManager:
                     f"• `/style casual` - Friendly, relaxed texting tone.\n"
                     f"• `/style concise` - Minimal, brief, straight to the point.\n"
                     f"• `/style formal` - Polite, structured, professional.\n"
-                    f"• `/style humorous` - Witty, playful banter."
+                    f"• `/style humorous` - Witty, playful banter.\n\n"
+                    f"*Per-Chat Persona Override:*\n"
+                    f"• `/style <chat_id> <style>` - Assign custom style to specific chat (e.g. `/style 123456 formal`)\n"
+                    f"• `/style <chat_id> default` - Reset chat to default global persona\n"
+                    f"• `/styles` - View all active per-chat style overrides"
                 )
+
+            if len(cmd_parts) >= 3:
+                try:
+                    target_cid = int(cmd_parts[1])
+                except ValueError:
+                    return "Error: First argument must be an integer chat ID. Usage: `/style <chat_id> <style>`"
+                target_style = cmd_parts[2].lower().strip()
+                if target_style in ("default", "clear", "reset", "none"):
+                    self.db.set_state(f"chat_style_{target_cid}", "")
+                    return f"🔄 Chat `{target_cid}` reset to default global style (*{self.generator.style}*)."
+                if target_style not in ("casual", "concise", "formal", "humorous"):
+                    return "Invalid style. Available: `casual`, `concise`, `formal`, `humorous`, `default`."
+                self.db.set_state(f"chat_style_{target_cid}", target_style)
+                return f"🎨 Chat `{target_cid}` custom AI persona set to *{target_style}*."
+
             target_style = cmd_parts[1].lower().strip()
             ok = self.generator.set_style(target_style)
             if ok:
                 self.db.set_state("reply_style", target_style)
-                return f"🎨 AI response style switched to *{target_style}*."
+                return f"🎨 Global AI response style switched to *{target_style}*."
             return "Invalid style. Available: `/style casual`, `/style concise`, `/style formal`, `/style humorous`."
+
+        if cmd == "/styles":
+            priv, grps = self.privacy.get_all_allowed_chats()
+            all_ids = sorted(list(priv | grps))
+            lines = [f"🎨 *AI Styles & Personas (Global Default: `{self.generator.style}`):*"]
+            overrides_found = 0
+            for cid in all_ids:
+                s = self.db.get_state(f"chat_style_{cid}")
+                if s:
+                    overrides_found += 1
+                    meta = self.db.get_chat_metadata(cid) or {}
+                    name = meta.get("title") or f"Chat {cid}"
+                    lines.append(f"• {name} (`{cid}`): *{s}*")
+            if not overrides_found:
+                lines.append("• _All chats currently use the default global persona._")
+            lines.append("\n_Customize per chat with `/style <chat_id> <style>` or `/style <chat_id> default`._")
+            return "\n".join(lines)
+
+        if cmd in ("/usage", "/tokens", "/quota"):
+            stats = self.db.get_token_usage_stats()
+            reqs = stats["request_count"]
+            tot_tokens = stats["total_tokens"]
+            p_tokens = stats["total_prompt"]
+            c_tokens = stats["total_completion"]
+            FREE_POOL = 100_000_000
+            rem_tokens = max(0, FREE_POOL - tot_tokens)
+            used_pct = (tot_tokens / FREE_POOL) * 100
+
+            model_lines = []
+            for bm in stats["by_model"]:
+                model_lines.append(f"• `{bm['model']}`: {bm['tokens']:,} tokens ({bm['calls']} requests)")
+            by_model_str = "\n".join(model_lines) if model_lines else "• _No API requests logged yet._"
+
+            return (
+                f"📊 *Inception Labs / AI Token Tracker:*\n\n"
+                f"• Total AI Requests: `{reqs:,}`\n"
+                f"• Total Tokens Used: *{tot_tokens:,}* / 100,000,000 ({used_pct:.4f}%)\n"
+                f"• Prompt Tokens: `{p_tokens:,}`\n"
+                f"• Completion Tokens: `{c_tokens:,}`\n"
+                f"• Remaining Free Quota: *{rem_tokens:,}* tokens\n\n"
+                f"*Breakdown by Model:*\n{by_model_str}"
+            )
+
+        if cmd in ("/reasoning", "/effort"):
+            if len(cmd_parts) < 2:
+                curr = self.db.get_state("ai_reasoning_effort", "low")
+                return (
+                    f"🧠 *Current Reasoning Effort:* `{curr}`\n\n"
+                    f"*Options:*\n"
+                    f"• `/reasoning low` - Ultra-fast discrete diffusion generation (Default)\n"
+                    f"• `/reasoning medium` - Balanced reasoning depth\n"
+                    f"• `/reasoning high` - In-depth logical analysis\n"
+                    f"• `/reasoning off` - Disable explicit reasoning effort parameter"
+                )
+            target = cmd_parts[1].lower().strip()
+            if target not in ("low", "medium", "high", "off", "none"):
+                return "Invalid reasoning effort. Choose `low`, `medium`, `high`, or `off`."
+            self.db.set_state("ai_reasoning_effort", target)
+            if hasattr(self.generator.provider, "reasoning_effort"):
+                self.generator.provider.reasoning_effort = target
+            return f"🧠 AI reasoning effort set to *{target}*."
+
+        if cmd in ("/temp", "/temperature"):
+            if len(cmd_parts) < 2:
+                curr = self.db.get_state("ai_temperature", "0.6")
+                return f"🌡️ *Current AI Temperature:* `{curr}`\nUsage: `/temp <0.0 - 1.0>` (e.g. `/temp 0.7`)"
+            try:
+                val = max(0.0, min(1.0, float(cmd_parts[1])))
+                self.db.set_state("ai_temperature", str(val))
+                if hasattr(self.generator.provider, "temperature"):
+                    self.generator.provider.temperature = val
+                return f"🌡️ AI temperature set to *{val}*."
+            except ValueError:
+                return "Error: Temperature must be a number between 0.0 and 1.0."
+
+        if cmd in ("/maxtokens", "/maxoutput"):
+            if len(cmd_parts) < 2:
+                curr = self.db.get_state("ai_max_tokens", "200")
+                return f"📝 *Current Max Output Tokens:* `{curr}`\nUsage: `/maxtokens <tokens>` (e.g. `/maxtokens 250`)"
+            try:
+                val = max(10, int(cmd_parts[1]))
+                self.db.set_state("ai_max_tokens", str(val))
+                if hasattr(self.generator.provider, "max_tokens"):
+                    self.generator.provider.max_tokens = val
+                return f"📝 AI max output tokens set to *{val}*."
+            except ValueError:
+                return "Error: Max tokens must be a valid integer."
+
+        if cmd in ("/aiconfig", "/aisettings"):
+            prov = self.db.get_state("ai_provider", self.config.ai_provider)
+            mod = self.db.get_state("ai_model", self.config.ai_model or "mercury-3")
+            url = self.db.get_state("ai_base_url", self.config.ai_base_url or "https://api.inceptionlabs.ai/v1")
+            eff = self.db.get_state("ai_reasoning_effort", "low")
+            temp = self.db.get_state("ai_temperature", "0.6")
+            mtok = self.db.get_state("ai_max_tokens", "200")
+            cands = []
+            if hasattr(self.generator.provider, "get_candidate_models"):
+                cands = self.generator.provider.get_candidate_models()
+            cand_str = ", ".join(f"`{c}`" for c in cands) if cands else f"`{mod}`"
+
+            return (
+                f"🤖 *AI Engine Configuration:*\n\n"
+                f"• Provider: `{prov.upper()}`\n"
+                f"• Base URL: `{url}`\n"
+                f"• Active Model: `{getattr(self.generator.provider, 'model', mod)}`\n"
+                f"• Fallback Sequence: {cand_str}\n"
+                f"• Reasoning Effort: `{eff}` (change via `/reasoning <effort>`)\n"
+                f"• Temperature: `{temp}` (change via `/temp <0.0-1.0>`)\n"
+                f"• Max Output Tokens: `{mtok}` (change via `/maxtokens <tokens>`)\n\n"
+                f"_Send `/checkmodels` to ping and verify candidate models in real-time._"
+            )
+
+        if cmd in ("/checkmodels", "/testmodels"):
+            if not hasattr(self.generator.provider, "check_working_models"):
+                return "Live model verification is supported on OpenAI and Inception Labs custom providers."
+            results = self.generator.provider.check_working_models()
+            lines = ["🔍 *Model Live Health Check:*"]
+            for m, ok, detail in results:
+                icon = "✅" if ok else "❌"
+                lines.append(f"{icon} `{m}`: {detail}")
+            active = getattr(self.generator.provider, "model", "")
+            lines.append(f"\n🎯 Active working model set to: *{active}*")
+            self.db.set_state("ai_model", active)
+            return "\n".join(lines)
 
         if cmd == "/status":
             auto_status = "AUTHORIZED" if self.safety.is_auto_authorized else "DISABLED"

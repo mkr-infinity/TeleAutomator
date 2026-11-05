@@ -43,12 +43,13 @@ class LocalRuleProvider(AIProvider):
 class GeminiProvider(AIProvider):
     """Google Gemini API provider using standard library urllib."""
 
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash"):
+    def __init__(self, api_key: str, model: str = "gemini-2.5-flash", usage_callback: Optional[Any] = None):
         self.api_key = api_key
         clean = (model or "gemini-2.5-flash").strip()
         if clean.startswith("models/"):
             clean = clean[len("models/"):]
         self.model = clean
+        self.usage_callback = usage_callback
 
     def generate_reply(self, prompt: str, system_instructions: str) -> str:
         # Candidate models to try in sequence with priority for fast Flash and Lite options
@@ -92,6 +93,15 @@ class GeminiProvider(AIProvider):
                     if candidates:
                         parts = candidates[0].get("content", {}).get("parts", [])
                         if parts:
+                            if self.usage_callback:
+                                try:
+                                    meta = body.get("usageMetadata", {})
+                                    pt = int(meta.get("promptTokenCount", 0))
+                                    ct = int(meta.get("candidatesTokenCount", 0))
+                                    tt = int(meta.get("totalTokenCount", pt + ct))
+                                    self.usage_callback("gemini", m, pt, ct, tt)
+                                except Exception:
+                                    pass
                             return str(parts[0].get("text", "")).strip().strip('"')
             except urllib.error.HTTPError as e:
                 last_error = e
@@ -109,13 +119,26 @@ class GeminiProvider(AIProvider):
 class OpenAIProvider(AIProvider):
     """OpenAI and OpenAI-compatible provider (Inception Labs, NVIDIA, Groq, Together, DeepSeek, Local Ollama)."""
 
-    def __init__(self, api_key: str, model: str = "gpt-4o-mini", base_url: str = ""):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gpt-4o-mini",
+        base_url: str = "",
+        usage_callback: Optional[Any] = None,
+        reasoning_effort: str = "low",
+        temperature: float = 0.6,
+        max_tokens: int = 200,
+    ):
         self.api_key = api_key
         self.model = model or "gpt-4o-mini"
         raw_url = (base_url or "https://api.openai.com/v1").strip().rstrip("/")
         if not raw_url.endswith("/chat/completions"):
             raw_url = f"{raw_url}/chat/completions"
         self.endpoint_url = raw_url
+        self.usage_callback = usage_callback
+        self.reasoning_effort = reasoning_effort
+        self.temperature = temperature
+        self.max_tokens = max_tokens
 
     def get_candidate_models(self) -> list[str]:
         """Build priority list of candidate models with automatic verified fallbacks."""
@@ -153,11 +176,11 @@ class OpenAIProvider(AIProvider):
                     {"role": "system", "content": system_instructions},
                     {"role": "user", "content": prompt},
                 ],
-                "temperature": 0.6,
-                "max_tokens": 200,
+                "temperature": self.temperature,
+                "max_tokens": self.max_tokens,
             }
-            if is_inception:
-                payload["reasoning_effort"] = "low"
+            if is_inception and self.reasoning_effort not in ("off", "none", ""):
+                payload["reasoning_effort"] = self.reasoning_effort
 
             data = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(
@@ -179,6 +202,17 @@ class OpenAIProvider(AIProvider):
                         if m != self.model:
                             logger.info(f"AI model automatically switched from '{self.model}' to working fallback '{m}'.")
                             self.model = m
+
+                        usage = body.get("usage", {})
+                        if self.usage_callback and usage:
+                            try:
+                                pt = int(usage.get("prompt_tokens", 0))
+                                ct = int(usage.get("completion_tokens", 0))
+                                tt = int(usage.get("total_tokens", pt + ct))
+                                self.usage_callback("custom", m, pt, ct, tt)
+                            except Exception as ue:
+                                logger.debug(f"Failed to record token usage: {ue}")
+
                         return content
             except Exception as e:
                 last_error = e
@@ -187,3 +221,46 @@ class OpenAIProvider(AIProvider):
 
         logger.error(f"All candidate models failed on {self.endpoint_url}: {last_error}")
         raise last_error if last_error else RuntimeError("AI reply generation failed.")
+
+    def check_working_models(self, timeout: float = 8.0) -> list[tuple[str, bool, str]]:
+        """Ping all candidate models with a minimal test prompt to verify live availability."""
+        candidates = self.get_candidate_models()
+        results: list[tuple[str, bool, str]] = []
+        first_working: Optional[str] = None
+        is_inception = "inceptionlabs" in self.endpoint_url.lower()
+
+        for m in candidates:
+            payload: Dict[str, Any] = {
+                "model": m,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 10,
+            }
+            if is_inception and self.reasoning_effort not in ("off", "none", ""):
+                payload["reasoning_effort"] = self.reasoning_effort
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                self.endpoint_url,
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.api_key}",
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                    if body.get("choices"):
+                        results.append((m, True, "200 OK"))
+                        if not first_working:
+                            first_working = m
+                    else:
+                        results.append((m, False, "Empty choices"))
+            except urllib.error.HTTPError as e:
+                results.append((m, False, f"HTTP {e.code}"))
+            except Exception as e:
+                results.append((m, False, str(e)[:30]))
+
+        if first_working:
+            self.model = first_working
+        return results

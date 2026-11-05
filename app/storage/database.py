@@ -28,6 +28,9 @@ class Database:
         with self._get_connection() as conn:
             conn.executescript(
                 """
+                PRAGMA journal_mode=WAL;
+                PRAGMA synchronous=NORMAL;
+
                 CREATE TABLE IF NOT EXISTS pending_approvals (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_id INTEGER NOT NULL,
@@ -81,6 +84,16 @@ class Database:
                     username TEXT NOT NULL DEFAULT '',
                     chat_type TEXT NOT NULL DEFAULT '',
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS token_usage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 """
             )
@@ -228,9 +241,11 @@ class Database:
         text: str,
         is_outgoing: bool = False,
     ) -> None:
-        """Cache incoming or outgoing message in database to avoid repeated network fetches."""
+        """Cache message in database with automatic size and row capping to keep resource usage minimal."""
         if not text or not text.strip():
             return
+        # Cap stored message length to 300 chars to avoid memory/disk bloat
+        truncated_text = text.strip()[:300]
         with self._get_connection() as conn:
             conn.execute(
                 """
@@ -240,8 +255,63 @@ class Database:
                     text = excluded.text,
                     sender_name = excluded.sender_name
                 """,
-                (chat_id, message_id, sender_id, sender_name, text.strip(), 1 if is_outgoing else 0),
+                (chat_id, message_id, sender_id, sender_name, truncated_text, 1 if is_outgoing else 0),
             )
+            # Lightweight automatic pruning: cap at 20 messages per chat
+            conn.execute(
+                """
+                DELETE FROM chat_messages
+                WHERE chat_id = ? AND id NOT IN (
+                    SELECT id FROM chat_messages
+                    WHERE chat_id = ?
+                    ORDER BY id DESC
+                    LIMIT 20
+                )
+                """,
+                (chat_id, chat_id),
+            )
+
+    def record_token_usage(
+        self, provider: str, model: str, prompt_tokens: int, completion_tokens: int, total_tokens: int
+    ) -> None:
+        """Record tokens consumed by an AI generation call."""
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO token_usage (provider, model, prompt_tokens, completion_tokens, total_tokens)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (provider, model, max(0, prompt_tokens), max(0, completion_tokens), max(0, total_tokens)),
+            )
+
+    def get_token_usage_stats(self) -> Dict[str, Any]:
+        """Aggregate total token usage and per-model stats."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 
+                    COUNT(*) as request_count,
+                    COALESCE(SUM(prompt_tokens), 0) as total_prompt,
+                    COALESCE(SUM(completion_tokens), 0) as total_completion,
+                    COALESCE(SUM(total_tokens), 0) as total_tokens
+                FROM token_usage
+                """
+            ).fetchone()
+            by_model = conn.execute(
+                """
+                SELECT model, COUNT(*) as calls, SUM(total_tokens) as tokens
+                FROM token_usage
+                GROUP BY model
+                ORDER BY tokens DESC
+                """
+            ).fetchall()
+            return {
+                "request_count": int(row["request_count"]) if row else 0,
+                "total_prompt": int(row["total_prompt"]) if row else 0,
+                "total_completion": int(row["total_completion"]) if row else 0,
+                "total_tokens": int(row["total_tokens"]) if row else 0,
+                "by_model": [dict(r) for r in by_model],
+            }
 
     def get_recent_chat_messages(self, chat_id: int, limit: int = 5) -> List[Dict[str, str]]:
         """Retrieve recent conversation context for chat_id in chronological order."""

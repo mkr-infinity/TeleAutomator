@@ -102,9 +102,8 @@ class PromptManager:
         if name and name.strip():
             self.owner_name = name.strip()
 
-    @property
-    def system_instructions(self) -> str:
-        """Return instructions from system_prompt.txt if present, otherwise default."""
+    def get_system_instructions(self, style_override: Optional[str] = None) -> str:
+        """Return instructions with specified style override or default active style."""
         base_instructions = self._default_instructions
         if self.prompt_file and self.prompt_file.exists():
             try:
@@ -114,9 +113,15 @@ class PromptManager:
             except Exception:
                 pass
 
-        if self._style != "casual" and self._style in VALID_STYLES:
-            return f"{base_instructions}\n\nACTIVE STYLE: {VALID_STYLES[self._style]}"
+        target_style = style_override if (style_override and style_override in VALID_STYLES) else self._style
+        if target_style != "casual" and target_style in VALID_STYLES:
+            return f"{base_instructions}\n\nACTIVE STYLE: {VALID_STYLES[target_style]}"
         return base_instructions
+
+    @property
+    def system_instructions(self) -> str:
+        """Return instructions from system_prompt.txt if present, otherwise default."""
+        return self.get_system_instructions()
 
     def save_system_instructions(self, new_instructions: str) -> bool:
         """Persist updated system instructions to system_prompt.txt."""
