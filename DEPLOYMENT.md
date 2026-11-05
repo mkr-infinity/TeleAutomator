@@ -229,13 +229,30 @@ Press `Ctrl + C` to detach from logs. The container will remain running 24/7 in 
 
 TeleAutomator comes pre-configured for **[Railway.app](https://railway.app)** with automated build detection via [`railway.json`](railway.json), [`Dockerfile`](Dockerfile), and [`Procfile`](Procfile).
 
-### Step 1: Export Your StringSession (Run Once Locally)
-Cloud platforms do not permit interactive terminal prompts for SMS/OTP codes. Generate your session string once locally:
-```bash
-./session.sh
-# Or: python run.py --session
-```
-Copy the exported string session.
+### Step 1: Generate Your StringSession (Run Once Locally)
+Cloud platforms do not permit interactive terminal prompts for SMS/OTP codes. You must generate a `TG_SESSION_STRING` on your computer first.
+
+You have two options:
+
+- **Option A (Dedicated Cloud Session - Recommended)**:
+  Generates an independent session registered as a separate device. You can run locally AND on Railway simultaneously without conflict:
+  ```bash
+  ./session.sh --new
+  # Or: python run.py --new-session
+  ```
+
+- **Option B (Export Existing Local Session)**:
+  Exports your current local `.session` file to a string:
+  ```bash
+  ./session.sh
+  # Or: python run.py --session
+  ```
+
+> [!CAUTION]
+> **DO NOT RUN LOCAL AND CLOUD INSTANCES SIMULTANEOUSLY WITH THE SAME SESSION!**  
+> If you export an existing local session (Option B), stop your local client before starting Railway. If Telegram MTProto detects the same session key connecting from two IP addresses at once, it permanently revokes the session with `AuthKeyDuplicatedError`. To run both concurrently, use Option A (`./session.sh --new`).
+
+Copy the exported session string (starts with `1...`).
 
 ### Step 2: Deploy to Railway
 1. Log into **[Railway.app](https://railway.app)** and click **New Project** -> **Deploy from GitHub repo**.
@@ -414,6 +431,18 @@ docker compose up -d --build
 ---
 
 ## Troubleshooting & FAQ
+
+### Q: I received "The authorization key (session file) was used under two different IP addresses simultaneously (AuthKeyDuplicatedError)"
+- **Why this happens**: Telegram MTProto has strict anti-hijacking security. If the same authorization key is connected from two IP addresses at the same time (e.g. running TeleAutomator on your home PC while deployed to Railway), Telegram immediately and permanently revokes the authorization key.
+- **How to fix**:
+  1. If running locally, stop your local client.
+  2. Generate a dedicated cloud session by running:
+     ```bash
+     ./session.sh --new
+     # Or on Windows: python run.py --new-session
+     ```
+  3. Copy the newly generated string session and update `TG_SESSION_STRING` in your Railway dashboard (under the **Variables** tab).
+  4. Railway will automatically redeploy and start listening 24/7!
 
 ### Q: I received "Telegram API Error: PHONE_CODE_INVALID"
 - Telegram verification codes expire in a few minutes. Re-run `./authenticate.sh` and enter the newest code immediately.

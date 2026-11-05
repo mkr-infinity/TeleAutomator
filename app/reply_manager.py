@@ -1601,7 +1601,8 @@ class ReplyManager:
         jitter = random.uniform(-0.15, 0.15) * delay
         delay = delay + jitter
 
-        return round(max(self.min_delay, min(self.max_delay, delay)), 2)
+        cap_max = min(self.max_delay, 25.0) if is_group else self.max_delay
+        return round(max(self.min_delay, min(cap_max, delay)), 2)
 
     @staticmethod
     def split_reply_messages(text: str) -> list[str]:

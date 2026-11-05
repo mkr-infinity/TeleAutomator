@@ -3,6 +3,7 @@
 import os
 import stat
 from pathlib import Path
+import pytest
 from app.config import AppConfig
 from app.session_manager import ensure_secure_dir, ensure_secure_file, get_telethon_session
 from telethon.sessions import StringSession
@@ -80,3 +81,50 @@ def test_robust_string_session_normalizes_dirty_inputs(tmp_path: Path):
     unpadded = base_session.rstrip("=")
     sess5 = RobustStringSession(unpadded)
     assert sess5.dc_id == 2
+
+
+import asyncio
+from unittest.mock import AsyncMock, patch
+from telethon.errors import AuthKeyDuplicatedError
+from app.telegram_client import TelegramService
+
+
+def test_telegram_service_handles_auth_key_duplicated_error(tmp_path: Path):
+    """Verify that TelegramService cleanly catches AuthKeyDuplicatedError and provides an actionable diagnosis."""
+    from telethon.crypto import AuthKey
+    from telethon.sessions import StringSession
+
+    s = StringSession()
+    s.set_dc(2, "149.154.167.50", 443)
+    s.auth_key = AuthKey(b"z" * 256)
+    valid_dummy_str = s.save()
+
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="hash_value",
+            session_mode="string",
+            session_string=valid_dummy_str,
+            data_dir=tmp_path,
+        )
+        db = AsyncMock()
+        safety = AsyncMock()
+        privacy = AsyncMock()
+        reply = AsyncMock()
+        health = AsyncMock()
+
+        service = TelegramService(cfg, db, safety, privacy, reply, health)
+        with patch("app.telegram_client.TelegramClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.connect.side_effect = AuthKeyDuplicatedError(request=None)
+            mock_client_cls.return_value = mock_client
+
+            with pytest.raises(RuntimeError) as exc_info:
+                await service.initialize()
+
+            assert "AuthKeyDuplicatedError" in str(exc_info.value)
+            assert "REVOKED" in str(exc_info.value)
+            assert "TG_SESSION_STRING" in str(exc_info.value)
+
+    asyncio.run(_run())
+

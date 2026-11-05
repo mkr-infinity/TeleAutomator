@@ -10,6 +10,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from telethon import TelegramClient
+from telethon.errors import (
+    AuthKeyDuplicatedError,
+    AuthKeyUnregisteredError,
+    SessionExpiredError,
+    SessionRevokedError,
+)
 
 from app.banner import print_banner
 from app.config import load_config
@@ -50,6 +56,19 @@ async def check() -> None:
         print("  ALLOWED_PRIVATE_CHATS=123456789,987654321")
         print("When anyone sends you a message while the client runs, its Chat ID is printed in the terminal.\n")
 
+    except (AuthKeyDuplicatedError, AuthKeyUnregisteredError, SessionRevokedError, SessionExpiredError) as e:
+        print("\n" + "=" * 60)
+        print(" [FAIL] TELEGRAM SESSION REVOKED (AuthKeyDuplicatedError)")
+        print("=" * 60)
+        print("The authorization key was invalidated by Telegram.")
+        print("CAUSE: The session was used under two different IP addresses simultaneously")
+        print("(e.g. running locally and on Railway at the same time), or revoked in Devices.")
+        print("\nHOW TO FIX:")
+        print("1. Re-authenticate: run ./authenticate.sh (or: python run.py --auth)")
+        print("2. If using Railway: export the new session string with ./session.sh")
+        print("   and update TG_SESSION_STRING in your Railway dashboard.")
+        print("=" * 60 + "\n")
+        sys.exit(1)
     except Exception as e:
         print(f"[FAIL] Connection error: {e}")
         sys.exit(1)

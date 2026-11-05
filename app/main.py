@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import signal
 import sys
@@ -89,22 +90,38 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
     # Run service as a background task and wait for stop_event
     run_task = asyncio.create_task(service.run())
 
-    # Optional HTTP health server for cloud platforms like Render.com
+    # Optional HTTP health server for cloud platforms like Render.com / Railway
     port_env = os.getenv("PORT")
     http_server = None
+    server_status = {"healthy": True, "error": None}
+
     if port_env:
         try:
             port = int(port_env)
             async def _handle_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
                 try:
                     await reader.read(1024)
-                    body = b'{"status":"healthy","service":"teleautomator"}\n'
-                    header = (
-                        b"HTTP/1.1 200 OK\r\n"
-                        b"Content-Type: application/json\r\n"
-                        b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n"
-                        b"Connection: close\r\n\r\n"
-                    )
+                    if not server_status["healthy"]:
+                        body = json.dumps({
+                            "status": "error",
+                            "service": "teleautomator",
+                            "reason": "session_invalid_or_revoked",
+                            "detail": server_status["error"] or "Telegram session revoked",
+                        }).encode("utf-8") + b"\n"
+                        header = (
+                            b"HTTP/1.1 503 Service Unavailable\r\n"
+                            b"Content-Type: application/json\r\n"
+                            b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n"
+                            b"Connection: close\r\n\r\n"
+                        )
+                    else:
+                        body = b'{"status":"healthy","service":"teleautomator"}\n'
+                        header = (
+                            b"HTTP/1.1 200 OK\r\n"
+                            b"Content-Type: application/json\r\n"
+                            b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n"
+                            b"Connection: close\r\n\r\n"
+                        )
                     writer.write(header + body)
                     await writer.drain()
                 except Exception:
@@ -131,7 +148,21 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
             run_task.cancel()
         elif run_task in done:
             # Service completed or failed
-            run_task.result()
+            exc = run_task.exception()
+            if exc:
+                server_status["healthy"] = False
+                server_status["error"] = str(exc)
+                is_cloud = bool(port_env or os.getenv("RAILWAY_STATIC_URL") or os.getenv("RENDER") or os.getenv("TG_SESSION_STRING"))
+                if is_cloud and ("AuthKeyDuplicatedError" in str(exc) or "REVOKED" in str(exc)):
+                    logger.critical(
+                        "Cloud deployment halted due to revoked Telegram session. "
+                        "Backing off for 60 seconds to prevent rapid crash-restart loops on Railway..."
+                    )
+                    try:
+                        await asyncio.sleep(60)
+                    except asyncio.CancelledError:
+                        pass
+                raise exc
     finally:
         if http_server:
             http_server.close()

@@ -11,7 +11,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from telethon import TelegramClient
-from telethon.errors import SessionPasswordNeededError
+from telethon.errors import (
+    AuthKeyDuplicatedError,
+    AuthKeyUnregisteredError,
+    SessionExpiredError,
+    SessionPasswordNeededError,
+    SessionRevokedError,
+)
 from telethon.sessions import StringSession
 
 from app.banner import print_banner
@@ -38,16 +44,32 @@ async def authenticate() -> None:
     session_path = get_local_session_path(config.data_dir, config.session_name)
     session_file = session_path.with_suffix(".session")
 
+    def _cleanup_old_session() -> None:
+        for ext in (".session", ".session-journal"):
+            f = session_path.with_suffix(ext)
+            if f.exists():
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+
     if session_file.exists():
         print(f"\nFound existing session file: {session_file}")
         confirm = input("A session already exists. Re-authenticate and overwrite? [y/N]: ").strip().lower()
         if confirm != "y":
             print("Aborted. Existing session kept.")
             return
+        _cleanup_old_session()
 
-    # Use StringSession during interactive login to easily generate both local file and string export
     client = TelegramClient(str(session_path), config.api_id, config.api_hash)
-    await client.connect()
+    try:
+        await client.connect()
+    except (AuthKeyDuplicatedError, AuthKeyUnregisteredError, SessionRevokedError, SessionExpiredError):
+        print("\n[!] The existing session key was invalidated by Telegram. Resetting session cleanly...")
+        await client.disconnect()
+        _cleanup_old_session()
+        client = TelegramClient(str(session_path), config.api_id, config.api_hash)
+        await client.connect()
 
     if await client.is_user_authorized():
         print("\nSession is already authorized!")
@@ -88,23 +110,20 @@ async def authenticate() -> None:
     print("=" * 60)
 
     # Export StringSession for cloud deployment
-    # Load session string using StringSession
-    string_client = TelegramClient(StringSession(), config.api_id, config.api_hash)
-    await string_client.connect()
-    # Telethon allows exporting session string
-    # We export directly from client session
     cloud_session_str = StringSession.save(client.session)
 
     print("\n" + "#" * 60)
     print(" CLOUD DEPLOYMENT SESSION STRING (TG_SESSION_STRING)")
     print("#" * 60)
-    print("\nIf you deploy this client to a headless Docker container or cloud VPS,")
+    print("\nIf you deploy this client to Railway, Render, or headless Docker,")
     print("set TG_SESSION_MODE=string and use this string for TG_SESSION_STRING in .env:")
     print("\n" + cloud_session_str + "\n")
-    print("⚠️  SECURITY WARNING:")
+    print("⚠️  CRITICAL DEPLOYMENT RULE:")
     print("1. Keep this string completely private. Treat it like a password.")
     print("2. NEVER commit it to git or paste it in public channels.")
-    print("3. Do not run local and cloud instances at the exact same time.")
+    print("3. DO NOT run local and cloud instances simultaneously using this same session!")
+    print("   Telegram MTProto will revoke the session if connected from two IPs at once.")
+    print("   To run both simultaneously, generate a separate session: ./session.sh --new")
     print("4. Revoke anytime in Telegram: Settings -> Devices.")
     print("#" * 60 + "\n")
 

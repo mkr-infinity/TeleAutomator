@@ -6,6 +6,12 @@ import asyncio
 from typing import Optional
 
 from telethon import TelegramClient
+from telethon.errors import (
+    AuthKeyDuplicatedError,
+    AuthKeyUnregisteredError,
+    SessionExpiredError,
+    SessionRevokedError,
+)
 
 from app.config import AppConfig
 from app.event_handlers import register_handlers
@@ -55,18 +61,41 @@ class TelegramService:
         )
 
         logger.info("Connecting to Telegram MTProto servers...")
-        await self.client.connect()
-
-        if not await self.client.is_user_authorized():
-            if self.config.session_mode == "string":
+        try:
+            await self.client.connect()
+            if not await self.client.is_user_authorized():
+                if self.config.session_mode == "string":
+                    raise RuntimeError(
+                        "Telegram string session is invalid or unauthorized. "
+                        "Generate a fresh TG_SESSION_STRING using './session.sh --new' (or: python3 run.py --session --new)."
+                    )
                 raise RuntimeError(
-                    "Telegram string session is invalid or unauthorized. "
-                    "Generate a valid TG_SESSION_STRING using ./authenticate.sh (or: python3 run.py --auth)."
+                    "Telegram session is not authenticated. "
+                    "Run ./authenticate.sh (or: python3 run.py --auth) to log in interactively."
                 )
-            raise RuntimeError(
-                "Telegram session is not authenticated. "
-                "Run ./authenticate.sh (or: python3 run.py --auth) to log in interactively."
-            )
+        except (AuthKeyDuplicatedError, AuthKeyUnregisteredError, SessionRevokedError, SessionExpiredError) as e:
+            if self.config.session_mode == "string":
+                msg = (
+                    "CRITICAL: Telegram session was REVOKED by Telegram servers (AuthKeyDuplicatedError).\n"
+                    "CAUSE: The session string (TG_SESSION_STRING) was used under two different IP addresses "
+                    "simultaneously (e.g. running locally on your computer while deployed to Railway/cloud), "
+                    "or the session was terminated in Telegram Settings > Devices.\n"
+                    "HOW TO FIX:\n"
+                    "1. Stop any local instance of TeleAutomator if running.\n"
+                    "2. Generate a dedicated cloud session by running: ./session.sh --new (or: python3 run.py --session --new)\n"
+                    "3. Update TG_SESSION_STRING in your Railway dashboard with the newly generated session string."
+                )
+            else:
+                msg = (
+                    "CRITICAL: Local Telegram session was REVOKED by Telegram servers (AuthKeyDuplicatedError).\n"
+                    "CAUSE: The session file was used from multiple IP addresses simultaneously (e.g. while deployed on cloud), "
+                    "or terminated in Telegram Settings > Devices.\n"
+                    "HOW TO FIX:\n"
+                    "1. Delete the revoked session: rm data/telegram_client.session\n"
+                    "2. Re-authenticate cleanly: ./authenticate.sh (or: python3 run.py --auth)"
+                )
+            logger.critical(msg)
+            raise RuntimeError(msg) from e
 
         # Confirm identity of the connected account
         me = await self.client.get_me()
