@@ -61,6 +61,19 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp REAL NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    sender_id INTEGER,
+                    sender_name TEXT,
+                    text TEXT NOT NULL,
+                    is_outgoing INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(chat_id, message_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id ON chat_messages(chat_id, id DESC);
                 """
             )
 
@@ -197,3 +210,64 @@ class Database:
         cutoff = time.time() - max_age_seconds
         with self._get_connection() as conn:
             conn.execute("DELETE FROM reaction_events WHERE timestamp < ?", (cutoff,))
+
+    def record_chat_message(
+        self,
+        chat_id: int,
+        message_id: int,
+        sender_id: Optional[int],
+        sender_name: str,
+        text: str,
+        is_outgoing: bool = False,
+    ) -> None:
+        """Cache incoming or outgoing message in database to avoid repeated network fetches."""
+        if not text or not text.strip():
+            return
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO chat_messages (chat_id, message_id, sender_id, sender_name, text, is_outgoing)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(chat_id, message_id) DO UPDATE SET
+                    text = excluded.text,
+                    sender_name = excluded.sender_name
+                """,
+                (chat_id, message_id, sender_id, sender_name, text.strip(), 1 if is_outgoing else 0),
+            )
+
+    def get_recent_chat_messages(self, chat_id: int, limit: int = 5) -> List[Dict[str, str]]:
+        """Retrieve recent conversation context for chat_id in chronological order."""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT sender_name, text, is_outgoing
+                FROM chat_messages
+                WHERE chat_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (chat_id, max(1, limit)),
+            ).fetchall()
+
+            # Reverse to chronological order (oldest to newest)
+            results = []
+            for r in reversed(rows):
+                sender = "You" if r["is_outgoing"] == 1 else (r["sender_name"] or "Contact")
+                results.append({"sender": sender, "text": r["text"]})
+            return results
+
+    def prune_chat_messages(self, chat_id: int, keep_last: int = 50) -> None:
+        """Prune old cached chat context keeping only the last N messages."""
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                DELETE FROM chat_messages
+                WHERE chat_id = ? AND id NOT IN (
+                    SELECT id FROM chat_messages
+                    WHERE chat_id = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                )
+                """,
+                (chat_id, chat_id, keep_last),
+            )

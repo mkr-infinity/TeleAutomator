@@ -26,7 +26,7 @@
 [![MTProto Telethon](https://img.shields.io/badge/protocol-MTProto%20Telethon-informational.svg)](https://github.com/LonamiWebs/Telethon)
 [![Google Gemini](https://img.shields.io/badge/AI-Google%20Gemini%203.5--Flash-orange.svg)](https://aistudio.google.com/)
 [![License](https://img.shields.io/badge/license-Source--Available-red.svg)](LICENSE)
-[![Tests Passing](https://img.shields.io/badge/tests-35%2F35%20passed-brightgreen.svg)](test.sh)
+[![Tests Passing](https://img.shields.io/badge/tests-39%2F39%20passed-brightgreen.svg)](test.sh)
 
 > 🚀 **Deploying to a Cloud VPS, Docker, or Render.com?**  
 > Check out the complete step-by-step beginner guide with Render Blueprint support: **[DEPLOYMENT.md](DEPLOYMENT.md)**.
@@ -154,6 +154,10 @@ Manage TeleAutomator straight from your phone by texting your **Saved Messages**
 | **`/allowchat <id>`** | Adds a chat ID to allowlist | `/allowchat 123456789` |
 | **`/removechat <id>`** | Removes a chat from allowlist | `/removechat 123456789` |
 | **`/mentiononly <on\|off>`** | Reply only when mentioned or replied to in groups | `/mentiononly on` |
+| **`/model <name>`** | Switches active AI model (e.g. `gemini-2.5-flash-lite`, `gpt-4o-mini`) | `/model gemini-2.5-flash-lite` |
+| **`/baseurl <url>`** | Custom base URL for NVIDIA, Groq, DeepSeek, or Ollama | `/baseurl https://integrate.api.nvidia.com/v1` |
+| **`/provider <name>`** | Switches AI provider backend (`gemini`, `openai`, `nvidia`, `custom`, `local`) | `/provider nvidia` |
+| **`/chatty <0-100>`** | Sets group banter participation % for non-mention messages | `/chatty 15` |
 | **`/prompt`** | Views active AI prompt instructions | `/prompt` |
 | **`/setprompt <text>`** | Updates prompt instructions in real time | `/setprompt Be chill and brief.` |
 | **`/addrule <trigger> => <reply>`** | Creates non-AI keyword auto-reply | `/addrule pricing => Details soon!` |
@@ -222,7 +226,7 @@ Run the automated test suite locally:
 # Or via universal runner:
 python run.py --test
 ```
-**35 passing unit tests** covering configuration, safety guards, adaptive delay, multi-message splitting, reactions, language control, and mock MTProto workflows without network side-effects.
+**39 passing unit tests** covering configuration, safety guards, adaptive delay, multi-message splitting, reactions, language control, custom OpenAI/NVIDIA endpoints, database context caching, and mock MTProto workflows without network side-effects.
 
 ---
 

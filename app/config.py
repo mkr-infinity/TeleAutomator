@@ -61,9 +61,10 @@ class AppConfig:
 
     # AI Configuration
     ai_enabled: bool = False
-    ai_provider: str = "local"  # "local", "gemini", "openai"
+    ai_provider: str = "local"  # "local", "gemini", "openai", "custom", "nvidia"
     ai_api_key: str = ""
     ai_model: str = ""
+    ai_base_url: str = ""
 
     # Chat & User Filtering
     allowed_private_chats: Set[int] = field(default_factory=set)
@@ -84,6 +85,10 @@ class AppConfig:
     reaction_enabled: bool = True
     reaction_max_per_window: int = 4
     reaction_window_seconds: int = 600
+
+    # Group Dynamics & Participation
+    chatty_probability: float = 0.15
+    react_only_probability: float = 0.25
 
     # Paths
     data_dir: Path = Path("data")
@@ -151,20 +156,22 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
     # AI Configuration
     ai_enabled = _parse_bool(os.getenv("AI_ENABLED"), default=False)
     ai_provider = os.getenv("AI_PROVIDER", "local").strip().lower()
-    if ai_provider not in ("local", "gemini", "openai"):
-        raise ValueError(f"Invalid AI_PROVIDER: '{ai_provider}'. Must be 'local', 'gemini', or 'openai'.")
+    valid_providers = ("local", "gemini", "openai", "custom", "nvidia", "groq", "together", "deepseek")
+    if ai_provider not in valid_providers:
+        raise ValueError(f"Invalid AI_PROVIDER: '{ai_provider}'. Must be one of: {', '.join(valid_providers)}.")
 
     ai_api_key = os.getenv("AI_API_KEY", "").strip()
     if ai_enabled and ai_provider != "local":
-        if not ai_api_key or ai_api_key == "your_gemini_api_key_here":
+        if not ai_api_key or ai_api_key in ("your_gemini_api_key_here", "your_openai_api_key_here"):
             raise ValueError(
                 f"AI_ENABLED is true with provider '{ai_provider}', but AI_API_KEY is not set. "
-                "Please add your Gemini API key from https://aistudio.google.com/app/apikey into .env."
+                "Please add your API key into .env."
             )
     if ai_api_key:
         register_secret(ai_api_key)
 
     ai_model = os.getenv("AI_MODEL", "").strip()
+    ai_base_url = os.getenv("AI_BASE_URL", "").strip()
 
     # Rate limits and bounds
     try:
@@ -178,6 +185,8 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         reaction_enabled = _parse_bool(os.getenv("REACTION_ENABLED"), default=True)
         reaction_max_per_window = max(1, int(os.getenv("REACTION_MAX_PER_WINDOW", "4")))
         reaction_window_seconds = max(10, int(os.getenv("REACTION_WINDOW_SECONDS", "600")))
+        chatty_probability = max(0.0, min(1.0, float(os.getenv("CHATTY_PROBABILITY", "0.15"))))
+        react_only_probability = max(0.0, min(1.0, float(os.getenv("REACT_ONLY_PROBABILITY", "0.25"))))
     except ValueError as e:
         raise ValueError(f"Invalid rate limit or message delay configuration: {e}")
 
@@ -197,6 +206,7 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         ai_provider=ai_provider,
         ai_api_key=ai_api_key,
         ai_model=ai_model,
+        ai_base_url=ai_base_url,
         allowed_private_chats=_parse_id_set(os.getenv("ALLOWED_PRIVATE_CHATS")),
         allowed_groups=_parse_id_set(os.getenv("ALLOWED_GROUPS")),
         blocked_chats=_parse_id_set(os.getenv("BLOCKED_CHATS")),
@@ -211,5 +221,7 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         reaction_enabled=reaction_enabled,
         reaction_max_per_window=reaction_max_per_window,
         reaction_window_seconds=reaction_window_seconds,
+        chatty_probability=chatty_probability,
+        react_only_probability=react_only_probability,
         data_dir=data_dir,
     )

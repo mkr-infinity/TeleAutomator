@@ -22,9 +22,17 @@ def create_ai_provider(config: AppConfig) -> AIProvider:
         logger.info("Initializing Google Gemini AI provider.")
         return GeminiProvider(api_key=config.ai_api_key, model=config.ai_model or "gemini-2.5-flash")
 
-    if config.ai_provider == "openai":
-        logger.info("Initializing OpenAI AI provider.")
-        return OpenAIProvider(api_key=config.ai_api_key, model=config.ai_model or "gpt-4o-mini")
+    if config.ai_provider in ("openai", "custom", "nvidia", "groq", "together", "deepseek"):
+        target_name = config.ai_provider.upper()
+        default_model = "gpt-4o-mini"
+        if config.ai_provider == "nvidia":
+            default_model = "meta/llama-3.1-70b-instruct"
+        logger.info(f"Initializing {target_name} OpenAI-compatible AI provider (base_url: {config.ai_base_url or 'default'}).")
+        return OpenAIProvider(
+            api_key=config.ai_api_key,
+            model=config.ai_model or default_model,
+            base_url=config.ai_base_url,
+        )
 
     logger.warning(f"Unknown provider '{config.ai_provider}', falling back to LocalRuleProvider.")
     return LocalRuleProvider()

@@ -77,6 +77,7 @@ class ReplyManager:
         sender_name: str,
         text: str,
         conversation_history: Optional[Any] = None,
+        is_mention: bool = False,
     ) -> None:
         """Process an incoming message that has passed initial message filters."""
         # Sanitize incoming text before passing to generator
@@ -189,8 +190,19 @@ class ReplyManager:
             can_send, reason = self.safety.can_reply(chat_id, draft)
             if not can_send:
                 logger.info(f"[AUTO REPLY SUPPRESSED] Chat {chat_id}: {reason}")
-                # Rate limit cooldowns are normal operating states; never alert Saved Messages
                 if "cooldown" in reason.lower():
+                    # NEVER skip mention messages: schedule deferred reply after cooldown!
+                    if is_mention:
+                        import re
+                        m = re.search(r"\((\d+)s remaining\)", reason)
+                        wait_secs = float(m.group(1)) if m else 5.0
+                        logger.info(
+                            f"[MENTION QUEUED] Cooldown active for chat {chat_id} ({wait_secs}s). "
+                            f"Scheduling deferred reply so mention is NEVER skipped."
+                        )
+                        asyncio.create_task(
+                            self._schedule_deferred_reply(chat_id, message_id, draft, wait_secs)
+                        )
                     return
                 await self._notify_issue_to_saved_messages(
                     chat_id=chat_id,
@@ -202,6 +214,35 @@ class ReplyManager:
                 return
 
             await self._send_reply(chat_id, message_id, draft, adaptive_delay=True)
+
+    async def _schedule_deferred_reply(
+        self,
+        chat_id: int,
+        message_id: int,
+        draft: str,
+        wait_seconds: float,
+    ) -> None:
+        """Queue and send a deferred reply after cooldown expires so mentions are never dropped."""
+        try:
+            await asyncio.sleep(max(1.0, wait_seconds + 1.0))
+            if self.safety.is_emergency_stopped or self.safety.get_remaining_pause_seconds() > 0:
+                logger.warning(f"Deferred mention reply to chat {chat_id} aborted: emergency stop or pause active.")
+                return
+
+            can_send, reason = self.safety.can_reply(chat_id, draft)
+            if not can_send:
+                if "cooldown" in reason.lower():
+                    import re
+                    m = re.search(r"\((\d+)s remaining\)", reason)
+                    retry_wait = float(m.group(1)) if m else 3.0
+                    await asyncio.sleep(retry_wait + 1.0)
+                    if self.safety.is_emergency_stopped:
+                        return
+
+            await self._send_reply(chat_id, message_id, draft, adaptive_delay=True)
+            logger.info(f"[DEFERRED MENTION SENT] Successfully replied to mention in chat {chat_id} after cooldown.")
+        except Exception as e:
+            logger.error(f"Error in deferred mention reply: {e}")
 
     async def _notify_approval_needed(
         self,
@@ -318,7 +359,11 @@ class ReplyManager:
                 "*Identity & Persona:*\n"
                 "• `/name <name>` - Set your display name for AI persona\n"
                 "• `/prompt` - View active system prompt\n"
-                "• `/setprompt <text>` - Update system prompt on the fly"
+                "• `/setprompt <text>` - Update system prompt on the fly\n"
+                "• `/model <name>` - Switch AI model (e.g. `gemini-2.5-flash-lite`)\n"
+                "• `/baseurl <url>` - Set custom base URL for NVIDIA/Groq/Ollama\n"
+                "• `/provider <gemini|openai|nvidia|custom>` - Switch AI backend\n"
+                "• `/chatty <0-100>` - Set group banter participation %"
             )
 
         if cmd in ("/rules", "/listrules"):
@@ -473,6 +518,14 @@ class ReplyManager:
             react_status = "ON" if react_enabled else "OFF"
             max_r = self.db.get_state("reaction_max_per_window", str(getattr(self.config, "reaction_max_per_window", 4)))
             win_m = int(float(self.db.get_state("reaction_window_seconds", str(getattr(self.config, "reaction_window_seconds", 600.0)))) // 60)
+            active_prov = self.db.get_state("ai_provider", self.config.ai_provider)
+            active_mod = self.db.get_state("ai_model", self.config.ai_model or "default")
+            active_url = self.db.get_state("ai_base_url", self.config.ai_base_url or "")
+            url_str = f" [Base: {active_url}]" if active_url else ""
+            chatty_prob = float(self.db.get_state(
+                "chatty_probability",
+                str(getattr(self.config, "chatty_probability", 0.15))
+            ))
             return (
                 f"📊 *TeleAutomator Status:*\n"
                 f"• Identity Name: `{owner}`\n"
@@ -481,11 +534,12 @@ class ReplyManager:
                 f"• AI Style: `{style_display}` (change with `/style <casual|concise|formal|humorous>`)\n"
                 f"• Language: `{lang_display}` (change with `/lang <dynamic|english|hindi|...>`)\n"
                 f"• Reactions: *{react_status}* (max {max_r} in {win_m}m, customize via `/reaction`)\n"
+                f"• Group Banter: `{int(chatty_prob * 100)}%` (change with `/chatty <0-100>`)\n"
                 f"• Cooldowns: Chat=`{self.safety.per_chat_cooldown_seconds}s`, Global=`{self.safety.global_cooldown_seconds}s`\n"
                 f"• Auto Authorized: *{auto_status}*\n"
                 f"• Emergency Stop: *{stop_status}*\n"
                 f"• Pending Approvals: `{pending_count}`\n"
-                f"• AI Provider: `{self.config.ai_provider}` (model={self.config.ai_model or 'default'})"
+                f"• AI Provider: `{active_prov.upper()}` (model=`{active_mod}`{url_str})"
             )
 
         if cmd in ("/lang", "/language", "/setlang"):
@@ -566,6 +620,108 @@ class ReplyManager:
                 return f"✅ Global cooldown updated to *{secs}s*."
             except ValueError:
                 return "Error: Seconds must be an integer."
+
+        if cmd in ("/model", "/setmodel"):
+            if len(cmd_parts) < 2:
+                curr = self.db.get_state("ai_model", self.config.ai_model or "default")
+                return (
+                    f"🤖 *Current AI Model:* `{curr}`\n\n"
+                    f"*Recommended Fast & Low-Credit Models:*\n"
+                    f"• `/model gemini-2.5-flash-lite` (Ultra-low credit cost, lightning fast)\n"
+                    f"• `/model gemini-2.5-flash` (Fast, hybrid reasoning)\n"
+                    f"• `/model gemini-3.5-flash-lite` (Next-gen lightweight)\n"
+                    f"• `/model gemini-3.5-flash` (Next-gen fast)\n"
+                    f"• `/model meta/llama-3.1-70b-instruct` (NVIDIA / custom)\n"
+                    f"• `/model gpt-4o-mini` (OpenAI)\n\n"
+                    f"Usage: `/model <model_name>`"
+                )
+            new_model = cmd_parts[1].strip()
+            self.db.set_state("ai_model", new_model)
+            if hasattr(self.generator.provider, "model"):
+                self.generator.provider.model = new_model
+            return f"✅ AI model switched to *{new_model}*."
+
+        if cmd in ("/baseurl", "/setbaseurl"):
+            if len(cmd_parts) < 2:
+                curr = self.db.get_state("ai_base_url", self.config.ai_base_url or "(default API)")
+                return (
+                    f"🔗 *Current AI Base URL:* `{curr}`\n\n"
+                    f"*Custom API Providers:*\n"
+                    f"• NVIDIA: `/baseurl https://integrate.api.nvidia.com/v1`\n"
+                    f"• Groq: `/baseurl https://api.groq.com/openai/v1`\n"
+                    f"• DeepSeek: `/baseurl https://api.deepseek.com/v1`\n"
+                    f"• Local Ollama: `/baseurl http://localhost:11434/v1`\n"
+                    f"• Reset: `/baseurl default`"
+                )
+            raw_url = " ".join(cmd_parts[1:]).strip()
+            target_url = "" if raw_url.lower() == "default" else raw_url
+            self.db.set_state("ai_base_url", target_url)
+            if hasattr(self.generator.provider, "endpoint_url"):
+                clean_ep = target_url.rstrip("/")
+                if not clean_ep.endswith("/chat/completions"):
+                    clean_ep = f"{clean_ep}/chat/completions"
+                self.generator.provider.endpoint_url = clean_ep
+            return f"✅ AI base URL updated to: `{target_url or 'default'}`"
+
+        if cmd in ("/provider", "/setprovider"):
+            if len(cmd_parts) < 2:
+                curr = self.db.get_state("ai_provider", self.config.ai_provider)
+                return (
+                    f"🧠 *Current AI Provider:* `{curr}`\n\n"
+                    f"*Available Options:*\n"
+                    f"• `/provider gemini` - Google Gemini (Flash & Lite)\n"
+                    f"• `/provider openai` - OpenAI (GPT-4o-mini)\n"
+                    f"• `/provider nvidia` - NVIDIA API (via custom base URL)\n"
+                    f"• `/provider custom` - Generic OpenAI-compatible endpoint\n"
+                    f"• `/provider local` - Offline rule-based (zero credit cost)"
+                )
+            target = cmd_parts[1].lower().strip()
+            if target in ("gemini", "openai", "nvidia", "custom", "groq", "together", "deepseek", "local"):
+                self.db.set_state("ai_provider", target)
+                from dataclasses import replace
+                curr_model = self.db.get_state("ai_model", self.config.ai_model)
+                curr_url = self.db.get_state("ai_base_url", self.config.ai_base_url)
+                new_cfg = replace(
+                    self.config,
+                    ai_provider=target,
+                    ai_model=curr_model,
+                    ai_base_url=curr_url,
+                    ai_enabled=True if target != "local" else False,
+                )
+                from app.ai.reply_generator import create_ai_provider
+                self.generator.provider = create_ai_provider(new_cfg)
+                return f"🧠 AI provider switched to *{target.upper()}*."
+            return "Invalid provider. Available: gemini, openai, nvidia, custom, local."
+
+        if cmd in ("/chatty", "/banter"):
+            if len(cmd_parts) < 2:
+                curr_prob = float(self.db.get_state(
+                    "chatty_probability",
+                    str(getattr(self.config, "chatty_probability", 0.15))
+                ))
+                return (
+                    f"💬 *Group Banter Participation:* `{int(curr_prob * 100)}%`\n"
+                    f"Chance of casually chiming in on group conversation even when not directly mentioned.\n\n"
+                    f"*Commands:*\n"
+                    f"• `/chatty off` - Strictly reply only when mentioned (0%)\n"
+                    f"• `/chatty on` - Enable natural 15% group banter\n"
+                    f"• `/chatty <0-100>` - Set custom percentage (e.g. `/chatty 25`)"
+                )
+            arg = cmd_parts[1].lower().strip()
+            if arg == "off":
+                self.db.set_state("chatty_probability", "0.0")
+                return "🔒 Group banter *DISABLED*. Client will strictly reply only when mentioned."
+            elif arg == "on":
+                self.db.set_state("chatty_probability", "0.15")
+                return "💬 Group banter *ENABLED* (15% natural reply rate in allowlisted groups)."
+            else:
+                try:
+                    pct = float(arg.rstrip("%"))
+                    prob = max(0.0, min(1.0, pct / 100.0 if pct > 1.0 else pct))
+                    self.db.set_state("chatty_probability", str(prob))
+                    return f"💬 Group banter probability set to *{int(prob * 100)}%*."
+                except ValueError:
+                    return "Usage: `/chatty on`, `/chatty off`, or `/chatty <0-100>`"
 
         if cmd in ("/pause", "/off", "/sleep"):
             if len(cmd_parts) < 2:
@@ -696,6 +852,10 @@ class ReplyManager:
             # Longer thoughtful responses take more formulation time
             delay = min(self.max_delay, delay + random.uniform(3.0, 8.0))
 
+        # Add human typing speed jitter (±15% randomized variation)
+        jitter = random.uniform(-0.15, 0.15) * delay
+        delay = delay + jitter
+
         return round(max(self.min_delay, min(self.max_delay, delay)), 2)
 
     @staticmethod
@@ -751,20 +911,36 @@ class ReplyManager:
             )
             return False
 
-        # Pick natural emoji based on text tone
+        # Complete Telegram reaction emoji catalogue
+        all_telegram_reactions = [
+            "👍", "👎", "❤️", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", "🤬", "😢", "🎉", "🤩",
+            "🤮", "💩", "🙏", "👌", "🕊️", "🤡", "🥱", "🥴", "😍", "🐳", "❤️‍🔥", "🌚", "🌭", "💯",
+            "🤣", "⚡", "🍌", "🏆", "💔", "🤨", "😐", "🍓", "🍾", "💋", "🖕", "😈", "😴", "😭",
+            "🤓", "👻", "👨‍💻", "👀", "🎃", "🙈", "😇", "😨", "🤝", "✍️", "🤗", "🫡", "🎅", "🎄",
+            "☃️", "💅", "🤪", "🗿", "🆒", "💘", "🙉", "🦄", "😘", "💊", "🙊", "😎", "👾", "🤷‍♂️",
+            "🤷", "🤷‍♀️", "😡"
+        ]
+
+        # Natural sentiment & tone mapping with full emoji variety
         lower = text.lower()
-        if any(w in lower for w in ("haha", "lol", "lmao", "rofl", "😂", "xd", "funny")):
-            chosen = "😂"
-        elif any(w in lower for w in ("fire", "op", "w", "nice", "cool", "goat", "lit", "🔥")):
-            chosen = "🔥"
-        elif any(w in lower for w in ("thanks", "thx", "love", "heart", "❤️", "tysm")):
-            chosen = "❤️"
-        elif any(w in lower for w in ("ok", "okay", "done", "yes", "yeah", "yep", "sure", "alright", "got it")):
-            chosen = "👍"
-        elif any(w in lower for w in ("what", "why", "who", "where", "how", "?", "👀")):
-            chosen = "👀"
+        if any(w in lower for w in ("haha", "lol", "lmao", "rofl", "xd", "funny", "lmfao", "joke")):
+            chosen = random.choice(["😂", "🤣", "😁", "🤪", "🤡", "😎"])
+        elif any(w in lower for w in ("fire", "op", "w", "nice", "cool", "goat", "lit", "win", "awesome", "pro")):
+            chosen = random.choice(["🔥", "⚡", "💯", "🆒", "🏆", "🤩", "👏"])
+        elif any(w in lower for w in ("thanks", "thx", "love", "heart", "tysm", "appreciate", "cute", "sweet")):
+            chosen = random.choice(["❤️", "❤️‍🔥", "🥰", "😍", "💘", "😘", "🙏", "🤗"])
+        elif any(w in lower for w in ("ok", "okay", "done", "yes", "yeah", "yep", "sure", "alright", "got it", "true")):
+            chosen = random.choice(["👍", "👌", "🤝", "🫡", "✍️", "🆒"])
+        elif any(w in lower for w in ("no", "nah", "nope", "bad", "disagree", "worst", "hate", "bruh")):
+            chosen = random.choice(["👎", "💔", "😐", "🤨", "🗿", "🥱"])
+        elif any(w in lower for w in ("omg", "what", "wait", "wow", "damn", "seriously", "bro what")):
+            chosen = random.choice(["🤯", "😱", "👀", "😨", "👻"])
+        elif any(w in lower for w in ("why", "how", "who", "where", "?", "idk", "wonder", "really")):
+            chosen = random.choice(["🤔", "🧐", "🤓", "👀"])
+        elif any(w in lower for w in ("sad", "rip", "sorry", "unfortunate", "cry", "pain")):
+            chosen = random.choice(["😢", "😭", "💔"])
         else:
-            chosen = random.choice(["👍", "❤️", "🔥", "😂", "🫡", "⚡"])
+            chosen = random.choice(all_telegram_reactions)
 
         try:
             from telethon.tl.functions.messages import SendReactionRequest
@@ -841,8 +1017,19 @@ class ReplyManager:
                     await asyncio.sleep(typing_duration)
 
             # Send first message part
-            await self._client.send_message(chat_id, first_part, reply_to=reply_to_msg_id)
+            first_sent = await self._client.send_message(chat_id, first_part, reply_to=reply_to_msg_id)
             self.safety.mark_reply_sent(chat_id)
+            first_msg_id = getattr(first_sent, "id", 0)
+            if not isinstance(first_msg_id, int):
+                first_msg_id = 0
+            self.db.record_chat_message(
+                chat_id=chat_id,
+                message_id=first_msg_id,
+                sender_id=None,
+                sender_name=self.generator.prompt_manager.owner_name,
+                text=first_part,
+                is_outgoing=True,
+            )
             logger.info(f"Successfully sent reply part 1/{len(msg_parts)} to chat {chat_id}.")
 
             # Send subsequent message parts (2 or 3) with short natural typing pause
@@ -867,8 +1054,19 @@ class ReplyManager:
                 except Exception:
                     await asyncio.sleep(followup_delay)
 
-                await self._client.send_message(chat_id, part)
+                sub_sent = await self._client.send_message(chat_id, part)
                 self.safety.mark_reply_sent(chat_id)
+                sub_msg_id = getattr(sub_sent, "id", 0)
+                if not isinstance(sub_msg_id, int):
+                    sub_msg_id = 0
+                self.db.record_chat_message(
+                    chat_id=chat_id,
+                    message_id=sub_msg_id,
+                    sender_id=None,
+                    sender_name=self.generator.prompt_manager.owner_name,
+                    text=part,
+                    is_outgoing=True,
+                )
                 logger.info(f"Successfully sent reply part {idx}/{len(msg_parts)} to chat {chat_id}.")
 
             return True

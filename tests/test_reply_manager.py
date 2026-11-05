@@ -422,3 +422,120 @@ def test_cooldown_suppression_does_not_alert_saved_messages(tmp_path: Path):
         mock_client.send_message.assert_not_called()
 
     asyncio.run(_run())
+
+
+def test_mention_queue_never_skipped(tmp_path: Path):
+    """Verify that mentions are never skipped when cooldown is active; they are queued and sent."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            reply_mode="restricted_auto",
+            allowed_private_chats={100},
+            global_cooldown_seconds=1,
+            per_chat_cooldown_seconds=1,
+            min_delay_seconds=0.0,
+            max_delay_seconds=0.0,
+            typing_delay_seconds=0.0,
+            data_dir=tmp_path,
+        )
+        db = Database(tmp_path / "app.db")
+        safety = SafetyManager(cfg, db)
+        safety.set_auto_authorization(True)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        mock_client = AsyncMock()
+        mgr.set_telegram_client(mock_client)
+
+        # Active cooldown
+        safety.mark_reply_sent(100)
+
+        # Incoming mention message arrives
+        await mgr.handle_incoming_eligible_message(
+            chat_id=100,
+            chat_title="Friend",
+            message_id=205,
+            sender_id=123,
+            sender_name="Alice",
+            text="@Kaif are you free tonight?",
+            is_mention=True,
+        )
+
+        # Wait for deferred queue execution (1s cooldown + buffer)
+        await asyncio.sleep(2.2)
+
+        # Verified message was sent to the chat after cooldown!
+        assert mock_client.send_message.call_count >= 1
+        assert any(c[0][0] == 100 for c in mock_client.send_message.call_args_list)
+
+    asyncio.run(_run())
+
+
+def test_chat_context_database_caching(tmp_path: Path):
+    """Verify that conversation context caches in SQLite to save AI usage and avoid repeated network calls."""
+    db = Database(tmp_path / "app.db")
+    db.record_chat_message(chat_id=500, message_id=1, sender_id=10, sender_name="Rahul", text="wassup bro", is_outgoing=False)
+    db.record_chat_message(chat_id=500, message_id=2, sender_id=None, sender_name="Kaif", text="all good", is_outgoing=True)
+    db.record_chat_message(chat_id=500, message_id=3, sender_id=10, sender_name="Rahul", text="game tonight?", is_outgoing=False)
+
+    history = db.get_recent_chat_messages(chat_id=500, limit=5)
+    assert len(history) == 3
+    assert history[0]["sender"] == "Rahul"
+    assert history[0]["text"] == "wassup bro"
+    assert history[1]["sender"] == "You"
+    assert history[1]["text"] == "all good"
+    assert history[2]["sender"] == "Rahul"
+    assert history[2]["text"] == "game tonight?"
+
+
+def test_openai_compatible_provider_custom_base_url():
+    """Verify custom base URL and model support (e.g., NVIDIA, Groq, DeepSeek)."""
+    from app.ai.provider import OpenAIProvider
+    provider = OpenAIProvider(
+        api_key="nvapi-test123",
+        model="meta/llama-3.1-70b-instruct",
+        base_url="https://integrate.api.nvidia.com/v1",
+    )
+    assert provider.endpoint_url == "https://integrate.api.nvidia.com/v1/chat/completions"
+    assert provider.model == "meta/llama-3.1-70b-instruct"
+
+
+def test_control_commands_model_baseurl_provider_chatty(tmp_path: Path):
+    """Verify Saved Messages commands for switching model, base URL, provider, and banter."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            reply_mode="restricted_auto",
+            data_dir=tmp_path,
+        )
+        db = Database(tmp_path / "app.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # 1. /model
+        model_info = await mgr.handle_control_command("/model")
+        assert "Current AI Model" in model_info
+        model_set = await mgr.handle_control_command("/model gemini-2.5-flash-lite")
+        assert "gemini-2.5-flash-lite" in model_set
+        assert db.get_state("ai_model") == "gemini-2.5-flash-lite"
+
+        # 2. /baseurl
+        url_info = await mgr.handle_control_command("/baseurl")
+        assert "Current AI Base URL" in url_info
+        url_set = await mgr.handle_control_command("/baseurl https://integrate.api.nvidia.com/v1")
+        assert "https://integrate.api.nvidia.com/v1" in url_set
+        assert db.get_state("ai_base_url") == "https://integrate.api.nvidia.com/v1"
+
+        # 3. /chatty
+        chatty_info = await mgr.handle_control_command("/chatty")
+        assert "Group Banter Participation" in chatty_info
+        chatty_set = await mgr.handle_control_command("/chatty 20")
+        assert "20%" in chatty_set
+        assert float(db.get_state("chatty_probability")) == 0.20
+
+    asyncio.run(_run())

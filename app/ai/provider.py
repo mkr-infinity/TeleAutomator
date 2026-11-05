@@ -45,19 +45,21 @@ class GeminiProvider(AIProvider):
 
     def __init__(self, api_key: str, model: str = "gemini-2.5-flash"):
         self.api_key = api_key
-        # Clean model name and default to latest fast flash model
         clean = (model or "gemini-2.5-flash").strip()
         if clean.startswith("models/"):
             clean = clean[len("models/"):]
-        # Normalize any non-existent 3.5 versions to the real Google 2.5 flash model
-        if "3.5" in clean:
-            clean = "gemini-2.5-flash"
         self.model = clean
 
     def generate_reply(self, prompt: str, system_instructions: str) -> str:
-        # Candidate models to try in sequence if one returns 404 or 503
+        # Candidate models to try in sequence with priority for fast Flash and Lite options
         candidate_models = [self.model]
-        for fallback in ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"):
+        for fallback in (
+            "gemini-3.5-flash-lite",
+            "gemini-3.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-1.5-flash",
+        ):
             if fallback not in candidate_models:
                 candidate_models.append(fallback)
 
@@ -105,14 +107,17 @@ class GeminiProvider(AIProvider):
 
 
 class OpenAIProvider(AIProvider):
-    """OpenAI API provider using standard library urllib."""
+    """OpenAI and OpenAI-compatible provider (NVIDIA, Groq, Together, DeepSeek, Local Ollama)."""
 
-    def __init__(self, api_key: str, model: str = "gpt-4o-mini"):
+    def __init__(self, api_key: str, model: str = "gpt-4o-mini", base_url: str = ""):
         self.api_key = api_key
         self.model = model or "gpt-4o-mini"
+        raw_url = (base_url or "https://api.openai.com/v1").strip().rstrip("/")
+        if not raw_url.endswith("/chat/completions"):
+            raw_url = f"{raw_url}/chat/completions"
+        self.endpoint_url = raw_url
 
     def generate_reply(self, prompt: str, system_instructions: str) -> str:
-        url = "https://api.openai.com/v1/chat/completions"
         payload = {
             "model": self.model,
             "messages": [
@@ -124,7 +129,7 @@ class OpenAIProvider(AIProvider):
         }
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
-            url,
+            self.endpoint_url,
             data=data,
             headers={
                 "Content-Type": "application/json",
@@ -140,6 +145,6 @@ class OpenAIProvider(AIProvider):
                 if choices:
                     return str(choices[0].get("message", {}).get("content", "")).strip().strip('"')
         except Exception as e:
-            logger.error(f"OpenAI API request failed: {e}")
+            logger.error(f"OpenAI-compatible request to {self.endpoint_url} failed: {e}")
             raise
         return ""
