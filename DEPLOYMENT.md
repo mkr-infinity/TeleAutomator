@@ -249,10 +249,10 @@ In your Railway service settings, go to the **Variables** tab and add the follow
 | `TG_API_ID` | Your numeric Telegram API ID from `my.telegram.org` |
 | `TG_API_HASH` | Your 32-character Telegram API Hash from `my.telegram.org` |
 | `TG_SESSION_STRING` | Your exported session string from `./session.sh` |
-| `AI_PROVIDER` | `custom` (or `gemini`, `openai`, `nvidia`) |
-| `CUSTOM_BASE_URL` | `https://api.inceptionlabs.ai/v1` |
-| `CUSTOM_API_KEY` | Your InceptionLabs API key (`sk_...`) |
-| `CUSTOM_MODEL` | `mercury-3` |
+| `AI_PROVIDER` | `gemini` (or `openai`, `custom`, `nvidia`, `groq`) |
+| `AI_API_KEY` | Your AI provider API key (e.g. `AIzaSy...` for Gemini or `sk-...` for OpenAI/custom) |
+| `AI_MODEL` | `gemini-2.5-flash` (or your model name, e.g. `gpt-4o-mini`) |
+| `AI_BASE_URL` | Base endpoint URL (only needed for `custom` OpenAI-compatible providers, e.g. `https://api.your-provider.com/v1`) |
 | `REASONING_EFFORT`| `low` (options: `low`, `medium`, `high`, `off`) |
 | `REPLY_MODE` | `restricted_auto` (or `approval`, `draft`) |
 | `AUTO_AUTHORIZE` | `true` |

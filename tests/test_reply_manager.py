@@ -1130,7 +1130,7 @@ def test_custom_ai_remote_configuration(tmp_path: Path):
         assert db.get_state("ai_model") == "custom-fast-model"
 
         # 4. Quick setup Mercury via /setai mercury <key>
-        res4 = await mgr.handle_control_command("/setai mercury sk_2a7e825c4fb6745b35a56577131b62e50a55b9f0c523065f08cc785a77d4075c")
+        res4 = await mgr.handle_control_command("/setai mercury sk_mercury_test_dummy_key_1234567890")
         assert "Inception Labs Mercury Configured" in res4
         assert db.get_state("ai_provider") == "custom"
         assert db.get_state("ai_base_url") == "https://api.inceptionlabs.ai/v1"

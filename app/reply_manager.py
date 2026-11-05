@@ -1335,7 +1335,7 @@ class ReplyManager:
                 return (
                     f"🔑 *Current AI API Key:* {masked}\n\n"
                     f"Usage: `/apikey <your_api_key>`\n"
-                    f"_Example:_ `/apikey sk_2a7e825c4fb6745...`\n\n"
+                    f"_Example:_ `/apikey sk_your_api_key_here`\n\n"
                     f"_Updates your active AI key instantly on both local and cloud deployments without server restarts._"
                 )
             new_key = cmd_parts[1].strip()
@@ -1359,7 +1359,7 @@ class ReplyManager:
                     f"• **API Key:** {masked_key}\n\n"
                     f"*Commands to customize from Telegram:*\n"
                     f"• `/setai <provider> <api_key> <endpoint_url> [models]`\n"
-                    f"  _Example:_ `/setai custom sk_... https://api.inceptionlabs.ai/v1 mercury-3`\n"
+                    f"  _Example:_ `/setai custom sk_... https://api.your-provider.com/v1 model-name`\n"
                     f"• `/setai mercury <api_key>` (one-step Inception Labs Mercury setup)\n"
                     f"• `/apikey <key>` — Update API key directly\n"
                     f"• `/baseurl <url>` — Update endpoint URL\n"
