@@ -6,6 +6,7 @@ import asyncio
 import datetime
 import random
 import re
+import shutil
 import time
 from typing import Any, Optional
 
@@ -575,7 +576,8 @@ class ReplyManager:
                 "• `/syncpins [chat_id]` - Sync pinned message(s) into permanent chat context\n"
                 "• `/setcontext <chat_id> <notes>` - Save permanent notes/guidelines for a group\n"
                 "• `/showcontext <chat_id>` - View permanent background context for a group\n"
-                "• `/delcontext <chat_id>` - Delete permanent context for a group\n\n"
+                "• `/delcontext <chat_id>` - Delete permanent context for a group\n"
+                "• `/backup` - Create database snapshot & send directly to Saved Messages\n\n"
                 "*Approvals & Drafts:*\n"
                 "• `/pending` - List drafts waiting for review\n"
                 "• `/approve <id>` - Approve & send pending draft\n"
@@ -853,6 +855,30 @@ class ReplyManager:
                 return f"No permanent context found for chat `{target_cid}`."
             except ValueError:
                 return "Error: Chat ID must be an integer."
+
+        if cmd in ("/backup", "/exportdb"):
+            db_path = getattr(self.db, "db_path", None)
+            if not db_path or not db_path.exists():
+                return "❌ Database file not found."
+            backup_dir = db_path.parent / "backups"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_file = backup_dir / f"teleautomator_backup_{ts}.db"
+            try:
+                with self.db._get_connection() as conn:
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                shutil.copy2(db_path, backup_file)
+                if self._client:
+                    await self._client.send_file(
+                        "me",
+                        str(backup_file),
+                        caption=f"📦 *TeleAutomator Database Backup*\n_Created:_ `{ts}`\n_Contains:_ Permanent contexts, rules, and AI configurations.",
+                    )
+                    return f"✅ Database backup `{backup_file.name}` created and sent directly to your Saved Messages!"
+                return f"✅ Database backup saved locally to `{backup_file}`."
+            except Exception as e:
+                logger.error(f"Backup failed: {e}")
+                return f"❌ Backup failed: {e}"
 
         if cmd in ("/usage", "/tokens", "/quota"):
             stats = self.db.get_token_usage_stats()

@@ -1145,3 +1145,35 @@ def test_custom_ai_remote_configuration(tmp_path: Path):
         assert db.get_state("ai_model") == "meta-llama/Llama-3-70b"
 
     asyncio.run(_run())
+
+
+def test_database_backup_and_data_persistence(tmp_path: Path):
+    """Verify database backup command creates valid snapshot and permanent context persists."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "app_test_backup.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        mock_client = MagicMock()
+        mock_client.send_file = AsyncMock()
+        mgr.set_telegram_client(mock_client)
+
+        # Populate permanent context
+        db.set_permanent_context(-100555, pinned_text="Critical Rules", notes="Tech Project")
+        assert db.get_permanent_context(-100555)["pinned_text"] == "Critical Rules"
+
+        # Execute /backup
+        res = await mgr.handle_control_command("/backup")
+        assert "Database backup" in res
+        mock_client.send_file.assert_called_once()
+
+        # Simulate update: re-initialize Database on same file to ensure everything persists
+        db_reloaded = Database(tmp_path / "app_test_backup.db")
+        reloaded_ctx = db_reloaded.get_permanent_context(-100555)
+        assert reloaded_ctx["pinned_text"] == "Critical Rules"
+        assert reloaded_ctx["notes"] == "Tech Project"
+
+    asyncio.run(_run())

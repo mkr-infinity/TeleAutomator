@@ -13,6 +13,8 @@
   Author:     Mohammad Kaif Raja (mkr-infinity)
   Telegram:   @mkr_infinity (https://t.me/mkr_infinity)
   Instagram:  @mkr_infinity (https://instagram.com/mkr_infinity)
+  Support:    https://buymeacoffee.com/mkr_infinity
+  UPI (India): mkr-infinity@ybl
   Copyright:  Copyright (c) Mohammad Kaif Raja. All Rights Reserved.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ~  Unauthorized modification, redistribution, or commercial sale of this software       ~
@@ -26,7 +28,7 @@
 [![MTProto Telethon](https://img.shields.io/badge/protocol-MTProto%20Telethon-informational.svg)](https://github.com/LonamiWebs/Telethon)
 [![AI Supported](https://img.shields.io/badge/AI-Gemini%20%7C%20Mercury--3%20%7C%20OpenAI-orange.svg)](https://api.inceptionlabs.ai)
 [![License](https://img.shields.io/badge/license-Source--Available-red.svg)](LICENSE)
-[![Tests Passing](https://img.shields.io/badge/tests-64%2F64%20passed-brightgreen.svg)](test.sh)
+[![Tests Passing](https://img.shields.io/badge/tests-65%2F65%20passed-brightgreen.svg)](test.sh)
 
 > 🚀 **Deploying to Railway, Render, or Cloud VPS?**  
 > Check out the complete cloud setup guide below and in **[DEPLOYMENT.md](DEPLOYMENT.md)**.
@@ -181,7 +183,16 @@ Run the automated test suite locally:
 # Or via universal runner:
 python run.py --test
 ```
-**61 passing unit tests** covering configuration, safety guards, quiet hours, randomized cooldowns, permanent context caching, pinned message syncing, adaptive typing, and mock MTProto workflows.
+**65 passing unit tests** covering configuration, safety guards, quiet hours, randomized cooldowns, permanent context caching, pinned message syncing, adaptive typing, and mock MTProto workflows.
+
+---
+
+## ☕ Support & Donations
+
+If TeleAutomator saves you time or empowers your personal workflow, consider supporting development:
+
+- ☕ **Buy Me a Coffee**: [https://buymeacoffee.com/mkr_infinity](https://buymeacoffee.com/mkr_infinity)
+- 🇮🇳 **UPI (India)**: `mkr-infinity@ybl`
 
 ---
 

@@ -17,6 +17,8 @@ BANNER_TEXT = """
   \033[1;34mAuthor:    \033[0m \033[1;33mMohammad Kaif Raja (mkr-infinity)\033[0m
   \033[1;34mTelegram:  \033[0m \033[1;36m@mkr_infinity\033[0m \033[0;37m(https://t.me/mkr_infinity)\033[0m
   \033[1;34mInstagram: \033[0m \033[1;35m@mkr_infinity\033[0m \033[0;37m(https://instagram.com/mkr_infinity)\033[0m
+  \033[1;34mSupport:   \033[0m \033[1;32mhttps://buymeacoffee.com/mkr_infinity\033[0m
+  \033[1;34mUPI (India):\033[0m \033[1;33mmkr-infinity@ybl\033[0m
   \033[1;34mCopyright: \033[0m \033[0;37mCopyright (c) Mohammad Kaif Raja. All Rights Reserved.\033[0m
 \033[1;30m~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\033[0m
 \033[1;31m~  Unauthorized modification, redistribution, or commercial sale of this software       ~\033[0m
