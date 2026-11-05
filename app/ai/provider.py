@@ -107,7 +107,7 @@ class GeminiProvider(AIProvider):
 
 
 class OpenAIProvider(AIProvider):
-    """OpenAI and OpenAI-compatible provider (NVIDIA, Groq, Together, DeepSeek, Local Ollama)."""
+    """OpenAI and OpenAI-compatible provider (Inception Labs, NVIDIA, Groq, Together, DeepSeek, Local Ollama)."""
 
     def __init__(self, api_key: str, model: str = "gpt-4o-mini", base_url: str = ""):
         self.api_key = api_key
@@ -117,34 +117,73 @@ class OpenAIProvider(AIProvider):
             raw_url = f"{raw_url}/chat/completions"
         self.endpoint_url = raw_url
 
-    def generate_reply(self, prompt: str, system_instructions: str) -> str:
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_instructions},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.6,
-            "max_tokens": 200,
-        }
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            self.endpoint_url,
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-            },
-            method="POST",
-        )
+    def get_candidate_models(self) -> list[str]:
+        """Build priority list of candidate models with automatic verified fallbacks."""
+        candidates: list[str] = []
+        for m in self.model.replace(";", ",").split(","):
+            cleaned = m.strip()
+            if cleaned and cleaned not in candidates:
+                candidates.append(cleaned)
 
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-                choices = body.get("choices", [])
-                if choices:
-                    return str(choices[0].get("message", {}).get("content", "")).strip().strip('"')
-        except Exception as e:
-            logger.error(f"OpenAI-compatible request to {self.endpoint_url} failed: {e}")
-            raise
-        return ""
+        endpoint_lower = self.endpoint_url.lower()
+        if "inceptionlabs" in endpoint_lower:
+            for fallback in ("mercury-3", "mercury-3-preview-1014", "mercury-3-preview-1002"):
+                if fallback not in candidates:
+                    candidates.append(fallback)
+        elif "openai.com" in endpoint_lower:
+            for fallback in ("gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"):
+                if fallback not in candidates:
+                    candidates.append(fallback)
+        elif "nvidia" in endpoint_lower:
+            for fallback in ("meta/llama-3.1-70b-instruct", "meta/llama-3.1-8b-instruct"):
+                if fallback not in candidates:
+                    candidates.append(fallback)
+
+        return candidates or [self.model]
+
+    def generate_reply(self, prompt: str, system_instructions: str) -> str:
+        candidates = self.get_candidate_models()
+        last_error: Optional[Exception] = None
+        is_inception = "inceptionlabs" in self.endpoint_url.lower()
+
+        for m in candidates:
+            payload: Dict[str, Any] = {
+                "model": m,
+                "messages": [
+                    {"role": "system", "content": system_instructions},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.6,
+                "max_tokens": 200,
+            }
+            if is_inception:
+                payload["reasoning_effort"] = "low"
+
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                self.endpoint_url,
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.api_key}",
+                },
+                method="POST",
+            )
+
+            try:
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                    choices = body.get("choices", [])
+                    if choices:
+                        content = str(choices[0].get("message", {}).get("content", "")).strip().strip('"')
+                        if m != self.model:
+                            logger.info(f"AI model automatically switched from '{self.model}' to working fallback '{m}'.")
+                            self.model = m
+                        return content
+            except Exception as e:
+                last_error = e
+                logger.warning(f"OpenAI-compatible model '{m}' request failed: {e}. Trying next candidate...")
+                continue
+
+        logger.error(f"All candidate models failed on {self.endpoint_url}: {last_error}")
+        raise last_error if last_error else RuntimeError("AI reply generation failed.")

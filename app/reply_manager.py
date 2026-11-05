@@ -102,6 +102,13 @@ class ReplyManager:
         # Sanitize incoming text before passing to generator
         clean_text = self.privacy.sanitize_text(text)
 
+        # Record chat metadata for DataFrame display
+        self.db.record_chat_metadata(
+            chat_id=chat_id,
+            title=chat_title,
+            chat_type="Group" if chat_id < 0 else "Private",
+        )
+
         # Check for custom keyword trigger rule before calling AI
         matched_rule = self.db.match_keyword_rule(clean_text)
         if matched_rule:
@@ -339,6 +346,54 @@ class ReplyManager:
             pass
         return None
 
+    async def get_allowed_chats_dataframe(self) -> str:
+        """Format all allowlisted groups and chats as an aligned DataFrame table with numbering, name, and username/ID."""
+        priv, grps = self.privacy.get_all_allowed_chats()
+        all_ids = sorted(list(priv | grps))
+        if not all_ids:
+            return "_No allowed chats or groups configured. Use `/allowchat <id>` to add._"
+
+        rows: list[list[str]] = []
+        for idx, cid in enumerate(all_ids, 1):
+            meta = self.db.get_chat_metadata(cid) or {}
+            c_type = str(meta.get("chat_type") or ("Group" if cid < 0 else "Private"))
+            c_title = str(meta.get("title") or "")
+            c_user = str(meta.get("username") or "")
+
+            if self._client and (not c_title or not c_user):
+                try:
+                    entity = await self._client.get_entity(cid)
+                    if hasattr(entity, "title") and isinstance(entity.title, str) and entity.title:
+                        c_title = entity.title
+                    elif hasattr(entity, "first_name") and isinstance(entity.first_name, str):
+                        fn = entity.first_name or ""
+                        ln = getattr(entity, "last_name", "") or ""
+                        c_title = f"{fn} {ln}".strip()
+                    if hasattr(entity, "username") and isinstance(entity.username, str) and entity.username:
+                        c_user = entity.username
+                    if isinstance(c_title, str) and isinstance(c_user, str):
+                        self.db.record_chat_metadata(cid, title=c_title, username=c_user, chat_type=c_type)
+                except Exception:
+                    pass
+
+            name_display = str(c_title) if (c_title and isinstance(c_title, str)) else f"Chat {cid}"
+            user_display = f"@{c_user}" if (c_user and isinstance(c_user, str)) else str(cid)
+            rows.append([str(idx), str(c_type), str(name_display), str(user_display)])
+
+        headers = ["#", "Type", "Name / Title", "Username / ID"]
+        col_widths = [len(h) for h in headers]
+        for row in rows:
+            for i, val in enumerate(row):
+                col_widths[i] = max(col_widths[i], len(val))
+
+        header_str = " | ".join(headers[i].ljust(col_widths[i]) for i in range(len(headers)))
+        sep_str = "-+-".join("-" * col_widths[i] for i in range(len(headers)))
+        body_strs = [
+            " | ".join(row[i].ljust(col_widths[i]) for i in range(len(headers)))
+            for row in rows
+        ]
+        return f"```\n{header_str}\n{sep_str}\n" + "\n".join(body_strs) + "\n```"
+
     async def handle_control_command(self, text: str) -> Optional[str]:
         """Handle control commands sent to Saved Messages (e.g., /approve, /reject, /status, /pause, /setprompt)."""
         cmd_parts = text.strip().split()
@@ -428,20 +483,15 @@ class ReplyManager:
             return f"Rule for *'{kw}'* not found."
 
         if cmd in ("/chats", "/allowlist", "/listchats"):
-            priv, grps = self.privacy.get_all_allowed_chats()
-            lines = ["📋 *Active Allowlisted Chats:*"]
-            if priv:
-                lines.append("• *Private Chats:* " + ", ".join(f"`{c}`" for c in sorted(priv)))
-            else:
-                lines.append("• *Private Chats:* (none)")
-            if grps:
-                lines.append("• *Groups:* " + ", ".join(f"`{g}`" for g in sorted(grps)))
-            else:
-                lines.append("• *Groups:* (none)")
+            chats_df = await self.get_allowed_chats_dataframe()
             mention_only = self.db.get_state("group_mention_only", "1") == "1"
-            lines.append(f"\n*Group Filter:* {'@Mentions / Replies Only' if mention_only else 'All Group Messages'}")
-            lines.append("\n_Use `/allowchat <id>` to add, or `/removechat <id>` to remove._")
-            return "\n".join(lines)
+            filter_str = "@Mentions / Replies Only" if mention_only else "All Group Messages"
+            return (
+                f"📋 *Active Allowlisted Chats (DataFrame):*\n"
+                f"{chats_df}\n\n"
+                f"• *Group Filter:* {filter_str}\n"
+                f"_Use `/allowchat <id>` to add, or `/removechat <id>` to remove._"
+            )
 
         if cmd == "/allowchat":
             if len(cmd_parts) < 2:
@@ -560,6 +610,7 @@ class ReplyManager:
             max_r_sec = float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(self.config, "reaction_max_cooldown_seconds", 9.0))))
             chat_cd_range = f"{int(self.safety.min_chat_cooldown)}s–{int(self.safety.max_chat_cooldown)}s"
             global_cd_range = f"{int(self.safety.min_global_cooldown)}s–{int(self.safety.max_global_cooldown)}s"
+            chats_df = await self.get_allowed_chats_dataframe()
             return (
                 f"📊 *TeleAutomator Status:*\n"
                 f"• Identity Name: `{owner}`\n"
@@ -574,7 +625,8 @@ class ReplyManager:
                 f"• Auto Authorized: *{auto_status}*\n"
                 f"• Emergency Stop: *{stop_status}*\n"
                 f"• Pending Approvals: `{pending_count}`\n"
-                f"• AI Provider: `{active_prov.upper()}` (model=`{active_mod}`{url_str})"
+                f"• AI Provider: `{active_prov.upper()}` (model=`{active_mod}`{url_str})\n\n"
+                f"📋 *Target Chats & Groups (DataFrame):*\n{chats_df}"
             )
 
         if cmd in ("/lang", "/language", "/setlang"):

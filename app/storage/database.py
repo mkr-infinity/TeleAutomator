@@ -74,6 +74,14 @@ class Database:
                     UNIQUE(chat_id, message_id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id ON chat_messages(chat_id, id DESC);
+
+                CREATE TABLE IF NOT EXISTS known_chats (
+                    chat_id INTEGER PRIMARY KEY,
+                    title TEXT NOT NULL DEFAULT '',
+                    username TEXT NOT NULL DEFAULT '',
+                    chat_type TEXT NOT NULL DEFAULT '',
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
                 """
             )
 
@@ -271,3 +279,34 @@ class Database:
                 """,
                 (chat_id, chat_id, keep_last),
             )
+
+    def record_chat_metadata(
+        self, chat_id: int, title: str = "", username: str = "", chat_type: str = ""
+    ) -> None:
+        """Upsert chat title, username, and chat type metadata."""
+        title_str = str(title).strip() if isinstance(title, str) else ""
+        username_str = str(username).strip().lstrip("@") if isinstance(username, str) else ""
+        type_str = str(chat_type) if isinstance(chat_type, str) else ""
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO known_chats (chat_id, title, username, chat_type, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    title = CASE WHEN excluded.title != '' THEN excluded.title ELSE known_chats.title END,
+                    username = CASE WHEN excluded.username != '' THEN excluded.username ELSE known_chats.username END,
+                    chat_type = CASE WHEN excluded.chat_type != '' THEN excluded.chat_type ELSE known_chats.chat_type END,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (chat_id, title_str, username_str, type_str),
+            )
+
+    def get_chat_metadata(self, chat_id: int) -> Optional[Dict[str, Any]]:
+        """Retrieve stored metadata for a specific chat ID."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT chat_id, title, username, chat_type FROM known_chats WHERE chat_id = ?",
+                (chat_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None

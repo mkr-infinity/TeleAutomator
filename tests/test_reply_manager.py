@@ -630,3 +630,41 @@ def test_reaction_randomized_interval_cooldown(tmp_path: Path):
         assert sent2 is False
 
     asyncio.run(_run())
+
+
+def test_status_and_chats_dataframe_display(tmp_path: Path):
+    """Verify DataFrame table rendering with numbering, type, title, and username in /status and /chats."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            allowed_private_chats={1001},
+            allowed_groups={-1002003},
+            data_dir=tmp_path,
+        )
+        db = Database(tmp_path / "app_df.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # Store metadata for chats
+        db.record_chat_metadata(1001, title="Alice Walker", username="alicew", chat_type="Private")
+        db.record_chat_metadata(-1002003, title="Crypto Alpha", username="cryptoalpha", chat_type="Group")
+
+        # 1. /status command contains DataFrame with columns and rows
+        status_res = await mgr.handle_control_command("/status")
+        assert "DataFrame" in status_res
+        assert "Alice Walker" in status_res
+        assert "@alicew" in status_res
+        assert "Crypto Alpha" in status_res
+        assert "@cryptoalpha" in status_res
+        assert "# | Type" in status_res or "# |" in status_res
+
+        # 2. /chats command contains DataFrame
+        chats_res = await mgr.handle_control_command("/chats")
+        assert "DataFrame" in chats_res
+        assert "1 |" in chats_res
+        assert "2 |" in chats_res
+
+    asyncio.run(_run())

@@ -167,7 +167,7 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
     # AI Configuration
     ai_enabled = _parse_bool(os.getenv("AI_ENABLED"), default=False)
     ai_provider = os.getenv("AI_PROVIDER", "local").strip().lower()
-    valid_providers = ("local", "gemini", "openai", "custom", "nvidia", "groq", "together", "deepseek")
+    valid_providers = ("local", "gemini", "openai", "custom", "nvidia", "groq", "together", "deepseek", "inception")
     if ai_provider not in valid_providers:
         raise ValueError(f"Invalid AI_PROVIDER: '{ai_provider}'. Must be one of: {', '.join(valid_providers)}.")
 

@@ -132,3 +132,44 @@ def test_system_prompt_word_limit():
     assert len(words) <= 350
     assert "BREVITY" in content
     assert "HUMAN ALIBI" in content
+
+
+def test_openai_provider_candidate_models_and_fallback():
+    from unittest.mock import MagicMock, patch
+    from app.ai.provider import OpenAIProvider
+
+    provider = OpenAIProvider(
+        api_key="test_key",
+        model="non_existent_model",
+        base_url="https://api.inceptionlabs.ai/v1",
+    )
+    candidates = provider.get_candidate_models()
+    assert "non_existent_model" in candidates
+    assert "mercury-3" in candidates
+    assert "mercury-3-preview-1014" in candidates
+
+    # Simulate first model failing with 404, second model succeeding
+    call_count = 0
+
+    def mock_urlopen(req, timeout=15):
+        nonlocal call_count
+        call_count += 1
+        data = json.loads(req.data.decode("utf-8"))
+        if data["model"] == "non_existent_model":
+            import urllib.error
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+        # Success for mercury-3
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({
+            "choices": [{"message": {"content": "Fallback reply from mercury-3"}}]
+        }).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+        return mock_resp
+
+    import json
+    with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        result = provider.generate_reply("Hi", "Be brief")
+        assert result == "Fallback reply from mercury-3"
+        # Verified provider switched active model to the working fallback
+        assert provider.model == "mercury-3"
+        assert call_count == 2
