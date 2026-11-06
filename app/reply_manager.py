@@ -2284,11 +2284,32 @@ class ReplyManager:
                 return ""
         return clean
 
+    @staticmethod
+    def is_group_broadcast_or_greeting(text: str) -> bool:
+        """Detect greetings, announcements, or messages addressing the entire group."""
+        clean = text.strip().lower()
+        if not clean:
+            return False
+        import re
+        broadcast_patterns = [
+            r"\b(?:hi|hello|hey|yo|sup|hola|namaste|salaam)\b.*\b(?:guys|everyone|all|folks|people|team|friends|bhai|gang|group)\b",
+            r"\b(?:guys|everyone|all|folks|team|bhai log|sab|sabhi)\b.*\b(?:hi|hello|hey|sup|kya haal|kaise ho)\b",
+            r"\b(?:good morning|good evening|good afternoon|good night|gm|ge|gn)\b(?:\s+(?:all|everyone|guys|team|folks|gang|bhai log|friends))?",
+            r"\b(?:anyone|anybody|someone|kisi ko)\b",
+            r"\b(?:what's up|whats up|kya chal raha|kya haal|sab kaisa)\b",
+            r"\b(?:who is here|anyone here|anybody active|kya scene)\b",
+            r"^(?:hi|hello|hey|yo|gm|gn)[!.]*$",
+        ]
+        return any(re.search(pat, clean) for pat in broadcast_patterns)
+
     def is_group_message_relevant(self, chat_id: int, text: str, chat_title: str = "") -> bool:
         """Check if an incoming group message is relevant to the group's topic, context, or active discussion."""
         clean_text = text.strip().lower()
         if not clean_text:
             return False
+
+        if self.is_group_broadcast_or_greeting(clean_text):
+            return True
 
         # 1. Check permanent context and pinned info
         ctx = self.db.get_permanent_context(chat_id)
@@ -2317,7 +2338,7 @@ class ReplyManager:
             "kisi ko", "kaise", "kya", "kyun", "lagta", "sahi", "chal raha", "update"
         )
         words = clean_text.split()
-        if len(words) >= 3 and any(kw in clean_text for kw in discussion_keywords):
+        if len(words) >= 2 and any(kw in clean_text for kw in discussion_keywords):
             return True
         if len(words) >= 5:
             # Meaningful multi-word statement or conversation in the group
