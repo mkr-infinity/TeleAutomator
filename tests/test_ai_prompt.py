@@ -459,3 +459,20 @@ def test_ist_time_awareness_and_brevity_instructions_in_prompt():
     assert "NEVER exceed 8 words" in prompt
 
 
+def test_dynamic_owner_name_without_hardcoding(tmp_path: Path):
+    """Verify owner name is dynamic and never hardcoded to any specific person."""
+    prompt_file = tmp_path / "system_prompt.txt"
+    prompt_file.write_text("You are texting directly as {owner_name} from your personal phone in Telegram.\nOutput ONLY the raw text message ready to send.")
+
+    pm = PromptManager(prompt_file=prompt_file, owner_name="Danish")
+    instructions = pm.get_default_instructions()
+    assert "as Danish from your personal phone" in instructions
+    assert "{owner_name}" not in instructions
+    assert "Kaif" not in instructions
+
+    # Updates dynamically
+    pm.set_owner_name("Rohan")
+    assert "as Rohan from your personal phone" in pm.get_default_instructions()
+    assert pm.clean_reply("Rohan: what's up") == "what's up"
+
+

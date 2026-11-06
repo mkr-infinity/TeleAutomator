@@ -83,6 +83,11 @@ class ReplyManager:
         if saved_lang:
             self.generator.set_language(saved_lang)
 
+        # Restore saved owner persona name if stored in DB
+        saved_owner = self.db.get_state("owner_name")
+        if saved_owner:
+            self.generator.set_owner_name(saved_owner)
+
         # Wire token usage callback if provider supports it
         if hasattr(self.generator.provider, "usage_callback") and not self.generator.provider.usage_callback:
             self.generator.provider.usage_callback = self.db.record_token_usage

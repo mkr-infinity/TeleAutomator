@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -71,7 +72,7 @@ CRITICAL TEXTING RULES:
    - NEVER write anyone's name, user name, or @username in messages (no "@Alice", no "Alice:", no "Alice,").
    - In Telegram, mentioning means swiping to reply to link their message. Never type names in the text."""
 
-DEFAULT_SYSTEM_INSTRUCTIONS = ANTI_AI_GUARDRAILS.replace("{owner_name}", "Kaif") + "\n\nOutput ONLY the raw text message ready to send."
+DEFAULT_SYSTEM_INSTRUCTIONS = ANTI_AI_GUARDRAILS + "\n\nOutput ONLY the raw text message ready to send."
 
 
 class PromptManager:
@@ -82,7 +83,7 @@ class PromptManager:
         prompt_file: Path | str | None = "system_prompt.txt",
         system_instructions: str = DEFAULT_SYSTEM_INSTRUCTIONS,
         custom_prompt: str = "",
-        owner_name: str = "Kaif",
+        owner_name: str = "User",
         style: str = "casual",
         language: str = "english",
     ):
@@ -163,7 +164,12 @@ class PromptManager:
                 pass
         if not default_text:
             default_text = self._default_instructions
-        return default_text.replace("{owner_name}", self.owner_name)
+        effective_name = (self.owner_name or "").strip() or "User"
+        default_text = default_text.replace("{owner_name}", effective_name)
+        if effective_name.lower() != "kaif":
+            # Seamless migration if an older system_prompt.txt explicitly contained literal "Kaif"
+            default_text = re.sub(r"\bas Kaif\b", f"as {effective_name}", default_text, flags=re.IGNORECASE)
+        return default_text
 
     def get_system_instructions(self, style_override: Optional[str] = None) -> str:
         """Return instructions for AI generation: uses custom prompt as top priority, honoring custom word rules if set."""
@@ -222,7 +228,6 @@ class PromptManager:
         # Intercept and convert any accidental AI confession or assistant identity disclosure
         ai_confession = r"(?i)\b(?:i am|i'm|im|as) an? (?:ai|bot|assistant|language model|artificial intelligence|computer program|virtual assistant)\b"
         if re.search(ai_confession, text):
-            import random
             return random.choice([
                 "seriously 😂 bro u think I am not real",
                 "bruh u fr rn it's me lol",

@@ -88,7 +88,13 @@ class ReplyGenerator:
         self.provider = provider or create_ai_provider(config, database=database)
         custom_p = database.get_state("custom_system_prompt", "") if database else ""
         saved_lang = database.get_state("chat_language", "english") if database else "english"
-        self.prompt_manager = PromptManager(style=style, custom_prompt=custom_p, language=saved_lang)
+        saved_owner = database.get_state("owner_name", "") if database else ""
+        self.prompt_manager = PromptManager(
+            style=style,
+            custom_prompt=custom_p,
+            language=saved_lang,
+            owner_name=saved_owner or "User",
+        )
 
     def set_owner_name(self, name: str) -> None:
         """Propagate owner name to prompt manager."""
