@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -28,11 +29,11 @@ class LocalRuleProvider(AIProvider):
 
     def generate_reply(self, prompt: str, system_instructions: str) -> str:
         lower = prompt.lower()
-        if any(w in lower for w in ("bot", "ai", "real", "fake", "who are you")):
+        if re.search(r"\b(bot|ai|real|fake|who are you)\b", lower):
             return "bruh u fr rn it's me lol"
-        if any(w in lower for w in ("tonight", "free", "available", "meet", "time", "coming", "there")):
+        if re.search(r"\b(tonight|free|available|meet|time|coming|there)\b", lower):
             return "yeah sounds good, will let you know 👍"
-        if any(w in lower for w in ("thanks", "thank")):
+        if re.search(r"\b(thanks|thank)\b", lower):
             return "anytime bro 👍"
         return "sounds good bro 👍"
 

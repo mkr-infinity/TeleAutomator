@@ -19,6 +19,12 @@ from app.storage.database import Database
 
 logger = setup_logger(__name__)
 
+try:
+    from telethon.errors import FloodWaitError, PeerFloodError
+except Exception:
+    FloodWaitError = None  # type: ignore
+    PeerFloodError = None  # type: ignore
+
 
 def _parse_time_str(val: str) -> Optional[str]:
     """Parse and normalize HH:MM string."""
@@ -56,6 +62,11 @@ class ReplyManager:
         self._last_sent_reply_by_chat: dict[int, str] = {}
         self._recent_replies_history: dict[int, list[str]] = {}
         self._last_group_activity: dict[int, float] = {}
+        # Suggestion 1: Incoming message burst debouncer state
+        self._debounce_buffers: dict[int, list[dict[str, Any]]] = {}
+        self._debounce_tasks: dict[int, asyncio.Task] = {}
+        self._debounce_last_time: dict[int, float] = {}
+        self._debounce_first_time: dict[int, float] = {}
         self._next_reaction_cooldown: float = random.uniform(
             float(self.db.get_state("reaction_min_cooldown_seconds", str(getattr(config, "reaction_min_cooldown_seconds", 3.0)))),
             float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(config, "reaction_max_cooldown_seconds", 9.0)))),
@@ -160,6 +171,133 @@ class ReplyManager:
         is_mention: bool = False,
     ) -> None:
         """Process an incoming message that has passed initial message filters."""
+        # Suggestion 1: Incoming message burst debouncer (message stitching)
+        debounce_enabled = self.db.get_state("debounce_enabled", "1") == "1"
+        raw_db_sec = self.db.get_state("debounce_seconds", "3.0")
+        try:
+            debounce_sec = float(raw_db_sec)
+        except (ValueError, TypeError):
+            debounce_sec = 3.0
+
+        # In zero-delay environments (e.g. tests), bypass wait unless debounce_sec was explicitly configured
+        if self.min_delay == 0 and self.max_delay == 0 and raw_db_sec == "3.0":
+            debounce_sec = 0.0
+
+        if self.current_mode != "restricted_auto" or not debounce_enabled or debounce_sec <= 0:
+            await self._process_incoming_message(
+                chat_id=chat_id,
+                chat_title=chat_title,
+                message_id=message_id,
+                sender_id=sender_id,
+                sender_name=sender_name,
+                text=text,
+                conversation_history=conversation_history,
+                is_mention=is_mention,
+            )
+            return
+
+        now = time.time()
+        msg_item = {
+            "chat_id": chat_id,
+            "chat_title": chat_title,
+            "message_id": message_id,
+            "sender_id": sender_id,
+            "sender_name": sender_name,
+            "text": text,
+            "is_mention": is_mention,
+            "received_at": now,
+        }
+
+        if chat_id not in self._debounce_buffers:
+            self._debounce_buffers[chat_id] = []
+            self._debounce_first_time[chat_id] = now
+
+        self._debounce_buffers[chat_id].append(msg_item)
+        self._debounce_last_time[chat_id] = now
+
+        if chat_id not in self._debounce_tasks or self._debounce_tasks[chat_id].done():
+            self._debounce_tasks[chat_id] = asyncio.create_task(
+                self._debounce_worker(chat_id, debounce_sec)
+            )
+
+        worker = self._debounce_tasks[chat_id]
+        await asyncio.shield(worker)
+
+    async def _debounce_worker(self, chat_id: int, debounce_sec: float) -> None:
+        """Wait until incoming message burst ceases for chat_id, then stitch and execute."""
+        try:
+            while True:
+                now = time.time()
+                last_time = self._debounce_last_time.get(chat_id, now)
+                first_time = self._debounce_first_time.get(chat_id, now)
+                elapsed_since_last = now - last_time
+                remaining = debounce_sec - elapsed_since_last
+                total_burst = now - first_time
+                buf_len = len(self._debounce_buffers.get(chat_id, []))
+
+                # Contact paused typing (idle > debounce_sec), or burst cap reached (10s or 6 msgs)
+                if remaining <= 0.05 or total_burst >= 10.0 or buf_len >= 6:
+                    break
+
+                await asyncio.sleep(min(max(0.05, remaining), 0.5))
+
+            items = self._debounce_buffers.pop(chat_id, [])
+            self._debounce_tasks.pop(chat_id, None)
+            self._debounce_last_time.pop(chat_id, None)
+            self._debounce_first_time.pop(chat_id, None)
+
+            if not items:
+                return
+
+            latest_item = items[-1]
+            latest_id = latest_item["message_id"]
+            latest_sender_name = latest_item["sender_name"]
+            latest_sender_id = latest_item["sender_id"]
+            chat_title = latest_item["chat_title"]
+            any_mention = any(m.get("is_mention", False) for m in items)
+
+            if len(items) == 1:
+                stitched_text = items[0]["text"]
+            else:
+                stitched_text = "\n".join(m["text"].strip() for m in items if m["text"].strip())
+                logger.info(
+                    f"[MESSAGE STITCHING] Stitched {len(items)} rapid burst messages in chat {chat_id} "
+                    f"into single cohesive thought: '{stitched_text[:60]}...'"
+                )
+
+            ttl_hours = float(self.db.get_state("context_ttl_hours", "2.0"))
+            max_age_secs = int(ttl_hours * 3600) if ttl_hours > 0 else None
+            fresh_history = self.db.get_recent_chat_messages(
+                chat_id, limit=15, max_age_seconds=max_age_secs
+            )
+
+            await self._process_incoming_message(
+                chat_id=chat_id,
+                chat_title=chat_title,
+                message_id=latest_id,
+                sender_id=latest_sender_id,
+                sender_name=latest_sender_name,
+                text=stitched_text,
+                conversation_history=fresh_history,
+                is_mention=any_mention,
+            )
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Error in debounce worker for chat {chat_id}: {e}")
+
+    async def _process_incoming_message(
+        self,
+        chat_id: int,
+        chat_title: str,
+        message_id: int,
+        sender_id: Optional[int],
+        sender_name: str,
+        text: str,
+        conversation_history: Optional[Any] = None,
+        is_mention: bool = False,
+    ) -> None:
+        """Process a single or stitched incoming message."""
         # Sanitize incoming text before passing to generator
         clean_text = self.privacy.sanitize_text(text)
 
@@ -209,6 +347,21 @@ class ReplyManager:
                         is_group=(chat_id < 0),
                         is_mention=is_mention,
                     )
+
+                # Suggestion 1: Natural Read-Receipt Delay Simulation (2–4s hesitation before marking read)
+                if self._client and self.current_mode == "restricted_auto" and (self.min_delay > 0 or self.max_delay > 0):
+                    read_hesitation = random.uniform(2.0, 4.0)
+                    await asyncio.sleep(read_hesitation)
+                    try:
+                        if hasattr(self._client, "send_read_acknowledge"):
+                            ack_res = self._client.send_read_acknowledge(chat_id, max_id=message_id)
+                            if asyncio.iscoroutine(ack_res):
+                                await ack_res
+                            logger.debug(f"[READ RECEIPT] Marked message {message_id} as read in chat {chat_id}.")
+                    except Exception as e:
+                        logger.debug(f"[READ RECEIPT] Could not send read acknowledgement: {e}")
+                    # Brief pause before starting to type
+                    await asyncio.sleep(random.uniform(0.8, 1.5))
 
                 # Show typing indicator in chat or group while AI thinks/generates reply
                 if self._client and self.current_mode == "restricted_auto":
@@ -270,12 +423,6 @@ class ReplyManager:
 
         # Prevent repeating the same word or exact reply consecutively in this chat
         draft = self._prevent_duplicate_reply(chat_id, draft)
-
-        # Mandatory mention rule: if someone mentioned us in a group, ensure they are mentioned when replying
-        if is_mention and chat_id < 0 and sender_name and sender_name not in ("Contact", "You"):
-            tag_name = sender_name.lstrip("@").split()[0]
-            if f"@{tag_name.lower()}" not in draft.lower() and tag_name.lower() not in draft.lower():
-                draft = f"@{tag_name} {draft}"
 
         mode = self.current_mode
 
@@ -352,14 +499,14 @@ class ReplyManager:
                 if "quiet hours" in reason.lower():
                     # Sleep schedule active: quietly suppress auto-reply without disturbing Saved Messages
                     return
-                if "cooldown" in reason.lower():
-                    # NEVER skip mention messages: schedule deferred reply after cooldown!
+                if "cooldown" in reason.lower() or "limit" in reason.lower():
+                    # NEVER skip mention messages: schedule deferred reply after cooldown/rate-limit!
                     if is_mention:
                         import re
                         m = re.search(r"\((\d+)s remaining\)", reason)
                         wait_secs = float(m.group(1)) if m else 5.0
                         logger.info(
-                            f"[MENTION QUEUED] Cooldown active for chat {chat_id} ({wait_secs}s). "
+                            f"[MENTION QUEUED] Cooldown/rate-limit active for chat {chat_id} ({wait_secs}s). "
                             f"Scheduling deferred reply so mention is NEVER skipped."
                         )
                         asyncio.create_task(
@@ -424,13 +571,20 @@ class ReplyManager:
 
             can_send, reason = self.safety.can_reply(chat_id, draft)
             if not can_send:
-                if "cooldown" in reason.lower():
+                if "cooldown" in reason.lower() or "limit" in reason.lower():
                     import re
                     m = re.search(r"\((\d+)s remaining\)", reason)
                     retry_wait = float(m.group(1)) if m else 3.0
                     await asyncio.sleep(retry_wait + 1.0)
-                    if self.safety.is_emergency_stopped:
+                    if self.safety.is_emergency_stopped or self.safety.get_remaining_pause_seconds() > 0:
                         return
+                    can_send, reason = self.safety.can_reply(chat_id, draft)
+                    if not can_send:
+                        logger.warning(f"Deferred mention reply to chat {chat_id} aborted: {reason}")
+                        return
+                else:
+                    logger.warning(f"Deferred mention reply to chat {chat_id} aborted: {reason}")
+                    return
 
             sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True, is_mention=True)
             if sent:
@@ -438,6 +592,99 @@ class ReplyManager:
             logger.info(f"[DEFERRED MENTION SENT] Successfully replied to mention in chat {chat_id} after cooldown.")
         except Exception as e:
             logger.error(f"Error in deferred mention reply: {e}")
+
+    async def _schedule_spontaneous_followup(
+        self,
+        chat_id: int,
+        sent_text: str,
+        delay_seconds: Optional[float] = None,
+    ) -> None:
+        """Schedule a contextual, delayed follow-up 10–20s after a 1–3 word reply to mimic human trains of thought."""
+        try:
+            delay = delay_seconds if delay_seconds is not None else random.uniform(10.0, 20.0)
+            await asyncio.sleep(delay)
+
+            # Safety checks
+            if self.safety.is_emergency_stopped or self.safety.get_remaining_pause_seconds() > 0:
+                return
+            is_quiet, _ = self.safety.is_in_quiet_hours()
+            if is_quiet:
+                return
+
+            # Check if contact messaged in the meantime; if so, never interrupt
+            recent = self.db.get_recent_chat_messages(chat_id, limit=1)
+            if not recent:
+                return
+            latest = recent[-1]
+            if not latest.get("is_outgoing", False) or latest.get("text") != sent_text:
+                logger.debug(f"[SPONTANEOUS FOLLOW-UP] Aborted: chat {chat_id} had intervening activity.")
+                return
+
+            # Call AI dynamically to generate an ultra-short follow-up thought
+            prompt_instruction = (
+                f"You just texted: \"{sent_text}\". "
+                f"Send an ultra-short spontaneous follow-up thought (1 to 4 words). "
+                f"Natural human texting, no names, no greetings, no code, no question marks."
+            )
+
+            history = self.db.get_recent_chat_messages(chat_id, limit=5)
+            followup_raw = await asyncio.to_thread(
+                self.generator.generate,
+                sender_name="Contact",
+                incoming_text=prompt_instruction,
+                conversation_history=history,
+                is_group=(chat_id < 0),
+                is_mention=False,
+            )
+
+            followup_clean = self.generator.prompt_manager.clean_reply(followup_raw)
+            if not followup_clean or len(followup_clean.split()) > 8:
+                return
+
+            # Check duplicate
+            followup_clean = self._prevent_duplicate_reply(chat_id, followup_clean)
+            if not followup_clean:
+                return
+
+            can_send, reason = self.safety.can_reply(chat_id, followup_clean)
+            if not can_send:
+                logger.debug(f"[SPONTANEOUS FOLLOW-UP] Safety suppression: {reason}")
+                return
+
+            # Short typing burst
+            typing_duration = random.uniform(1.2, 2.5)
+            try:
+                if hasattr(self._client, "action") and callable(self._client.action):
+                    act = self._client.action(chat_id, "typing")
+                    if hasattr(act, "__aenter__"):
+                        async with act:
+                            await asyncio.sleep(typing_duration)
+                    else:
+                        await asyncio.sleep(typing_duration)
+                else:
+                    await asyncio.sleep(typing_duration)
+            except Exception:
+                await asyncio.sleep(typing_duration)
+
+            if self.safety.is_emergency_stopped:
+                return
+
+            sent_msg = await self._client.send_message(chat_id, followup_clean)
+            self.safety.mark_reply_sent(chat_id)
+            sent_id = getattr(sent_msg, "id", 0)
+            if not isinstance(sent_id, int):
+                sent_id = 0
+            self.db.record_chat_message(
+                chat_id=chat_id,
+                message_id=sent_id,
+                sender_id=None,
+                sender_name=self.generator.prompt_manager.owner_name,
+                text=followup_clean,
+                is_outgoing=True,
+            )
+            logger.info(f"[SPONTANEOUS FOLLOW-UP SENT] Sent follow-up '{followup_clean}' to chat {chat_id}.")
+        except Exception as e:
+            logger.debug(f"Error in spontaneous follow-up: {e}")
 
     async def _notify_approval_needed(
         self,
@@ -603,7 +850,11 @@ class ReplyManager:
                 "• `/reaction on` / `/reaction off` - Enable or disable auto-reactions\n"
                 "• `/reactioncooldown <min> <max>` - Set random reaction cooldown (e.g. `3 9` seconds)\n"
                 "• `/chatcooldown <min> <max>` - Custom per-chat reply cooldown (e.g. `5 60`)\n"
-                "• `/globalcooldown <min> <max>` - Custom global reply cooldown (e.g. `5 60`)\n\n"
+                "• `/globalcooldown <min> <max>` - Custom global reply cooldown (e.g. `5 60`)\n"
+                "• `/ratelimit <per_min> <per_hour>` - Anti-spam rate limits (e.g. `/ratelimit 5 30`)\n"
+                "• `/followup <on|off>` - Spontaneous delayed follow-ups for short replies\n"
+                "• `/debounce <on|off|seconds>` - Incoming burst debouncer (stitches rapid messages)\n"
+                "• `/multibubble <on|off>` - Multi-bubble response splitting (rapid sequential bubbles)\n\n"
                 "*Quiet Hours (Sleep Schedule):*\n"
                 "• `/quiethours on [start] [end]` - Turn ON sleep schedule (e.g. `/quiethours on 23:00 07:00`)\n"
                 "• `/quiethours off` - Turn OFF sleep schedule\n"
@@ -1151,6 +1402,8 @@ class ReplyManager:
             max_r_sec = float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(self.config, "reaction_max_cooldown_seconds", 9.0))))
             chat_cd_range = f"{int(self.safety.min_chat_cooldown)}s–{int(self.safety.max_chat_cooldown)}s"
             global_cd_range = f"{int(self.safety.min_global_cooldown)}s–{int(self.safety.max_global_cooldown)}s"
+            recent_min = self.db.get_recent_reply_count(60.0) if hasattr(self.db, "get_recent_reply_count") else 0
+            recent_hr = self.db.get_recent_reply_count(3600.0) if hasattr(self.db, "get_recent_reply_count") else 0
             chats_df = await self.get_allowed_chats_dataframe()
             return (
                 f"📊 *TeleAutomator v2.0.6 Status:*\n"
@@ -1163,6 +1416,7 @@ class ReplyManager:
                 f"• Quiet Hours: *{qh_desc}* (change with `/quiethours <on|off|start end>`)\n"
                 f"• Group Banter: `{int(chatty_prob * 100)}%` (change with `/chatty <0-100>`)\n"
                 f"• Cooldowns: Chat=`{chat_cd_range}`, Global=`{global_cd_range}`\n"
+                f"• Anti-Spam: Rate=`{self.safety.max_replies_per_minute}/min, {self.safety.max_replies_per_hour}/hr` (Used: {recent_min}/{recent_hr})\n"
                 f"• Auto Authorized: *{auto_status}*\n"
                 f"• Emergency Stop: *{stop_status}*\n"
                 f"• Pending Approvals: `{pending_count}`\n"
@@ -1405,6 +1659,28 @@ class ReplyManager:
             except ValueError:
                 return "Error: Cooldown seconds must be valid integers."
 
+        if cmd in ("/ratelimit", "/spamlimits", "/rate", "/antispam"):
+            if len(cmd_parts) < 2:
+                recent_min = self.db.get_recent_reply_count(60.0) if hasattr(self.db, "get_recent_reply_count") else 0
+                recent_hr = self.db.get_recent_reply_count(3600.0) if hasattr(self.db, "get_recent_reply_count") else 0
+                return (
+                    f"🛡️ *Telegram Anti-Spam Rate Limits:*\n"
+                    f"• Burst Limit: *{self.safety.max_replies_per_minute}* replies/min (Used in last 60s: *{recent_min}*)\n"
+                    f"• Hourly Limit: *{self.safety.max_replies_per_hour}* replies/hour (Used in last 1h: *{recent_hr}*)\n"
+                    f"• Per-Chat Limit: *{self.safety.max_chat_replies_per_minute}* replies/min per chat\n"
+                    f"• Chat Cooldown: *{int(self.safety.min_chat_cooldown)}s – {int(self.safety.max_chat_cooldown)}s*\n"
+                    f"• Global Cooldown: *{int(self.safety.min_global_cooldown)}s – {int(self.safety.max_global_cooldown)}s*\n\n"
+                    f"Usage: `/ratelimit <per_minute> <per_hour>` (e.g. `/ratelimit 5 30`)"
+                )
+            try:
+                per_min = max(1, int(cmd_parts[1]))
+                per_hr = max(per_min, int(cmd_parts[2])) if len(cmd_parts) >= 3 else (per_min * 6)
+                self.db.set_state("max_replies_per_minute", str(per_min))
+                self.db.set_state("max_replies_per_hour", str(per_hr))
+                return f"✅ Anti-spam rate limits updated to *{per_min}* replies/min and *{per_hr}* replies/hour."
+            except ValueError:
+                return "Error: Rate limits must be valid positive integers (e.g. `/ratelimit 5 30`)."
+
         if cmd in ("/model", "/setmodel", "/custommodel"):
             if len(cmd_parts) < 2:
                 curr = self.db.get_state("ai_model", self.config.ai_model or "default")
@@ -1567,6 +1843,53 @@ class ReplyManager:
                 except ValueError:
                     return "Usage: `/chatty on`, `/chatty off`, or `/chatty <0-100>`"
 
+        if cmd in ("/followup", "/followups", "/spontaneous"):
+            if len(cmd_parts) > 1:
+                sub = cmd_parts[1].lower().strip()
+                if sub in ("on", "enable", "1"):
+                    self.db.set_state("spontaneous_followup_enabled", "1")
+                    return "✅ Spontaneous delayed follow-ups *ENABLED* (10–20s later for 1–3 word replies)."
+                elif sub in ("off", "disable", "0"):
+                    self.db.set_state("spontaneous_followup_enabled", "0")
+                    return "🛑 Spontaneous delayed follow-ups *DISABLED*."
+            curr = "ENABLED" if self.db.get_state("spontaneous_followup_enabled", "1") == "1" else "DISABLED"
+            return f"💬 Spontaneous follow-ups: *{curr}* (Toggle with `/followup <on|off>`)."
+
+        if cmd in ("/debounce", "/burst", "/debouncer"):
+            if len(cmd_parts) > 1:
+                sub = cmd_parts[1].lower().strip()
+                if sub in ("on", "enable", "1"):
+                    self.db.set_state("debounce_enabled", "1")
+                    curr_sec = self.db.get_state("debounce_seconds", "3.0")
+                    return f"✅ Message burst debouncer *ENABLED* ({curr_sec}s stitching window)."
+                elif sub in ("off", "disable", "0"):
+                    self.db.set_state("debounce_enabled", "0")
+                    return "🛑 Message burst debouncer *DISABLED* (messages processed immediately)."
+                else:
+                    try:
+                        sec = float(sub)
+                        sec = max(0.5, min(10.0, sec))
+                        self.db.set_state("debounce_enabled", "1")
+                        self.db.set_state("debounce_seconds", str(sec))
+                        return f"⏱️ Message burst debouncer set to *{sec}s* window."
+                    except ValueError:
+                        return "Usage: `/debounce on`, `/debounce off`, or `/debounce <0.5-10.0>`"
+            curr = "ENABLED" if self.db.get_state("debounce_enabled", "1") == "1" else "DISABLED"
+            curr_sec = self.db.get_state("debounce_seconds", "3.0")
+            return f"💬 Burst debouncer: *{curr}* ({curr_sec}s window). Toggle with `/debounce <on|off|seconds>`."
+
+        if cmd in ("/multibubble", "/split", "/bubbles"):
+            if len(cmd_parts) > 1:
+                sub = cmd_parts[1].lower().strip()
+                if sub in ("on", "enable", "1"):
+                    self.db.set_state("multibubble_enabled", "1")
+                    return "✅ Multi-bubble response splitting *ENABLED* (rapid 1.2–2.5s sequential bubbles)."
+                elif sub in ("off", "disable", "0"):
+                    self.db.set_state("multibubble_enabled", "0")
+                    return "🛑 Multi-bubble response splitting *DISABLED* (replies sent in single message)."
+            curr = "ENABLED" if self.db.get_state("multibubble_enabled", "1") == "1" else "DISABLED"
+            return f"💬 Multi-bubble response splitting: *{curr}* (Toggle with `/multibubble <on|off>`)."
+
         if cmd in ("/pause", "/off"):
             if len(cmd_parts) < 2:
                 return "Usage: `/pause <duration>` (e.g. `/pause 2h`, `/pause 30m`, `/pause 45m`)"
@@ -1600,16 +1923,16 @@ class ReplyManager:
             custom = self.generator.prompt_manager.custom_prompt
             mode_str = f"Custom Persona ({len(custom.split())} words)" if custom else "Default Persona"
             full_inst = self.generator.prompt_manager.system_instructions
-            custom_display = f'"{custom}"' if custom else "None (using default instructions)"
+            custom_display = f'"{custom}"' if custom else "None (using default system_prompt.txt)"
             prompt_preview = full_inst if len(full_inst) <= 3000 else (full_inst[:3000] + "\n...[truncated for telegram display]")
             return (
                 f"📜 *Active System Instructions ({mode_str}):*\n\n"
-                f"• *Anti-AI Guardrails:* ACTIVE 🛡️ (Human conversation, varied lengths, top emojis, human alibi, zero code/brackets)\n"
+                f"• *Anti-AI Guardrails:* ACTIVE 🛡️ (1-5 words, human conversation, top emojis, no names/@usernames, no code)\n"
                 f"• *Custom Persona:* {custom_display}\n"
                 f"• *Active Style:* `{self.generator.style}`\n"
                 f"• *Language:* `{self.generator.language}`\n\n"
-                f"*Compiled Prompt (sent to AI):*\n"
-                f"```\n{prompt_preview}\n```\n\n"
+                f"*Compiled Prompt (sent to AI):*\n\n"
+                f"{prompt_preview}\n\n"
                 f"_Use `/setprompt <text>` to customize persona, or `/setprompt default` to reset._"
             )
 
@@ -1746,30 +2069,37 @@ class ReplyManager:
         delay = delay + jitter
 
         cap_max = min(self.max_delay, 25.0) if is_group else self.max_delay
-        return round(max(self.min_delay, min(cap_max, delay)), 2)
+        hard_floor = 5.0 if (self.min_delay > 0 or self.max_delay > 0) else 0.0
+        return round(max(hard_floor, self.min_delay, min(cap_max, delay)), 2)
 
     @staticmethod
-    def split_reply_messages(text: str) -> list[str]:
+    def split_reply_messages(text: str, enabled: bool = True) -> list[str]:
         """Split a multi-thought reply into 2 or 3 natural messages without breaking word or clause meaning."""
         import re
         text = text.strip()
-        if not text:
-            return []
+        if not text or not enabled:
+            return [text] if text else []
 
         # If already separated by newlines, split by line
         lines = [l.strip() for l in text.split("\n") if l.strip()]
         if len(lines) > 1:
             return lines[:3]
 
+        # Natural multi-bubble splits on ellipsis "... "
+        if "... " in text:
+            parts = [p.strip() for p in text.split("... ") if p.strip()]
+            if 1 < len(parts) <= 3 and all(len(p.split()) >= 1 for p in parts):
+                return parts
+
         # If a single line, check for clean sentence boundaries
         sentences = re.split(r"(?<=[.!?])\s+", text)
         sentences = [s.strip() for s in sentences if s.strip()]
-        if 1 < len(sentences) <= 3 and len(text) > 15:
+        if 1 < len(sentences) <= 3 and len(text) >= 10:
             # Ensure every sentence is a real thought (at least 2 chars), not broken words
             if all(len(s) >= 2 for s in sentences):
                 return sentences
 
-        # Natural follow-up split thoughts with clause connectors (e.g. ", btw ", ", also ", ", and ", ", but ")
+        # Natural follow-up split thoughts with clause connectors (e.g. ", btw ", ", also ", ", and ", ", but ", ", let ")
         for conn in (", btw ", ", also ", ", and ", ", but ", ", let "):
             if conn in text.lower():
                 idx = text.lower().find(conn)
@@ -1931,7 +2261,12 @@ class ReplyManager:
             )
             return True
         except Exception as e:
-            logger.debug(f"[REACTION] Could not send reaction {chosen} to chat {chat_id}: {e}")
+            if (FloodWaitError and isinstance(e, FloodWaitError)) or "floodwait" in e.__class__.__name__.lower():
+                wait_time = getattr(e, "seconds", 30)
+                self.safety.set_timed_pause(wait_time + 2.0)
+                logger.warning(f"[REACTION FLOODWAIT] Reaction triggered Telegram FloodWait ({wait_time}s). Paused automated actions.")
+            else:
+                logger.debug(f"[REACTION] Could not send reaction {chosen} to chat {chat_id}: {e}")
             return False
 
     def _prevent_duplicate_reply(self, chat_id: int, text: str) -> str:
@@ -2067,7 +2402,8 @@ class ReplyManager:
             logger.error("Cannot send reply: Telegram client is not attached.")
             return False
 
-        msg_parts = self.split_reply_messages(text)
+        multibubble_enabled = self.db.get_state("multibubble_enabled", "1") == "1"
+        msg_parts = self.split_reply_messages(text, enabled=multibubble_enabled)
         if not msg_parts:
             return False
 
@@ -2086,14 +2422,14 @@ class ReplyManager:
 
             if total_delay > 0:
                 # Realistic human simulation: pause for reading/thinking, then show typing action
-                # Reference 2: Dynamic typing delay scaling based on reply word count
+                # Dynamic typing delay scaling based on 1 to 5 word responses
                 word_count = len(first_part.split())
-                if word_count <= 3:
-                    target_typing = random.uniform(1.5, 3.0)
-                elif word_count <= 10:
-                    target_typing = random.uniform(3.0, 6.0)
+                if word_count <= 2:
+                    target_typing = random.uniform(1.2, 2.2)
+                elif word_count <= 5:
+                    target_typing = random.uniform(2.2, 3.8)
                 else:
-                    target_typing = random.uniform(6.0, 9.0)
+                    target_typing = random.uniform(3.8, 5.5)
 
                 typing_duration = min(total_delay, target_typing) if total_delay > 1.5 else total_delay
                 reading_delay = max(0.0, total_delay - typing_duration)
@@ -2156,9 +2492,8 @@ class ReplyManager:
                     await asyncio.sleep(typing_duration)
 
             # Send first message part
-            # In groups, reply directly if mentioned or if text includes a mention; otherwise chime into stream
-            has_mention_in_text = bool(re.search(r"@\w+", first_part))
-            actual_reply_to = reply_to_msg_id if (chat_id > 0 or is_mention or has_mention_in_text) else None
+            # In groups, swipe-to-reply directly if mentioned; in DMs always reply_to; otherwise chime into stream
+            actual_reply_to = reply_to_msg_id if (chat_id > 0 or is_mention) else None
             first_sent = await self._client.send_message(chat_id, first_part, reply_to=actual_reply_to)
             self.safety.mark_reply_sent(chat_id)
             self._last_sent_reply_by_chat[chat_id] = first_part
@@ -2202,16 +2537,39 @@ class ReplyManager:
                     )
                     logger.info(f"Sent natural typo correction '{typo_correction}' to chat {chat_id}.")
 
+            # Suggestion 2: Spontaneous Delayed Follow-Ups (10–20s later for 1–3 word single-message replies)
+            followup_enabled = self.db.get_state("spontaneous_followup_enabled", "1") == "1"
+            if (
+                followup_enabled
+                and len(msg_parts) == 1
+                and not typo_correction
+                and not is_mention
+                and len(first_part.split()) <= 3
+                and self.current_mode == "restricted_auto"
+            ):
+                if random.random() < 0.18:
+                    asyncio.create_task(
+                        self._schedule_spontaneous_followup(
+                            chat_id=chat_id,
+                            sent_text=first_part,
+                        )
+                    )
+
             # Send subsequent message parts (2 or 3) with short natural typing pause
             for idx, part in enumerate(msg_parts[1:], start=2):
                 if self.safety.is_emergency_stopped:
                     logger.warning(f"Follow-up message to chat {chat_id} aborted: emergency stop triggered.")
                     break
 
-                # Mandatory minimum 5-second cooldown between consecutive message parts
-                followup_delay = random.uniform(5.0, 7.0)
-                followup_typing = min(followup_delay, max(1.5, min(3.5, len(part.split()) * 0.8)))
-                followup_pause = max(0.0, followup_delay - followup_typing)
+                # Multi-bubble rapid human typing pause (1.2 - 2.5s) between bubbles
+                if self.min_delay == 0 and self.max_delay == 0:
+                    followup_delay = 0.0
+                    followup_typing = 0.0
+                    followup_pause = 0.0
+                else:
+                    followup_delay = random.uniform(1.2, 2.5)
+                    followup_typing = min(followup_delay, max(0.8, min(1.8, len(part.split()) * 0.4)))
+                    followup_pause = max(0.0, followup_delay - followup_typing)
 
                 if followup_pause > 0:
                     await asyncio.sleep(followup_pause)
@@ -2248,6 +2606,39 @@ class ReplyManager:
 
             return True
         except Exception as e:
+            # Check for Telegram FloodWaitError
+            if (FloodWaitError and isinstance(e, FloodWaitError)) or "floodwait" in e.__class__.__name__.lower():
+                wait_time = getattr(e, "seconds", 60)
+                self.safety.set_timed_pause(wait_time + 5.0)
+                logger.warning(
+                    f"[TELEGRAM FLOODWAIT] Telegram anti-spam FloodWait triggered! "
+                    f"Pausing all automated actions for {wait_time + 5}s."
+                )
+                await self._notify_issue_to_saved_messages(
+                    chat_id=chat_id,
+                    chat_title="",
+                    sender_name="",
+                    error_msg=f"Telegram FloodWaitError: Pausing automated replies for {wait_time}s as required by Telegram anti-spam guidelines.",
+                    incoming_text=text,
+                )
+                return False
+
+            # Check for Telegram PeerFloodError (account restricted by Telegram anti-spam)
+            if (PeerFloodError and isinstance(e, PeerFloodError)) or "peerflood" in e.__class__.__name__.lower():
+                self.safety.set_emergency_stop(True)
+                logger.critical(
+                    f"[TELEGRAM PEERFLOOD] Telegram anti-spam restriction triggered (PeerFloodError)! "
+                    f"Emergency stop activated to protect account from ban."
+                )
+                await self._notify_issue_to_saved_messages(
+                    chat_id=chat_id,
+                    chat_title="",
+                    sender_name="",
+                    error_msg="Telegram PeerFloodError: Account was restricted by Telegram anti-spam (@SpamBot). All automated actions stopped safely.",
+                    incoming_text=text,
+                )
+                return False
+
             self.safety.record_error()
             logger.error(f"Failed to send message to chat {chat_id}: {e}")
             await self._notify_issue_to_saved_messages(

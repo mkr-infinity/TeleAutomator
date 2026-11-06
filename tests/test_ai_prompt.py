@@ -228,6 +228,32 @@ def test_custom_prompt_wrapping_and_anti_ai_guardrails():
     assert "BREVITY & ENERGY MATCHING" in pm.system_instructions
 
 
+def test_custom_prompt_word_rule_priority():
+    """Verify that if custom prompt mentions a word limit, it takes priority over the default 8-word cap."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+
+    # 1. Without custom word rule: capped to 8 words
+    ten_words = "one two three four five six seven eight nine ten"
+    assert len(pm.clean_reply(ten_words).split()) == 8
+
+    # 2. With custom word rule specified (e.g. 15 words)
+    pm.custom_prompt = "You are a tech advisor. Always reply in up to 15 words."
+    assert pm.get_custom_word_limit() == 15
+    assert len(pm.clean_reply(ten_words).split()) == 10  # 10 words preserved!
+    fourteen_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
+    assert len(pm.clean_reply(fourteen_words).split()) == 14
+
+    # 3. With custom detailed/paragraphs directive
+    pm.custom_prompt = "You are an author who provides detailed explanations."
+    assert pm.get_custom_word_limit() == 100
+    assert len(pm.clean_reply(fourteen_words).split()) == 14
+
+    # 4. Reset custom prompt: returns to default 8 words cap
+    pm.reset_custom_prompt()
+    assert pm.get_custom_word_limit() is None
+    assert len(pm.clean_reply(ten_words).split()) == 8
+
+
 def test_ai_confession_interception():
     """Verify that any accidental AI admission is intercepted and replaced with human alibi banter."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
@@ -274,9 +300,11 @@ def test_clean_reply_suppresses_standalone_laughter_and_leading_mentions():
     assert pm.clean_reply("true that 😂") == "true that 😂"
     assert pm.clean_reply("sounds good bro 👍") == "sounds good bro 👍"
 
-    # Mentions are preserved when AI decides to address someone directly
-    assert pm.clean_reply("@alice sounds good 👍") == "@alice sounds good 👍"
-    assert pm.clean_reply("@bob on my way") == "@bob on my way"
+    # User names and @mentions are strictly stripped (swipe-to-reply handles thread reference)
+    assert pm.clean_reply("@alice sounds good 👍") == "sounds good 👍"
+    assert pm.clean_reply("@bob on my way") == "on my way"
+    assert pm.clean_reply("Alice: sounds good bro", sender_name="Alice") == "sounds good bro"
+    assert pm.clean_reply("Alice, sounds good bro", sender_name="Alice") == "sounds good bro"
 
 
 def test_never_use_question_marks():
@@ -393,27 +421,27 @@ def test_top_common_emojis_and_active_group_engagement():
 
 
 def test_strict_word_limits_and_hard_cap():
-    """Verify clean_reply enforces strict 15-word ceiling."""
+    """Verify clean_reply enforces strict 1 to 5 word guideline with 8-word ceiling."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
 
     # Short message stays intact
-    short_msg = "lol true 😂"
+    short_msg = "true 😂"
     assert pm.clean_reply(short_msg) == short_msg
 
-    # 10-word message stays intact
-    ten_words = "one two three four five six seven eight nine ten"
-    assert pm.clean_reply(ten_words) == ten_words
+    # 5-word message stays intact
+    five_words = "sounds good to me bro"
+    assert pm.clean_reply(five_words) == five_words
 
-    # 15-word message stays intact
-    fifteen_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen"
-    assert pm.clean_reply(fifteen_words) == fifteen_words
+    # 8-word message stays intact
+    eight_words = "one two three four five six seven eight"
+    assert pm.clean_reply(eight_words) == eight_words
 
-    # >15-word message is cleanly capped to 15 words
+    # >8-word message is cleanly capped to 8 words
     twenty_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty"
     cleaned = pm.clean_reply(twenty_words)
     words = cleaned.split()
-    assert len(words) == 15
-    assert words[-1] == "fifteen"
+    assert len(words) == 8
+    assert words[-1] == "eight"
 
 
 def test_ist_time_awareness_and_brevity_instructions_in_prompt():
@@ -426,8 +454,8 @@ def test_ist_time_awareness_and_brevity_instructions_in_prompt():
     assert any(period in prompt for period in ("morning", "afternoon", "evening", "night"))
 
     assert "Brevity Rule:" in prompt
-    assert "Cap replies strictly to max 10 words" in prompt
-    assert "10 to 15 words" in prompt
-    assert "NEVER exceed 15 words" in prompt
+    assert "strictly between 1 to 5 words" in prompt
+    assert "max 6 to 8 words" in prompt
+    assert "NEVER exceed 8 words" in prompt
 
 

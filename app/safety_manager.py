@@ -38,7 +38,9 @@ class SafetyManager:
     def __init__(self, config: AppConfig, database: Database):
         self.config = config
         self.db = database
-        self._last_global_reply_time: float = 0.0
+        self._last_global_reply_time: float = (
+            self.db.get_last_reply_timestamp() if (self.db and hasattr(self.db, "get_last_reply_timestamp")) else 0.0
+        )
         self._last_chat_reply_time: Dict[int, float] = {}
         self._next_global_cooldown: float = 0.0
         self._next_chat_cooldown: Dict[int, float] = {}
@@ -224,6 +226,39 @@ class SafetyManager:
         return int(self.max_chat_cooldown)
 
     @property
+    def max_replies_per_minute(self) -> int:
+        """Maximum automated replies allowed per rolling 60-second window across all chats."""
+        db_val = self.db.get_state("max_replies_per_minute")
+        if db_val:
+            try:
+                return max(1, int(db_val))
+            except ValueError:
+                pass
+        return getattr(self.config, "max_replies_per_minute", 5)
+
+    @property
+    def max_replies_per_hour(self) -> int:
+        """Maximum automated replies allowed per rolling 3600-second window across all chats."""
+        db_val = self.db.get_state("max_replies_per_hour")
+        if db_val:
+            try:
+                return max(1, int(db_val))
+            except ValueError:
+                pass
+        return getattr(self.config, "max_replies_per_hour", 30)
+
+    @property
+    def max_chat_replies_per_minute(self) -> int:
+        """Maximum automated replies allowed to the same individual chat in 60 seconds."""
+        db_val = self.db.get_state("max_chat_replies_per_minute")
+        if db_val:
+            try:
+                return max(1, int(db_val))
+            except ValueError:
+                pass
+        return 3
+
+    @property
     def quiet_hours_enabled(self) -> bool:
         """Whether quiet hours / sleep schedule is active."""
         return self.db.get_state(
@@ -305,6 +340,23 @@ class SafetyManager:
         if len(text) > self.config.max_message_length:
             return False, f"Message length ({len(text)}) exceeds maximum allowed ({self.config.max_message_length})"
 
+        # Telegram Anti-Spam Guidelines: Rolling minute & hourly rate limits
+        if self.config.global_cooldown_seconds > 0 and self.db and hasattr(self.db, "get_recent_reply_count"):
+            if self.max_replies_per_minute > 0:
+                recent_min_count = self.db.get_recent_reply_count(60.0)
+                if recent_min_count >= self.max_replies_per_minute:
+                    return False, f"Anti-spam burst limit reached ({recent_min_count}/{self.max_replies_per_minute} replies in last 60s)"
+
+            if self.max_replies_per_hour > 0:
+                recent_hour_count = self.db.get_recent_reply_count(3600.0)
+                if recent_hour_count >= self.max_replies_per_hour:
+                    return False, f"Anti-spam hourly limit reached ({recent_hour_count}/{self.max_replies_per_hour} replies in last hour)"
+
+            if self.max_chat_replies_per_minute > 0:
+                recent_chat_min = self.db.get_recent_reply_count(60.0, chat_id=chat_id)
+                if recent_chat_min >= self.max_chat_replies_per_minute:
+                    return False, f"Anti-spam chat burst limit reached ({recent_chat_min}/{self.max_chat_replies_per_minute} replies in last 60s for chat {chat_id})"
+
         # Global cooldown check (minimum 5s hard floor + randomized interval)
         time_since_global = now - self._last_global_reply_time
         floor_global = min(5.0, self.min_global_cooldown)
@@ -318,7 +370,14 @@ class SafetyManager:
             return False, f"Global cooldown active ({wait_time}s remaining)"
 
         # Per-chat cooldown check (minimum 5s hard floor + randomized interval)
-        last_chat_time = self._last_chat_reply_time.get(chat_id, 0.0)
+        last_chat_time = self._last_chat_reply_time.get(chat_id)
+        if last_chat_time is None:
+            last_chat_time = (
+                self.db.get_last_reply_timestamp(chat_id)
+                if (self.db and hasattr(self.db, "get_last_reply_timestamp"))
+                else 0.0
+            )
+            self._last_chat_reply_time[chat_id] = last_chat_time
         time_since_chat = now - last_chat_time
         floor_chat = min(5.0, self.min_chat_cooldown)
         if time_since_chat < floor_chat:
@@ -339,4 +398,9 @@ class SafetyManager:
         self._last_chat_reply_time[chat_id] = now
         self._next_global_cooldown = self._pick_random_global_cooldown()
         self._next_chat_cooldown[chat_id] = self._pick_random_chat_cooldown()
+        if self.db and hasattr(self.db, "record_reply_event"):
+            try:
+                self.db.record_reply_event(chat_id, now)
+            except Exception as e:
+                logger.debug(f"Could not record reply event: {e}")
         self.record_success()

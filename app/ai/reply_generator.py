@@ -138,7 +138,7 @@ class ReplyGenerator:
         instructions = self.prompt_manager.get_system_instructions(style_override=style_override)
         try:
             draft = self.provider.generate_reply(prompt, instructions)
-            return self.prompt_manager.clean_reply(draft)
+            return self.prompt_manager.clean_reply(draft, sender_name=sender_name)
         except Exception as e:
             logger.error(f"Failed to generate draft reply: {e}")
             # Never return fallbacks to groups or peer chats; raise so caller alerts Saved Messages exclusively

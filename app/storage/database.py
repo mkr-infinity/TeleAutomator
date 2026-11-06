@@ -65,6 +65,13 @@ class Database:
                     timestamp REAL NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS reply_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    timestamp REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_reply_events_timestamp ON reply_events(timestamp);
+
                 CREATE TABLE IF NOT EXISTS chat_messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_id INTEGER NOT NULL,
@@ -239,6 +246,49 @@ class Database:
         with self._get_connection() as conn:
             conn.execute("DELETE FROM reaction_events WHERE timestamp < ?", (cutoff,))
 
+    def record_reply_event(self, chat_id: int, ts: float) -> None:
+        """Record timestamp and chat of an outgoing automated reply for anti-spam rate limiting."""
+        with self._get_connection() as conn:
+            conn.execute("INSERT INTO reply_events (chat_id, timestamp) VALUES (?, ?)", (chat_id, ts))
+
+    def get_recent_reply_count(self, window_seconds: float, chat_id: Optional[int] = None) -> int:
+        """Count automated replies sent within the last window_seconds globally or for a specific chat."""
+        import time
+        cutoff = time.time() - max(1.0, window_seconds)
+        with self._get_connection() as conn:
+            if chat_id is not None:
+                row = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM reply_events WHERE timestamp >= ? AND chat_id = ?",
+                    (cutoff, chat_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM reply_events WHERE timestamp >= ?",
+                    (cutoff,),
+                ).fetchone()
+            return int(row["cnt"]) if row else 0
+
+    def get_last_reply_timestamp(self, chat_id: Optional[int] = None) -> float:
+        """Retrieve timestamp of the most recent automated reply globally or for a specific chat."""
+        with self._get_connection() as conn:
+            if chat_id is not None:
+                row = conn.execute(
+                    "SELECT timestamp FROM reply_events WHERE chat_id = ? ORDER BY id DESC LIMIT 1",
+                    (chat_id,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT timestamp FROM reply_events ORDER BY id DESC LIMIT 1",
+                ).fetchone()
+            return float(row["timestamp"]) if row else 0.0
+
+    def prune_old_reply_events(self, max_age_seconds: float = 86400.0) -> None:
+        """Delete reply timestamps older than max_age_seconds."""
+        import time
+        cutoff = time.time() - max_age_seconds
+        with self._get_connection() as conn:
+            conn.execute("DELETE FROM reply_events WHERE timestamp < ?", (cutoff,))
+
     def record_chat_message(
         self,
         chat_id: int,
@@ -368,7 +418,11 @@ class Database:
             results = []
             for r in reversed(rows):
                 sender = "You" if r["is_outgoing"] == 1 else (r["sender_name"] or "Contact")
-                results.append({"sender": sender, "text": r["text"]})
+                results.append({
+                    "sender": sender,
+                    "text": r["text"],
+                    "is_outgoing": bool(r["is_outgoing"]),
+                })
             return results
 
     def clear_chat_context(self, chat_id: int) -> int:

@@ -932,26 +932,21 @@ def test_group_unthreaded_reply_without_mention(tmp_path: Path):
         assert sent_calls[0][0] == -100222
         assert sent_calls[0][2] is None
 
-        # 2. Group reply where AI specifically mentioned someone: reply_to is preserved
-        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="@bob yeah true that", adaptive_delay=False, is_mention=False)
+        # 2. Group reply with mention: swipe-to-reply preserves reply_to
+        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah true that", adaptive_delay=False, is_mention=True)
         assert len(sent_calls) == 2
         assert sent_calls[1][2] == 77
 
-        # 3. Group reply with mention: reply_to is preserved
-        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah true that", adaptive_delay=False, is_mention=True)
-        assert len(sent_calls) == 3
-        assert sent_calls[2][2] == 77
-
-        # 4. Private DM: reply_to is preserved
+        # 3. Private DM: reply_to is preserved
         await mgr._send_reply(chat_id=12345, reply_to_msg_id=55, text="sounds good", adaptive_delay=False, is_mention=False)
-        assert len(sent_calls) == 4
-        assert sent_calls[3][2] == 55
+        assert len(sent_calls) == 3
+        assert sent_calls[2][2] == 55
 
     asyncio.run(_run())
 
 
 def test_mandatory_mention_when_mentioned_by_peer(tmp_path: Path):
-    """Verify that when someone mentions us in a group, our reply always mentions them."""
+    """Verify that when someone mentions us in a group, reply swipes to reply (reply_to_msg_id) and never writes names in text."""
     async def _run():
         cfg = AppConfig(api_id=123, api_hash="dummy_hash", reply_mode="restricted_auto", auto_authorize=True, data_dir=tmp_path)
         db = Database(tmp_path / "test_peer_mention.db")
@@ -960,7 +955,7 @@ def test_mandatory_mention_when_mentioned_by_peer(tmp_path: Path):
         privacy = PrivacyManager(cfg, database=db)
         privacy.allow_chat(-100888)
         generator = ReplyGenerator(cfg, database=db)
-        # AI generated a response without a mention tag
+        # AI generated a clean response
         generator.generate = MagicMock(return_value="sounds good to me 👍")
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
@@ -987,9 +982,11 @@ def test_mandatory_mention_when_mentioned_by_peer(tmp_path: Path):
 
         assert len(sent_messages) == 1
         chat_id, text, reply_to = sent_messages[0]
-        # Text must mention Alice
-        assert "@Alice" in text or "Alice" in text
-        # Must reply to message ID 404
+        # Text must NEVER write user names or @usernames
+        assert "@" not in text
+        assert "Alice" not in text
+        assert text == "sounds good to me 👍"
+        # Must swipe-to-reply (quote message ID 404)
         assert reply_to == 404
 
     asyncio.run(_run())
@@ -1753,6 +1750,290 @@ def test_anti_repetition_suppression_of_duplicate_replies(tmp_path: Path):
     # Different text: allowed
     res3 = mgr._prevent_duplicate_reply(chat_id, "will check and ping you")
     assert res3 == "will check and ping you"
+
+
+def test_ratelimit_control_command(tmp_path: Path):
+    """Verify /ratelimit command displays and updates anti-spam limits."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "ratelimit.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # 1. Query current limits
+        res1 = await mgr.handle_control_command("/ratelimit")
+        assert "Telegram Anti-Spam Rate Limits" in res1
+        assert "Burst Limit" in res1
+        assert "Hourly Limit" in res1
+
+        # 2. Update limits
+        res2 = await mgr.handle_control_command("/ratelimit 8 50")
+        assert "*8*" in res2 and "*50*" in res2
+        assert safety.max_replies_per_minute == 8
+        assert safety.max_replies_per_hour == 50
+
+        # 3. Status includes rate limit info
+        status_res = await mgr.handle_control_command("/status")
+        assert "Anti-Spam: Rate=`8/min, 50/hr`" in status_res
+
+    asyncio.run(_run())
+
+
+def test_floodwait_and_peerflood_handling(tmp_path: Path):
+    """Verify Telegram FloodWaitError pauses automation and PeerFloodError activates emergency stop."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "flood.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        class MockFloodWait(Exception):
+            seconds = 60
+
+        class MockPeerFlood(Exception):
+            pass
+
+        class FloodClient:
+            async def send_message(self, *args, **kwargs):
+                raise MockFloodWait()
+
+        mgr.set_telegram_client(FloodClient())
+
+        # FloodWait triggers timed pause
+        sent1 = await mgr._send_reply(101, 1, "test message", adaptive_delay=False)
+        assert sent1 is False
+        assert safety.get_remaining_pause_seconds() > 50
+
+        # Clear pause and test PeerFlood
+        safety.clear_pause()
+
+        class PeerFloodClient:
+            async def send_message(self, *args, **kwargs):
+                raise MockPeerFlood()
+
+        mgr.set_telegram_client(PeerFloodClient())
+        sent2 = await mgr._send_reply(101, 1, "test message 2", adaptive_delay=False)
+        assert sent2 is False
+        assert safety.is_emergency_stopped is True
+
+    asyncio.run(_run())
+
+
+def test_spontaneous_followup_command_and_execution(tmp_path: Path):
+    """Verify /followup command and spontaneous delayed follow-up behavior."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            data_dir=tmp_path,
+            global_cooldown_seconds=0,
+            per_chat_cooldown_seconds=0,
+            typing_delay_seconds=0.0,
+            min_delay_seconds=0.0,
+            max_delay_seconds=0.0,
+        )
+        db = Database(tmp_path / "followup.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # 1. /followup command tests
+        res1 = await mgr.handle_control_command("/followup")
+        assert "Spontaneous follow-ups" in res1
+        assert "ENABLED" in res1
+
+        res_off = await mgr.handle_control_command("/followup off")
+        assert "DISABLED" in res_off
+        assert db.get_state("spontaneous_followup_enabled") == "0"
+
+        res_on = await mgr.handle_control_command("/followup on")
+        assert "ENABLED" in res_on
+        assert db.get_state("spontaneous_followup_enabled") == "1"
+
+        # 2. Execution test: Intervening peer message cancels follow-up
+        class MockActionContext:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                pass
+
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(return_value=MagicMock(id=888))
+        mock_client.action = MagicMock(return_value=MockActionContext())
+        mgr.set_telegram_client(mock_client)
+
+        chat_id = 1234
+        # Record initial reply
+        db.record_chat_message(chat_id, 100, None, "Kaif", "on my way", is_outgoing=True)
+        # Intervening peer message arrives
+        db.record_chat_message(chat_id, 101, 555, "Alice", "okay see ya", is_outgoing=False)
+
+        # Run follow-up with 0s delay
+        await mgr._schedule_spontaneous_followup(chat_id, "on my way", delay_seconds=0.0)
+        # Should NOT send follow-up because peer already replied!
+        mock_client.send_message.assert_not_called()
+
+        # 3. Execution test: No intervening message -> sends follow-up
+        chat_id2 = 5678
+        db.record_chat_message(chat_id2, 200, None, "Kaif", "heading out", is_outgoing=True)
+        await mgr._schedule_spontaneous_followup(chat_id2, "heading out", delay_seconds=0.0)
+        # Should have sent follow-up
+        assert mock_client.send_message.call_count == 1
+
+    asyncio.run(_run())
+
+
+def test_incoming_burst_debouncer(tmp_path: Path):
+    """Verify incoming burst debouncer stitches rapid messages into a single thought."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            reply_mode="restricted_auto",
+            data_dir=tmp_path,
+            global_cooldown_seconds=0,
+            per_chat_cooldown_seconds=0,
+            typing_delay_seconds=0.0,
+            min_delay_seconds=0.0,
+            max_delay_seconds=0.0,
+        )
+        db = Database(tmp_path / "debounce.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # 1. /debounce command checks
+        res1 = await mgr.handle_control_command("/debounce")
+        assert "Burst debouncer" in res1
+        assert "ENABLED" in res1
+
+        res_off = await mgr.handle_control_command("/debounce off")
+        assert "DISABLED" in res_off
+        assert db.get_state("debounce_enabled") == "0"
+
+        res_sec = await mgr.handle_control_command("/debounce 2.5")
+        assert "2.5s" in res_sec
+        assert db.get_state("debounce_seconds") == "2.5"
+
+        # 2. Execution check: Short debounce window (0.15s) stitches rapid messages
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(return_value=MagicMock(id=999))
+        mgr.set_telegram_client(mock_client)
+        # Authorize auto
+        safety.set_auto_authorization(True)
+
+        # Set 0.15s debounce window
+        db.set_state("debounce_enabled", "1")
+        db.set_state("debounce_seconds", "0.15")
+
+        chat_id = 4444
+        # Send 2 rapid burst messages
+        await mgr.handle_incoming_eligible_message(
+            chat_id=chat_id,
+            chat_title="Friend",
+            message_id=1,
+            sender_id=777,
+            sender_name="Bob",
+            text="yo",
+        )
+        await asyncio.sleep(0.04)
+        await mgr.handle_incoming_eligible_message(
+            chat_id=chat_id,
+            chat_title="Friend",
+            message_id=2,
+            sender_id=777,
+            sender_name="Bob",
+            text="are you free",
+        )
+
+        # Wait for debounce window to elapse (0.15s + buffer)
+        await asyncio.sleep(0.28)
+
+        # Should have sent only 1 reply instead of 2 separate replies!
+        assert mock_client.send_message.call_count == 1
+
+    asyncio.run(_run())
+
+
+def test_multibubble_splitting_and_controls(tmp_path: Path):
+    """Verify multi-bubble splitting controls and rapid sequential sending."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            reply_mode="restricted_auto",
+            data_dir=tmp_path,
+            global_cooldown_seconds=0,
+            per_chat_cooldown_seconds=0,
+            typing_delay_seconds=0.0,
+            min_delay_seconds=0.0,
+            max_delay_seconds=0.0,
+        )
+        db = Database(tmp_path / "multibubble.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # 1. /multibubble commands
+        res1 = await mgr.handle_control_command("/multibubble")
+        assert "Multi-bubble response splitting" in res1
+        assert "ENABLED" in res1
+
+        res_off = await mgr.handle_control_command("/multibubble off")
+        assert "DISABLED" in res_off
+        assert db.get_state("multibubble_enabled") == "0"
+
+        res_on = await mgr.handle_control_command("/multibubble on")
+        assert "ENABLED" in res_on
+        assert db.get_state("multibubble_enabled") == "1"
+
+        # 2. split_reply_messages tests
+        # Ellipsis multi-bubble split
+        parts_ellipsis = ReplyManager.split_reply_messages("sounds good... will let you know")
+        assert parts_ellipsis == ["sounds good", "will let you know"]
+
+        # Disabled multi-bubble returns single message
+        parts_disabled = ReplyManager.split_reply_messages("sounds good... will let you know", enabled=False)
+        assert parts_disabled == ["sounds good... will let you know"]
+
+        # 3. Execution: multi-bubble sends sequential parts to chat
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(return_value=MagicMock(id=888))
+        mgr.set_telegram_client(mock_client)
+
+        chat_id = 9999
+        await mgr._send_reply(
+            chat_id=chat_id,
+            reply_to_msg_id=10,
+            text="sounds good... will let you know",
+            adaptive_delay=False,
+        )
+        # Should have sent 2 sequential message bubbles
+        assert mock_client.send_message.call_count == 2
+        calls = [c[0][1] for c in mock_client.send_message.call_args_list]
+        assert calls == ["sounds good", "will let you know"]
+
+        # Now test with multibubble disabled
+        db.set_state("multibubble_enabled", "0")
+        mock_client.send_message.reset_mock()
+        await mgr._send_reply(
+            chat_id=chat_id,
+            reply_to_msg_id=11,
+            text="sounds good... will let you know",
+            adaptive_delay=False,
+        )
+        # Should have sent only 1 message bubble
+        assert mock_client.send_message.call_count == 1
+        assert mock_client.send_message.call_args[0][1] == "sounds good... will let you know"
+
+    asyncio.run(_run())
 
 
 
