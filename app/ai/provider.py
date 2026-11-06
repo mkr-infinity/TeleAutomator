@@ -122,7 +122,7 @@ class OpenAIProvider(AIProvider):
         model: str = "gpt-4o-mini",
         base_url: str = "",
         usage_callback: Optional[Any] = None,
-        reasoning_effort: str = "low",
+        reasoning_effort: str = "default",
         temperature: float = 0.6,
         max_tokens: int = 200,
     ):
@@ -176,7 +176,7 @@ class OpenAIProvider(AIProvider):
                 "temperature": self.temperature,
                 "max_tokens": self.max_tokens,
             }
-            if is_inception and self.reasoning_effort not in ("off", "none", ""):
+            if is_inception and self.reasoning_effort not in ("off", "none", "", "default"):
                 payload["reasoning_effort"] = self.reasoning_effort
 
             data = json.dumps(payload).encode("utf-8")
@@ -236,7 +236,7 @@ class OpenAIProvider(AIProvider):
                 "messages": [{"role": "user", "content": "hi"}],
                 "max_tokens": 10,
             }
-            if is_inception and self.reasoning_effort not in ("off", "none", ""):
+            if is_inception and self.reasoning_effort not in ("off", "none", "", "default"):
                 payload["reasoning_effort"] = self.reasoning_effort
             data = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(

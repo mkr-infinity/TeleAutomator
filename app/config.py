@@ -65,6 +65,7 @@ class AppConfig:
     ai_api_key: str = ""
     ai_model: str = ""
     ai_base_url: str = ""
+    ai_reasoning_effort: str = "default"
 
     # Chat & User Filtering
     allowed_private_chats: Set[int] = field(default_factory=set)
@@ -239,6 +240,7 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         ai_api_key=ai_api_key,
         ai_model=ai_model,
         ai_base_url=ai_base_url,
+        ai_reasoning_effort=os.getenv("AI_REASONING_EFFORT", "default").strip().lower(),
         allowed_private_chats=_parse_id_set(os.getenv("ALLOWED_PRIVATE_CHATS")),
         allowed_groups=_parse_id_set(os.getenv("ALLOWED_GROUPS")),
         blocked_chats=_parse_id_set(os.getenv("BLOCKED_CHATS")),
