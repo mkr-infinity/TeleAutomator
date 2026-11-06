@@ -26,45 +26,50 @@ VALID_STYLES: Dict[str, str] = {
 # =============================================================================
 
 ANTI_AI_GUARDRAILS = """You are texting directly as {owner_name} from your personal phone in Telegram.
-You are a real human friend chatting casually on mobile. NEVER sound like an AI, bot, assistant, or customer rep.
+Real human friend chatting on mobile. NEVER sound like an AI, bot, or assistant.
 
 CRITICAL TEXTING RULES:
-1. BREVITY & ENERGY MATCHING (NATURAL HUMAN CONVERSATION & LENGTH VARIATION):
-   - Match the moment naturally like a human texting: sometimes 1 word ("lol", "true"), sometimes 2 words ("haan sahi", "same here"), sometimes a line when explaining.
-   - In groups and chats, when you understand discussions, chime in naturally with thoughts. Read chat context first before chiming in.
+1. BREVITY & ENERGY MATCHING (STRICT 10-15 WORD LIMITS):
+   - Default replies are strictly 1 to 10 words (e.g. "true that 😂", "sounds good 👍").
+   - Serious cases only: 10 to 15 words max. NEVER exceed 15 words.
+   - Text like a human: sometimes 1 word, sometimes 2 words, short line when needed.
 
 2. CASUAL MOBILE TEXTING (NO SLANG OVERLOAD):
-   - Text casually and naturally. Keep language authentic, friendly, and human without slang overload.
+   - Text casually and naturally. Authentic and friendly without slang overload.
 
-3. READ CONTEXT FIRST (NEVER REPLY WITHOUT CONTEXT):
-   - Always read conversation context before replying. Directly address what is being discussed.
+3. READ CONTEXT FIRST:
+   - Read context first. Address what is discussed and who is replying to whom.
 
 4. DEFAULT LANGUAGE IS ENGLISH:
-   - Always reply in English by default.
+   - Always reply in English by default. NEVER use Hindi or other language unless explicitly configured.
 
-5. CASUAL MOBILE TYPING & NO CODE:
-   - Text naturally like on phone. Minor typos (e.g. "dont", "yeaa") are fine.
-   - NEVER write code syntax, paths (/etc), code blocks, brackets [] or braces {}.
+5. CASUAL TYPING & NO CODE:
+   - Text naturally on phone. Minor typos ok. NEVER write code, paths, or brackets [] {}.
 
 6. NEVER USE QUESTION MARKS:
-   - Absolutely NEVER use question marks (?). Do not ask questions back or end with '?'. State things casually.
+   - NEVER use question marks (?). State things casually.
 
 7. EMOJI PLACEMENT (COMMONLY USED EMOJIS):
-   - Use top common emojis: 😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️.
-   - Place emojis in MIDDLE of text between words (e.g. "haan 😂 bro was thinking the same", "all good 👍 will let u know").
-   - NEVER place an emoji at end of message.
+   - Common emojis: 😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️. Place naturally in middle or at end.
 
 8. HUMAN ALIBI (NEVER ADMIT BEING AI):
-   - If accused of being a bot ("are u a bot?"):
-     * "seriously 😂 bro u think I am not real"
-     * "bruh u fr rn it's me lol"
-     * "lol typing from my phone rn"
+   - If asked: "seriously 😂 bro u think I am not real", "bruh it's me lol".
 
 9. NO REPETITION / NO SPAM:
-   - NEVER repeat same word twice consecutively (no "bro bro"). Never repeat previous reply.
+   - Never repeat phrases or reuse canned phrases. Keep each response completely fresh.
 
 10. PRIVACY:
-   - Never promise money or invent plans. Say u will check and let them know."""
+   - Never promise money or plans. Say u will check and let them know.
+
+11. TIME AWARENESS:
+   - Aware of Indian Time (IST) and time period (morning/afternoon/evening/night) when greeting.
+
+12. NO 'HAHA' TEXT (EMOJI REACTIONS FOR HUMOR):
+   - NEVER write 'haha', 'lol', or 'lmao'. Use emoji reactions or real thoughts.
+
+13. TOPIC ENGAGEMENT & MENTIONING:
+   - In topic chats, engage naturally with or without mentioning: decide from context whether to address someone or speak into the stream.
+   - MANDATORY: If someone mentions you, you MUST mention and address them. Never reply without mentioning them."""
 
 DEFAULT_SYSTEM_INSTRUCTIONS = ANTI_AI_GUARDRAILS.replace("{owner_name}", "Kaif") + "\n\nOutput ONLY the raw text message ready to send."
 
@@ -183,23 +188,8 @@ class PromptManager:
             return False
 
     def get_fallback_reply(self, incoming_text: str = "") -> str:
-        """Natural human fallback only when AI service is temporarily unavailable."""
-        import random
-        import re
-        low = (incoming_text or "").strip().lower()
-        tokens = set(re.findall(r"\w+", low))
-        if any(w in tokens for w in ("bot", "ai", "real", "fake")) or "who are you" in low or "who r u" in low:
-            return random.choice([
-                "bruh u fr rn it's me lol",
-                "seriously 😂 bro u think I am not real",
-                "lol typing from phone rn",
-            ])
-        return random.choice([
-            "haan bolo batao kya chal raha",
-            "all good here, caught up with something will text properly in a bit",
-            "sahi hai bro, batao aur kya update hai",
-            "just saw your text, tell me what's up",
-        ])
+        """Deprecated: Dynamic fallback is disabled per rule 'never reply if AI is not sending response'."""
+        return ""
 
     def clean_reply(self, raw_text: str) -> str:
         """Remove any accidental AI meta-commentary, labels, brackets, or robotic filler."""
@@ -259,32 +249,13 @@ class PromptManager:
         # STRICT SAFETY: Never allow AI to output URLs or links
         text = re.sub(r"https?:\/\/\S+|t\.me\/\S+|www\.\S+", "", text)
 
-        # Relocate trailing emojis so they appear in between words, never at end of message
+        # Clean markdown formatting, list bullets, or system prefixes while preserving natural emoji placement
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         clean_lines = []
-        emoji_rx = re.compile(r"[\U00010000-\U0010ffff\u2600-\u27bf\u2300-\u23ff\u2b50]")
         for line in lines:
             cleaned_line = re.sub(r"^[\*\-\•\d\.\:\s]+(?:option\s*\d*[\:\.\s]*)?", "", line, flags=re.IGNORECASE).strip()
-            if not cleaned_line:
-                continue
-            trailing_emojis = []
-            while cleaned_line and emoji_rx.match(cleaned_line[-1]):
-                trailing_emojis.append(cleaned_line[-1])
-                cleaned_line = cleaned_line[:-1].strip()
-            if trailing_emojis:
-                emojis_str = "".join(reversed(trailing_emojis))
-                words = cleaned_line.split()
-                if len(words) >= 2:
-                    insert_pos = max(1, len(words) // 2)
-                    words.insert(insert_pos, emojis_str)
-                    clean_lines.append(" ".join(words))
-                elif len(words) == 1:
-                    clean_lines.append(f"{emojis_str} {words[0]}")
-                else:
-                    clean_lines.append(emojis_str)
-            else:
-                if len(cleaned_line) > 1 or cleaned_line:
-                    clean_lines.append(cleaned_line)
+            if cleaned_line:
+                clean_lines.append(cleaned_line)
 
         if clean_lines:
             text = "\n".join(clean_lines[:3])
@@ -297,8 +268,18 @@ class PromptManager:
         if not clean_lower or clean_lower in ("none", "none.", "null", "null.", "nil", "undefined"):
             return ""
 
+        # Suppress standalone laughter responses (e.g. "haha", "hahaha", "lol", "lmao", "rofl", "xd")
+        pure_laughter = re.sub(r"[^a-zA-Z]", "", text).lower()
+        if pure_laughter and re.match(r"^(?:[ae]*h+[ae]*|lol|lmao|rofl|xd|lmfao)+$", pure_laughter):
+            return ""
+
         # Remove immediate word-level repetitions (e.g. "bro bro" -> "bro", "haan haan" -> "haan")
         text = re.sub(r'\b(\w+)(?:\s+\1\b)+', r'\1', text, flags=re.IGNORECASE)
+
+        # STRICT 10-15 WORD LIMIT: Hard cap at 15 words maximum
+        words = text.split()
+        if len(words) > 15:
+            text = " ".join(words[:15]).rstrip(" ,-—:;")
 
         return text.strip()
 
@@ -309,6 +290,7 @@ class PromptManager:
         conversation_history: Optional[List[Dict[str, str]]] = None,
         permanent_context: Optional[str] = None,
         is_group: bool = False,
+        is_mention: bool = False,
     ) -> str:
         """Create prompt containing message context, history, permanent chat context, language rule, and dynamic owner identity."""
         parts: List[str] = []
@@ -321,7 +303,7 @@ class PromptManager:
 
         if conversation_history:
             history_lines = ["Recent conversation context: (MANDATORY: Read context first before replying)"]
-            for msg in conversation_history[-8:]:
+            for msg in conversation_history[-15:]:
                 sender = msg.get("sender", "Contact")
                 content = msg.get("text", "").strip()
                 if content:
@@ -335,54 +317,82 @@ class PromptManager:
             "Never reply without context. Note who is replying to whom in the chat. Directly address what the sender or group was discussing."
         )
 
-        # Language enforcement: default to English
-        if is_group:
-            # Group language policy: default strictly to English unless the group conversation is in Hindi/Hinglish
-            has_devanagari = any("\u0900" <= c <= "\u097f" for c in incoming_text)
-            hindi_keywords = {
-                "kya", "bhai", "haan", "nahi", "kaise", "kuch", "hai", "karo", "raha", 
-                "rahe", "hota", "batao", "acha", "theek", "yaar", "bhaiya", "sahi", "bolo"
-            }
-            history_text = " ".join(m.get("text", "") for m in (conversation_history or []))
-            all_text_lower = f"{incoming_text} {history_text}".lower()
-            words_tokens = set(re.findall(r"\w+", all_text_lower))
-            is_hindi_group = has_devanagari or len(words_tokens.intersection(hindi_keywords)) >= 2
-
-            if is_hindi_group:
-                lang_instruction = (
-                    "GROUP LANGUAGE (Hindi/Hinglish): The group is conversing in Hindi/Hinglish. "
-                    "You may reply naturally in Hindi or Hinglish matching the group tone."
-                )
-            else:
-                lang_instruction = (
-                    "CRITICAL GROUP LANGUAGE RULE (English Only): Default language is English. "
-                    "You MUST reply ONLY in English. NEVER use Hindi or any other language in this group."
-                )
+        # Language enforcement: default strictly to English everywhere unless user explicitly configured another language
+        if self._language == "english":
+            lang_instruction = (
+                "CRITICAL LANGUAGE RULE (English Only): Default language is English. "
+                "You MUST reply ONLY in English. NEVER use Hindi or any other language in any chat or group, "
+                "regardless of what language the sender or group is speaking."
+            )
         elif self._language == "dynamic":
             lang_instruction = "Match the exact language and writing style of the sender (e.g. English, Hinglish, Hindi)."
-        elif self._language == "english":
-            lang_instruction = "CRITICAL: Default language is English. You MUST reply ONLY in English, regardless of the sender's language."
         else:
-            lang_instruction = f"CRITICAL: You MUST reply ONLY in {self._language.capitalize()}."
+            lang_instruction = f"CRITICAL: User configured language is {self._language.capitalize()}. You MUST reply ONLY in {self._language.capitalize()}."
 
-        # Natural human engagement with varied message lengths
+        # Natural human engagement with dynamic mentioning
+        if is_mention:
+            mention_rule = (
+                f"MANDATORY MENTION RULE: {sender_name} directly mentioned or replied to you. "
+                f"You MUST mention and directly address {sender_name} while replying (e.g. '@{sender_name} ...' or addressing them by name). Never reply without mentioning them."
+            )
+        else:
+            mention_rule = (
+                "DYNAMIC MENTION RULE: In ongoing topic chats, engage naturally in both ways (with or without mentioning). "
+                "Think and decide from context whether you need to mention someone or chime into the stream freely."
+            )
+
         engagement_instruction = (
             "In groups and chats, be an active Telegram user. When you understand discussions, chime in naturally with thoughts. "
+            f"{mention_rule} "
+            "NEVER send messages saying 'haha', 'lol', or 'lmao' as text; use emoji reactions or express real thoughts. "
             "Read chat context first to see what conversations are ongoing before replying. "
-            "Match conversational length naturally: sometimes 1 word, sometimes 2 words, sometimes a line when necessary. "
+            "Match conversational length naturally: sometimes 1 word, sometimes 2 words, sometimes a line when necessary (under 10 words default, max 15 serious). "
+            "Occasionally (when natural), you may split a thought across 2 short lines or use a natural follow-up (e.g. 'sounds good 👍\\nbtw check dm'). "
             "Keep replies conversational, natural, and engaging (no robotic 1-word shortcuts like nope/dope/yo, no AI talk, no code)."
+        )
+
+        # Reference 1: Time-of-day awareness (IST, UTC+05:30)
+        from datetime import datetime, timezone, timedelta
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        now_ist = datetime.now(ist_tz)
+        hour = now_ist.hour
+        if 5 <= hour < 12:
+            time_period = "morning"
+        elif 12 <= hour < 17:
+            time_period = "afternoon"
+        elif 17 <= hour < 21:
+            time_period = "evening"
+        else:
+            time_period = "night"
+        time_context = f"Current Time: {now_ist.strftime('%I:%M %p')} IST ({time_period})"
+
+        # Strict brevity word limits (max 10 words default, 10-15 serious, never > 15)
+        brevity_instruction = (
+            "CRITICAL BREVITY RULE: Cap replies strictly to max 10 words by default (e.g. 1-3 words for quick banter, max 10 words). "
+            "In serious or technical discussions only, use 10 to 15 words. "
+            "NEVER exceed 15 words. Avoid long essay replies or lines of text."
+        )
+
+        # Anti-repetition rule: never repeat same phrase or opening
+        repetition_instruction = (
+            "CRITICAL ANTI-REPETITION: Never repeat the same phrase, opening, or wording you already used in previous messages. "
+            "Never reuse canned phrases like 'just saw your text', 'caught up with', or identical greetings. "
+            "Every reply must be fresh, contextual, distinct, and tailored specifically to what was just said."
         )
 
         style_instruction = VALID_STYLES.get(self._style, VALID_STYLES["casual"])
         parts.append(
             f"You are {self.owner_name} texting from your phone.\n"
+            f"Time Context: {time_context}\n"
             f"Tone/Style: {style_instruction}\n"
+            f"Brevity Rule: {brevity_instruction}\n"
+            f"Anti-Repetition Rule: {repetition_instruction}\n"
             f"Language Rule: {lang_instruction}\n"
             f"Context Rule: {context_instruction}\n"
             f"Engagement Rule: {engagement_instruction}\n"
-            f"Punctuation & Emojis: Use top common emojis (😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️) naturally in between words inside the message, NEVER at the very end. NEVER use question marks (?).\n"
+            f"Punctuation & Emojis: Use top common emojis (😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️) naturally wherever they fit best (in between words or at the end of a thought). NEVER use question marks (?).\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, active group engagement, read context first, natural typing, no question marks, emojis in between words, no AI talk, no code, no brackets, separate distinct thoughts by newline):"
+            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, dynamic topic engagement with or without mentioning [always mention if mentioned], no 'haha'/'lol' text, read context first, natural typing, no question marks, emojis where they fit best, max 10 words [serious 10-15], no repetition, no canned phrases, no AI talk, no code, no brackets):"
         )
         return "\n\n".join(parts)

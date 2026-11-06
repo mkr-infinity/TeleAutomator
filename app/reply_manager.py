@@ -54,6 +54,7 @@ class ReplyManager:
         self._last_reaction_time: float = 0.0
         self._last_reaction_time_by_chat: dict[int, float] = {}
         self._last_sent_reply_by_chat: dict[int, str] = {}
+        self._recent_replies_history: dict[int, list[str]] = {}
         self._last_group_activity: dict[int, float] = {}
         self._next_reaction_cooldown: float = random.uniform(
             float(self.db.get_state("reaction_min_cooldown_seconds", str(getattr(config, "reaction_min_cooldown_seconds", 3.0)))),
@@ -196,22 +197,45 @@ class ReplyManager:
 
                 # Check for per-chat style/persona override; fallback to global default
                 chat_style = self.db.get_state(f"chat_style_{chat_id}")
-                draft = self.generator.generate(
-                    sender_name=sender_name,
-                    incoming_text=clean_text,
-                    conversation_history=conversation_history,
-                    style_override=chat_style or None,
-                    permanent_context=permanent_context_str,
-                    is_group=(chat_id < 0),
-                )
+
+                async def _do_generate():
+                    return await asyncio.to_thread(
+                        self.generator.generate,
+                        sender_name=sender_name,
+                        incoming_text=clean_text,
+                        conversation_history=conversation_history,
+                        style_override=chat_style or None,
+                        permanent_context=permanent_context_str,
+                        is_group=(chat_id < 0),
+                        is_mention=is_mention,
+                    )
+
+                # Show typing indicator in chat or group while AI thinks/generates reply
+                if self._client and self.current_mode == "restricted_auto":
+                    try:
+                        if hasattr(self._client, "action") and callable(self._client.action):
+                            act = self._client.action(chat_id, "typing")
+                            if hasattr(act, "__aenter__"):
+                                async with act:
+                                    draft = await _do_generate()
+                            else:
+                                if asyncio.iscoroutine(act):
+                                    try:
+                                        await act
+                                    except Exception:
+                                        pass
+                                draft = await _do_generate()
+                        else:
+                            draft = await _do_generate()
+                    except Exception:
+                        draft = await _do_generate()
+                else:
+                    draft = await _do_generate()
             except Exception as e:
                 logger.error(f"Failed to generate AI reply for chat {chat_id}: {e}")
-                if is_mention:
-                    # For mentions, NEVER drop or send error to Saved Messages! Use human fallback reply
-                    logger.info(f"[MENTION FALLBACK] Using natural human fallback for mention in chat {chat_id}.")
-                    draft = self.generator.prompt_manager.get_fallback_reply(clean_text)
-                else:
-                    # Strictly send issue/error to Saved Messages only; never leak to peer chat or group
+                # AI generation failed: NEVER reply to chat with hardcoded text.
+                # Only let AI generate replies. Safely drop and notify Saved Messages if needed.
+                if not is_mention:
                     await self._notify_issue_to_saved_messages(
                         chat_id=chat_id,
                         chat_title=chat_title,
@@ -219,13 +243,21 @@ class ReplyManager:
                         error_msg=f"AI generation failed: {e}",
                         incoming_text=clean_text,
                     )
-                    return
+                return
+
+        # Check if raw generated response was pure laughter (e.g. "haha", "lol")
+        # In this case, send an emoji reaction (😂) instead of writing "haha" in a text message
+        if draft:
+            import re
+            pure_laugh = re.sub(r"[^a-zA-Z]", "", draft).lower()
+            if pure_laugh and re.match(r"^(?:[ae]*h+[ae]*|lol|lmao|rofl|xd|lmfao)+$", pure_laugh):
+                logger.info(f"[LAUGHTER REACTION] AI generated laughter '{draft}'. Reacting with emoji instead of text.")
+                await self.maybe_send_reaction(chat_id, message_id, "haha")
+                return
 
         if not draft or draft.strip().lower() in ("none", "none.", "null", "null.", "undefined", ""):
-            if is_mention:
-                logger.info(f"[MENTION FALLBACK] Empty or None AI draft, using natural human fallback for mention in chat {chat_id}.")
-                draft = self.generator.prompt_manager.get_fallback_reply(clean_text)
-            else:
+            # AI produced empty or null response: NEVER send hardcoded text to peer chats.
+            if not is_mention:
                 logger.warning(f"No valid draft generated for chat {chat_id}.")
                 await self._notify_issue_to_saved_messages(
                     chat_id=chat_id,
@@ -234,10 +266,16 @@ class ReplyManager:
                     error_msg="Empty or None response from AI engine; reply was dropped safely.",
                     incoming_text=clean_text,
                 )
-                return
+            return
 
         # Prevent repeating the same word or exact reply consecutively in this chat
         draft = self._prevent_duplicate_reply(chat_id, draft)
+
+        # Mandatory mention rule: if someone mentioned us in a group, ensure they are mentioned when replying
+        if is_mention and chat_id < 0 and sender_name and sender_name not in ("Contact", "You"):
+            tag_name = sender_name.lstrip("@").split()[0]
+            if f"@{tag_name.lower()}" not in draft.lower() and tag_name.lower() not in draft.lower():
+                draft = f"@{tag_name} {draft}"
 
         mode = self.current_mode
 
@@ -669,8 +707,37 @@ class ReplyManager:
             try:
                 cid = int(cmd_parts[1])
                 self.privacy.allow_chat(cid)
+
+                title = ""
+                username = ""
+                if self._client:
+                    try:
+                        entity = await self._client.get_entity(cid)
+                        if hasattr(entity, "title") and entity.title:
+                            title = entity.title
+                        elif hasattr(entity, "first_name") and entity.first_name:
+                            title = f"{entity.first_name} {getattr(entity, 'last_name', '') or ''}".strip()
+                        if hasattr(entity, "username") and entity.username:
+                            username = f"@{entity.username}"
+                    except Exception:
+                        pass
+
+                if not title and self.db:
+                    meta = self.db.get_chat_metadata(cid)
+                    if meta:
+                        title = meta.get("title", "")
+                        if meta.get("username"):
+                            username = f"@{meta.get('username')}"
+
                 target = "Group" if cid < 0 else "Private contact"
-                return f"✅ {target} `{cid}` has been added to the allowlist!"
+                info_parts = []
+                if title:
+                    info_parts.append(f"*{title}*")
+                if username:
+                    info_parts.append(f"({username})")
+                info_str = f" {' '.join(info_parts)}" if info_parts else ""
+
+                return f"✅ {target}{info_str} [ID: `{cid}`] has been added to the allowlist!"
             except ValueError:
                 return "Error: Chat ID must be an integer."
 
@@ -991,8 +1058,15 @@ class ReplyManager:
 
         if cmd in ("/maxtokens", "/maxoutput"):
             if len(cmd_parts) < 2:
-                curr = self.db.get_state("ai_max_tokens", "200")
-                return f"📝 *Current Max Output Tokens:* `{curr}`\nUsage: `/maxtokens <tokens>` (e.g. `/maxtokens 250`)"
+                curr = self.db.get_state("ai_max_tokens", "")
+                curr_display = curr if curr else "default (provider decided)"
+                return f"📝 *Current Max Output Tokens:* `{curr_display}`\nUsage: `/maxtokens <tokens>` or `/maxtokens default`"
+            target = cmd_parts[1].lower().strip()
+            if target in ("default", "reset", "auto", "provider", "none", "off"):
+                self.db.set_state("ai_max_tokens", "")
+                if hasattr(self.generator.provider, "max_tokens"):
+                    self.generator.provider.max_tokens = None
+                return "📝 AI max output tokens reset to *default* (let provider decide)."
             try:
                 val = max(10, int(cmd_parts[1]))
                 self.db.set_state("ai_max_tokens", str(val))
@@ -1000,7 +1074,7 @@ class ReplyManager:
                     self.generator.provider.max_tokens = val
                 return f"📝 AI max output tokens set to *{val}*."
             except ValueError:
-                return "Error: Max tokens must be a valid integer."
+                return "Error: Max tokens must be a valid integer or 'default'."
 
         if cmd in ("/aiconfig", "/aisettings"):
             prov = self.db.get_state("ai_provider", self.config.ai_provider)
@@ -1008,7 +1082,8 @@ class ReplyManager:
             url = self.db.get_state("ai_base_url", self.config.ai_base_url or "https://api.inceptionlabs.ai/v1")
             eff = self.db.get_state("ai_reasoning_effort", "default")
             temp = self.db.get_state("ai_temperature", "0.6")
-            mtok = self.db.get_state("ai_max_tokens", "200")
+            raw_mtok = self.db.get_state("ai_max_tokens", "")
+            mtok = raw_mtok if raw_mtok else "default (provider decided)"
             curr_key = self.db.get_state("ai_api_key", self.config.ai_api_key or "")
             masked_key = f"`{curr_key[:7]}...{curr_key[-4:]}`" if len(curr_key) > 11 else ("`Configured`" if curr_key else "`Missing`")
             cands = []
@@ -1078,7 +1153,7 @@ class ReplyManager:
             global_cd_range = f"{int(self.safety.min_global_cooldown)}s–{int(self.safety.max_global_cooldown)}s"
             chats_df = await self.get_allowed_chats_dataframe()
             return (
-                f"📊 *TeleAutomator v2.0.5 Status:*\n"
+                f"📊 *TeleAutomator v2.0.6 Status:*\n"
                 f"• Identity Name: `{owner}`\n"
                 f"• Automation: *{pause_str}*\n"
                 f"• Reply Mode: `{mode_display}` (change with `/mode <draft|approval|auto>`)\n"
@@ -1137,7 +1212,19 @@ class ReplyManager:
                 return "🔒 Auto-reactions *DISABLED*."
             return "Usage: `/reaction on` or `/reaction off`"
 
-        if cmd in ("/quiethours", "/quiet", "/sleep"):
+        if cmd in ("/sleep", "/goodnight"):
+            if len(cmd_parts) >= 2 and cmd_parts[1].lower() in ("off", "stop", "wake", "resume"):
+                self.safety.set_quiet_hours(False)
+                return "☀️ Quiet hours *DISABLED*. Automated replies and reactions are now active 24/7."
+            await self.maybe_send_quiet_hours_goodnight(force=True)
+            self.safety.set_quiet_hours(True)
+            s, e = self.safety.quiet_hours_window
+            return (
+                f"🌙 *Goodnight sign-off sent!* Quiet hours (sleep schedule {s}–{e}) is now *ON*.\n"
+                f"Auto-replies are paused. Send `/quiethours off` or `/resume` to wake up anytime."
+            )
+
+        if cmd in ("/quiethours", "/quiet"):
             if len(cmd_parts) < 2:
                 qh_enabled = self.safety.quiet_hours_enabled
                 qh_start, qh_end = self.safety.quiet_hours_window
@@ -1185,6 +1272,25 @@ class ReplyManager:
                 return f"🌙 Quiet hours schedule set to *{t_start}* – *{t_end}* and *ENABLED*."
 
             return "Usage: `/quiethours on [start] [end]`, `/quiethours off`, or `/quiethours <start> <end>`"
+
+        if cmd in ("/typo", "/typos", "/typosim"):
+            if len(cmd_parts) < 2:
+                typo_on = self.db.get_state("typo_correction_enabled", "1") == "1"
+                status = "ON (3-5% chance)" if typo_on else "OFF"
+                return (
+                    f"✍️ *Typo & Auto-Correction Simulation:* *{status}*\n"
+                    f"Simulates occasional realistic smartphone touchscreen typos followed 2s later by a quick correction (e.g. `suonds good` followed by `*sounds`).\n\n"
+                    f"• `/typo on` - Enable natural typo simulation\n"
+                    f"• `/typo off` - Disable typo simulation"
+                )
+            target = cmd_parts[1].lower().strip()
+            if target == "on":
+                self.db.set_state("typo_correction_enabled", "1")
+                return "✍️ Typo & auto-correction simulation *ENABLED* (~4% natural occurrence)."
+            elif target == "off":
+                self.db.set_state("typo_correction_enabled", "0")
+                return "🔒 Typo simulation *DISABLED*."
+            return "Usage: `/typo on` or `/typo off`"
 
         if cmd in ("/reactioncooldown", "/reactcd", "/reactionlimit", "/reactioninterval"):
             min_react = float(self.db.get_state(
@@ -1461,7 +1567,7 @@ class ReplyManager:
                 except ValueError:
                     return "Usage: `/chatty on`, `/chatty off`, or `/chatty <0-100>`"
 
-        if cmd in ("/pause", "/off", "/sleep"):
+        if cmd in ("/pause", "/off"):
             if len(cmd_parts) < 2:
                 return "Usage: `/pause <duration>` (e.g. `/pause 2h`, `/pause 30m`, `/pause 45m`)"
             seconds = self._parse_duration(cmd_parts[1])
@@ -1663,7 +1769,60 @@ class ReplyManager:
             if all(len(s) >= 2 for s in sentences):
                 return sentences
 
+        # Natural follow-up split thoughts with clause connectors (e.g. ", btw ", ", also ", ", and ", ", but ")
+        for conn in (", btw ", ", also ", ", and ", ", but ", ", let "):
+            if conn in text.lower():
+                idx = text.lower().find(conn)
+                part1 = text[:idx].strip()
+                part2 = text[idx + 2:].strip()
+                if len(part1.split()) >= 2 and len(part2.split()) >= 2 and len(part1) >= 5 and len(part2) >= 5:
+                    return [part1, part2]
+
         return [text]
+
+    @staticmethod
+    def maybe_inject_typo_correction(text: str, probability: float = 0.04) -> tuple[str, Optional[str]]:
+        """Occasionally simulate a realistic touchscreen fat-finger typo and its immediate *correction follow-up.
+
+        Returns:
+            (modified_text, correction_word) or (text, None)
+        """
+        import random
+        import re
+        if probability <= 0 or random.random() > probability:
+            return text, None
+
+        words = text.split()
+        if len(words) < 3:
+            return text, None
+
+        # Eligible casual words (4 to 8 letters, strictly alphabetic)
+        eligible_indices = [
+            i for i, w in enumerate(words)
+            if re.fullmatch(r"[a-zA-Z]{4,8}", w)
+            and w.lower() not in ("what", "when", "with", "from", "that", "this", "they", "http", "https")
+        ]
+        if not eligible_indices:
+            return text, None
+
+        target_idx = random.choice(eligible_indices)
+        orig_word = words[target_idx]
+        w_lower = orig_word.lower()
+
+        if len(w_lower) >= 4:
+            pos = random.randint(1, len(w_lower) - 2)
+            chars = list(w_lower)
+            chars[pos], chars[pos + 1] = chars[pos + 1], chars[pos]
+            typo_word = "".join(chars)
+            if orig_word.istitle():
+                typo_word = typo_word.capitalize()
+            elif orig_word.isupper():
+                typo_word = typo_word.upper()
+
+            words[target_idx] = typo_word
+            return " ".join(words), f"*{orig_word}"
+
+        return text, None
 
     async def maybe_send_reaction(self, chat_id: int, message_id: int, text: str) -> bool:
         """Add an emoji reaction to the message if reaction features and cooldown permit."""
@@ -1737,13 +1896,13 @@ class ReplyManager:
         has_sentiment = True
         if any(w in lower for w in ("haha", "lol", "lmao", "rofl", "xd", "funny", "lmfao", "joke", "dead", "ded")):
             chosen = random.choice(["😂", "🤣", "💀", "😁"])
-        elif any(w in lower for w in ("congrats", "congratulations", "huge w", "promoted", "won", "awesome work", "let's go", "fire", "lit", "goat")):
+        elif any(w in lower for w in ("congrats", "congratulations", "huge w", "promoted", "won", "awesome work", "let's go", "fire", "lit", "goat", "legend", "insane", "superb")):
             chosen = random.choice(["🔥", "⚡", "💯", "🏆", "🤩", "👏"])
         elif any(w in lower for w in ("thanks", "thank you", "tysm", "love you", "heart", "appreciate it", "grateful")):
             chosen = random.choice(["❤️", "❤️‍🔥", "🥰", "🙏", "🤗"])
-        elif any(w in lower for w in ("deal", "sounds good", "done deal", "agreed", "let's do it", "partner")):
-            chosen = random.choice(["👍", "🤝", "🫡"])
-        elif any(w in lower for w in ("wtf", "no way", "holy shit", "damn bro", "unreal", "omg")):
+        elif any(w in lower for w in ("deal", "sounds good", "done deal", "agreed", "let's do it", "partner", "perfect", "done", "alright")):
+            chosen = random.choice(["👍", "🤝", "🫡", "👌"])
+        elif any(w in lower for w in ("wtf", "no way", "holy shit", "damn bro", "unreal", "omg", "crazy", "wild")):
             chosen = random.choice(["🤯", "😱", "👀"])
         elif any(w in lower for w in ("rip", "sorry to hear", "unfortunate", "so sad", "pain")):
             chosen = random.choice(["😢", "😭", "💔"])
@@ -1776,8 +1935,19 @@ class ReplyManager:
             return False
 
     def _prevent_duplicate_reply(self, chat_id: int, text: str) -> str:
-        """Allow AI to handle conversation dynamically without hardcoded keyword alternatives."""
-        return text.strip()
+        """Prevent repeating the same exact reply or canned phrase in this chat."""
+        clean = text.strip()
+        if not clean:
+            return ""
+
+        recent = self._recent_replies_history.get(chat_id, [])
+        clean_lower = clean.lower()
+
+        for past in recent:
+            if clean_lower == past.lower():
+                logger.warning(f"Suppressed duplicate reply in chat {chat_id}: '{clean}' was sent recently.")
+                return ""
+        return clean
 
     def is_group_message_relevant(self, chat_id: int, text: str, chat_title: str = "") -> bool:
         """Check if an incoming group message is relevant to the group's topic, context, or active discussion."""
@@ -1833,9 +2003,9 @@ class ReplyManager:
         """Update last activity timestamp for group."""
         self._last_group_activity[chat_id] = time.time()
 
-    async def maybe_send_quiet_hours_goodnight(self) -> None:
-        """Before or upon entering quiet hours (2:00 AM IST), write bye/goodnight to active allowlisted groups."""
-        if not self._client or not self.safety.quiet_hours_enabled:
+    async def maybe_send_quiet_hours_goodnight(self, force: bool = False) -> None:
+        """Before or upon entering quiet hours (2:00 AM IST), write bye/goodnight to active allowlisted groups like a human."""
+        if not self._client or (not self.safety.quiet_hours_enabled and not force):
             return
 
         ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -1843,7 +2013,7 @@ class ReplyManager:
         today_str = now_ist.strftime("%Y-%m-%d")
 
         last_goodnight = self.db.get_state("last_quiet_goodnight_date", "")
-        if last_goodnight == today_str:
+        if last_goodnight == today_str and not force:
             return
 
         start_str, _ = self.safety.quiet_hours_window
@@ -1856,7 +2026,9 @@ class ReplyManager:
         curr_mins = now_ist.hour * 60 + now_ist.minute
         # Trigger window: 15 minutes before start up to 15 minutes after (e.g. 01:45 to 02:15 IST)
         diff = (curr_mins - target_mins) % 1440
-        if diff <= 15 or (1440 - diff) <= 15:
+        should_send = force or (diff <= 15 or (1440 - diff) <= 15)
+
+        if should_send:
             allowed_groups = list(self.privacy.allowed_groups)
             if not allowed_groups:
                 known = self.db.get_known_chats()
@@ -1900,6 +2072,10 @@ class ReplyManager:
             return False
 
         first_part = msg_parts[0]
+        typo_correction: Optional[str] = None
+        typo_enabled = self.db.get_state("typo_correction_enabled", "1") == "1"
+        if typo_enabled and len(msg_parts) == 1 and not is_mention:
+            first_part, typo_correction = self.maybe_inject_typo_correction(first_part, probability=0.04)
 
         try:
             # Calculate human-like delay adapting to group/DM environment and mentions (5-30s)
@@ -1910,10 +2086,16 @@ class ReplyManager:
 
             if total_delay > 0:
                 # Realistic human simulation: pause for reading/thinking, then show typing action
-                combo_lower = first_part.lower()
-                is_quick_banter = any(w in combo_lower for w in ("haha", "lol", "yo", "sup", "ok", "yeah", "yea", "cool", "done"))
-                base_speed = 0.035 if is_quick_banter else 0.05
-                typing_duration = min(total_delay, max(1.5, min(5.0, len(first_part) * base_speed)))
+                # Reference 2: Dynamic typing delay scaling based on reply word count
+                word_count = len(first_part.split())
+                if word_count <= 3:
+                    target_typing = random.uniform(1.5, 3.0)
+                elif word_count <= 10:
+                    target_typing = random.uniform(3.0, 6.0)
+                else:
+                    target_typing = random.uniform(6.0, 9.0)
+
+                typing_duration = min(total_delay, target_typing) if total_delay > 1.5 else total_delay
                 reading_delay = max(0.0, total_delay - typing_duration)
 
                 env_type = "Group" if chat_id < 0 else "Private DM"
@@ -1931,26 +2113,60 @@ class ReplyManager:
                     logger.warning(f"Reply to chat {chat_id} aborted: emergency stop triggered during delay.")
                     return False
 
-                # Phase 2: Active typing indicator
+                # Phase 2: Active typing indicator with realistic rhythm & pause bursts
                 try:
                     if hasattr(self._client, "action") and callable(self._client.action):
-                        act = self._client.action(chat_id, "typing")
-                        if hasattr(act, "__aenter__"):
-                            async with act:
-                                await asyncio.sleep(typing_duration)
+                        if typing_duration >= 3.5:
+                            burst1 = round(typing_duration * 0.5, 1)
+                            pause = round(random.uniform(0.6, 1.0), 1)
+                            burst2 = max(0.8, round(typing_duration - burst1, 1))
+
+                            act1 = self._client.action(chat_id, "typing")
+                            if hasattr(act1, "__aenter__"):
+                                async with act1:
+                                    await asyncio.sleep(burst1)
+                            else:
+                                if asyncio.iscoroutine(act1):
+                                    act1.close()
+                                await asyncio.sleep(burst1)
+
+                            # Brief hesitation/thinking pause where user stops typing
+                            await asyncio.sleep(pause)
+
+                            act2 = self._client.action(chat_id, "typing")
+                            if hasattr(act2, "__aenter__"):
+                                async with act2:
+                                    await asyncio.sleep(burst2)
+                            else:
+                                if asyncio.iscoroutine(act2):
+                                    act2.close()
+                                await asyncio.sleep(burst2)
                         else:
-                            if asyncio.iscoroutine(act):
-                                act.close()
-                            await asyncio.sleep(typing_duration)
+                            act = self._client.action(chat_id, "typing")
+                            if hasattr(act, "__aenter__"):
+                                async with act:
+                                    await asyncio.sleep(typing_duration)
+                            else:
+                                if asyncio.iscoroutine(act):
+                                    act.close()
+                                await asyncio.sleep(typing_duration)
                     else:
                         await asyncio.sleep(typing_duration)
                 except Exception:
                     await asyncio.sleep(typing_duration)
 
             # Send first message part
-            first_sent = await self._client.send_message(chat_id, first_part, reply_to=reply_to_msg_id)
+            # In groups, reply directly if mentioned or if text includes a mention; otherwise chime into stream
+            has_mention_in_text = bool(re.search(r"@\w+", first_part))
+            actual_reply_to = reply_to_msg_id if (chat_id > 0 or is_mention or has_mention_in_text) else None
+            first_sent = await self._client.send_message(chat_id, first_part, reply_to=actual_reply_to)
             self.safety.mark_reply_sent(chat_id)
             self._last_sent_reply_by_chat[chat_id] = first_part
+            if chat_id not in self._recent_replies_history:
+                self._recent_replies_history[chat_id] = []
+            self._recent_replies_history[chat_id].append(first_part)
+            if len(self._recent_replies_history[chat_id]) > 8:
+                self._recent_replies_history[chat_id].pop(0)
             if chat_id < 0:
                 self.mark_group_activity(chat_id)
             first_msg_id = getattr(first_sent, "id", 0)
@@ -1966,6 +2182,26 @@ class ReplyManager:
             )
             logger.info(f"Successfully sent reply part 1/{len(msg_parts)} to chat {chat_id}.")
 
+            # If typo simulation was triggered, send quick correction follow-up (e.g. *sounds)
+            if typo_correction and not self.safety.is_emergency_stopped:
+                correction_pause = random.uniform(1.8, 3.2)
+                await asyncio.sleep(correction_pause)
+                if not self.safety.is_emergency_stopped:
+                    corr_sent = await self._client.send_message(chat_id, typo_correction)
+                    self.safety.mark_reply_sent(chat_id)
+                    corr_id = getattr(corr_sent, "id", 0)
+                    if not isinstance(corr_id, int):
+                        corr_id = 0
+                    self.db.record_chat_message(
+                        chat_id=chat_id,
+                        message_id=corr_id,
+                        sender_id=None,
+                        sender_name=self.generator.prompt_manager.owner_name,
+                        text=typo_correction,
+                        is_outgoing=True,
+                    )
+                    logger.info(f"Sent natural typo correction '{typo_correction}' to chat {chat_id}.")
+
             # Send subsequent message parts (2 or 3) with short natural typing pause
             for idx, part in enumerate(msg_parts[1:], start=2):
                 if self.safety.is_emergency_stopped:
@@ -1974,20 +2210,26 @@ class ReplyManager:
 
                 # Mandatory minimum 5-second cooldown between consecutive message parts
                 followup_delay = random.uniform(5.0, 7.0)
+                followup_typing = min(followup_delay, max(1.5, min(3.5, len(part.split()) * 0.8)))
+                followup_pause = max(0.0, followup_delay - followup_typing)
+
+                if followup_pause > 0:
+                    await asyncio.sleep(followup_pause)
+
                 try:
                     if hasattr(self._client, "action") and callable(self._client.action):
                         act = self._client.action(chat_id, "typing")
                         if hasattr(act, "__aenter__"):
                             async with act:
-                                await asyncio.sleep(followup_delay)
+                                await asyncio.sleep(followup_typing)
                         else:
                             if asyncio.iscoroutine(act):
                                 act.close()
-                            await asyncio.sleep(followup_delay)
+                            await asyncio.sleep(followup_typing)
                     else:
-                        await asyncio.sleep(followup_delay)
+                        await asyncio.sleep(followup_typing)
                 except Exception:
-                    await asyncio.sleep(followup_delay)
+                    await asyncio.sleep(followup_typing)
 
                 sub_sent = await self._client.send_message(chat_id, part)
                 self.safety.mark_reply_sent(chat_id)

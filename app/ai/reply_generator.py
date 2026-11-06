@@ -47,17 +47,16 @@ def create_ai_provider(config: AppConfig, database: Optional[Any] = None) -> AIP
 
         reasoning_effort = "default"
         temperature = 0.6
-        max_tokens = 200
+        max_tokens = None
         if database:
             reasoning_effort = database.get_state("ai_reasoning_effort", "default")
             try:
                 temperature = float(database.get_state("ai_temperature", "0.6"))
             except ValueError:
                 pass
-            try:
-                max_tokens = int(database.get_state("ai_max_tokens", "200"))
-            except ValueError:
-                pass
+            raw_mtok = database.get_state("ai_max_tokens", "")
+            if raw_mtok and raw_mtok.strip().isdigit() and int(raw_mtok.strip()) > 0:
+                max_tokens = int(raw_mtok.strip())
 
         logger.info(f"Initializing {target_name} OpenAI-compatible AI provider (base_url: {default_base_url or 'default'}).")
         return OpenAIProvider(
@@ -88,7 +87,8 @@ class ReplyGenerator:
         self.db = database
         self.provider = provider or create_ai_provider(config, database=database)
         custom_p = database.get_state("custom_system_prompt", "") if database else ""
-        self.prompt_manager = PromptManager(style=style, custom_prompt=custom_p)
+        saved_lang = database.get_state("chat_language", "english") if database else "english"
+        self.prompt_manager = PromptManager(style=style, custom_prompt=custom_p, language=saved_lang)
 
     def set_owner_name(self, name: str) -> None:
         """Propagate owner name to prompt manager."""
@@ -124,6 +124,7 @@ class ReplyGenerator:
         style_override: Optional[str] = None,
         permanent_context: Optional[str] = None,
         is_group: bool = False,
+        is_mention: bool = False,
     ) -> str:
         """Generate a draft reply text considering conversation context when provided."""
         prompt = self.prompt_manager.build_user_prompt(
@@ -132,6 +133,7 @@ class ReplyGenerator:
             conversation_history=conversation_history,
             permanent_context=permanent_context,
             is_group=is_group,
+            is_mention=is_mention,
         )
         instructions = self.prompt_manager.get_system_instructions(style_override=style_override)
         try:

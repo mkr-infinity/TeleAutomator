@@ -143,7 +143,7 @@ class TelegramService:
                 mod = self.db.get_state("ai_model", self.config.ai_model or "default")
 
                 welcome_msg = (
-                    f"👋 *Welcome to TeleAutomator v2.0.5*\n"
+                    f"👋 *Welcome to TeleAutomator v2.0.6*\n"
                     f"_Personal AI Assistant for {owner_name}_\n\n"
                     f"━━━━━━━━━━━━━━━━━━━━━\n"
                     f"📱 *Account Connection*\n"

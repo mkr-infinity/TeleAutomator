@@ -326,6 +326,13 @@ def test_message_splitting_meaning_and_bounds():
     four_parts = ReplyManager.split_reply_messages("part one\npart two\npart three\npart four")
     assert len(four_parts) == 3
 
+    # 6. Natural follow-up split thoughts on conversational connectors
+    split_btw = ReplyManager.split_reply_messages("sounds good bro, btw check your dm")
+    assert split_btw == ["sounds good bro", "btw check your dm"]
+
+    split_also = ReplyManager.split_reply_messages("all ok bro, also let me know once done")
+    assert split_also == ["all ok bro", "also let me know once done"]
+
 
 def test_reaction_and_cooldown_controls(tmp_path: Path):
     """Verify runtime customization of reactions, reaction cooldowns, and chat cooldowns."""
@@ -751,6 +758,9 @@ def test_token_usage_tracker_and_ai_parameters(tmp_path: Path):
         tokens_res = await mgr.handle_control_command("/maxtokens 180")
         assert "180" in tokens_res
         assert db.get_state("ai_max_tokens") == "180"
+        reset_tokens = await mgr.handle_control_command("/maxtokens default")
+        assert "reset to *default*" in reset_tokens
+        assert db.get_state("ai_max_tokens") == ""
 
         # 6. /aiconfig command
         config_res = await mgr.handle_control_command("/aiconfig")
@@ -800,7 +810,7 @@ def test_telegram_setprompt_and_prompt_commands(tmp_path: Path):
 
 
 def test_mention_fallback_on_ai_failure(tmp_path: Path):
-    """Verify mentions never leak error notifications to Saved Messages on AI failure and receive human fallbacks."""
+    """Verify mentions never leak error notifications to Saved Messages on AI failure and NEVER send hardcoded text replies to chat."""
     async def _run():
         cfg = AppConfig(
             api_id=123,
@@ -845,11 +855,194 @@ def test_mention_fallback_on_ai_failure(tmp_path: Path):
         saved_msg_errors = [m for m in sent_messages if m[0] == "me"]
         assert len(saved_msg_errors) == 0
 
-        # Verify: Sent a natural human fallback reply to the group
+        # Verify: Never send hardcoded fallback reply to peer chat when AI fails
         group_replies = [m for m in sent_messages if m[0] == -100999]
-        assert len(group_replies) >= 1
-        reply_text = group_replies[0][1]
-        assert any(phrase in reply_text for phrase in ("kya chal raha", "batao", "update", "what's up", "caught up", "yo", "hii", "hey", "sup", "haan bolo"))
+        assert len(group_replies) == 0
+
+    asyncio.run(_run())
+
+
+def test_pure_laughter_reaction_instead_of_text_message(tmp_path: Path):
+    """Verify that when AI generates pure laughter (e.g. 'haha'), reaction is sent instead of writing 'haha' in message."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", reply_mode="restricted_auto", auto_authorize=True, data_dir=tmp_path)
+        db = Database(tmp_path / "test_laugh.db")
+        safety = SafetyManager(cfg, db)
+        safety.set_auto_authorization(True)
+        privacy = PrivacyManager(cfg, database=db)
+        privacy.allow_chat(12345)
+        generator = ReplyGenerator(cfg, database=db)
+        # Simulate AI generating "haha"
+        generator.generate = MagicMock(return_value="haha")
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        sent_reactions = []
+        async def mock_reaction(chat_id, msg_id, text):
+            sent_reactions.append((chat_id, msg_id, text))
+            return True
+
+        mgr.maybe_send_reaction = mock_reaction
+
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock()
+        mgr.set_telegram_client(mock_client)
+
+        await mgr.handle_incoming_eligible_message(
+            chat_id=12345,
+            chat_title="Friend Chat",
+            message_id=99,
+            sender_id=12345,
+            sender_name="Bob",
+            text="look at that meme",
+        )
+
+        # Reaction was triggered with "haha"
+        assert len(sent_reactions) == 1
+        assert sent_reactions[0] == (12345, 99, "haha")
+        # Text message saying "haha" was NOT sent!
+        mock_client.send_message.assert_not_called()
+
+    asyncio.run(_run())
+
+
+def test_group_unthreaded_reply_without_mention(tmp_path: Path):
+    """Verify in groups when not mentioned, message is sent without quoting/reply_to."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "test_unthreaded.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        sent_calls = []
+        async def mock_send(chat_id, text, **kwargs):
+            sent_calls.append((chat_id, text, kwargs.get("reply_to")))
+            m = MagicMock()
+            m.id = 888
+            return m
+
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(side_effect=mock_send)
+        mgr.set_telegram_client(mock_client)
+
+        # 1. Group reply without mention: reply_to is None
+        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah true that", adaptive_delay=False, is_mention=False)
+        assert len(sent_calls) == 1
+        assert sent_calls[0][0] == -100222
+        assert sent_calls[0][2] is None
+
+        # 2. Group reply where AI specifically mentioned someone: reply_to is preserved
+        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="@bob yeah true that", adaptive_delay=False, is_mention=False)
+        assert len(sent_calls) == 2
+        assert sent_calls[1][2] == 77
+
+        # 3. Group reply with mention: reply_to is preserved
+        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah true that", adaptive_delay=False, is_mention=True)
+        assert len(sent_calls) == 3
+        assert sent_calls[2][2] == 77
+
+        # 4. Private DM: reply_to is preserved
+        await mgr._send_reply(chat_id=12345, reply_to_msg_id=55, text="sounds good", adaptive_delay=False, is_mention=False)
+        assert len(sent_calls) == 4
+        assert sent_calls[3][2] == 55
+
+    asyncio.run(_run())
+
+
+def test_mandatory_mention_when_mentioned_by_peer(tmp_path: Path):
+    """Verify that when someone mentions us in a group, our reply always mentions them."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", reply_mode="restricted_auto", auto_authorize=True, data_dir=tmp_path)
+        db = Database(tmp_path / "test_peer_mention.db")
+        safety = SafetyManager(cfg, db)
+        safety.set_auto_authorization(True)
+        privacy = PrivacyManager(cfg, database=db)
+        privacy.allow_chat(-100888)
+        generator = ReplyGenerator(cfg, database=db)
+        # AI generated a response without a mention tag
+        generator.generate = MagicMock(return_value="sounds good to me 👍")
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        sent_messages = []
+        async def mock_send(chat_id, text, **kwargs):
+            sent_messages.append((chat_id, text, kwargs.get("reply_to")))
+            m = MagicMock()
+            m.id = 111
+            return m
+
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(side_effect=mock_send)
+        mgr.set_telegram_client(mock_client)
+
+        await mgr.handle_incoming_eligible_message(
+            chat_id=-100888,
+            chat_title="Dev Hub",
+            message_id=404,
+            sender_id=777,
+            sender_name="Alice",
+            text="@Kaif can you check this?",
+            is_mention=True,
+        )
+
+        assert len(sent_messages) == 1
+        chat_id, text, reply_to = sent_messages[0]
+        # Text must mention Alice
+        assert "@Alice" in text or "Alice" in text
+        # Must reply to message ID 404
+        assert reply_to == 404
+
+    asyncio.run(_run())
+
+
+def test_multi_sentiment_reactions(tmp_path: Path):
+    """Verify dynamic reactions work across excitement, agreement, surprise, and gratitude."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "test_sentiments.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        mock_client = AsyncMock()
+        mock_client.get_input_entity = AsyncMock(return_value="peer_entity")
+        reactions_sent = []
+        async def mock_call(req):
+            reactions_sent.append(req.reaction[0].emoticon)
+        mock_client.side_effect = mock_call
+        mgr.set_telegram_client(mock_client)
+
+        # 1. Excitement / congrats
+        mgr._next_reaction_cooldown = 0.0
+        mgr._last_reaction_time = 0.0
+        mgr._last_reaction_time_by_chat.clear()
+        res1 = await mgr.maybe_send_reaction(1001, 1, "huge w bro congrats!")
+        assert res1 is True
+        assert reactions_sent[-1] in ("🔥", "⚡", "💯", "🏆", "🤩", "👏")
+
+        # 2. Agreement / deal
+        mgr._next_reaction_cooldown = 0.0
+        mgr._last_reaction_time = 0.0
+        mgr._last_reaction_time_by_chat.clear()
+        res2 = await mgr.maybe_send_reaction(1002, 2, "done deal partner")
+        assert res2 is True
+        assert reactions_sent[-1] in ("👍", "🤝", "🫡", "👌")
+
+        # 3. Surprise / shock
+        mgr._next_reaction_cooldown = 0.0
+        mgr._last_reaction_time = 0.0
+        mgr._last_reaction_time_by_chat.clear()
+        res3 = await mgr.maybe_send_reaction(1003, 3, "wtf no way unreal")
+        assert res3 is True
+        assert reactions_sent[-1] in ("🤯", "😱", "👀")
+
+        # 4. Neutral text: returns False
+        mgr._next_reaction_cooldown = 0.0
+        mgr._last_reaction_time = 0.0
+        mgr._last_reaction_time_by_chat.clear()
+        res4 = await mgr.maybe_send_reaction(1004, 4, "the sky is blue today")
+        assert res4 is False
 
     asyncio.run(_run())
 
@@ -893,7 +1086,7 @@ def test_context_aging_and_clearcontext_safety(tmp_path: Path):
 
 
 def test_version_and_typing_speed_modulation(tmp_path: Path):
-    """Verify v2.0.5 branding in status and smart typing speed modulation."""
+    """Verify v2.0.6 branding in status and smart typing speed modulation."""
     async def _run():
         cfg = AppConfig(
             api_id=123,
@@ -908,9 +1101,9 @@ def test_version_and_typing_speed_modulation(tmp_path: Path):
         generator = ReplyGenerator(cfg, database=db)
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
-        # 1. Version v2.0.5 in /status
+        # 1. Version v2.0.6 in /status
         st = await mgr.handle_control_command("/status")
-        assert "TeleAutomator v2.0.5 Status:" in st
+        assert "TeleAutomator v2.0.6 Status:" in st
 
         # 2. Smart typing delay modulation
         # Banter reply ("haha lol cool") vs thoughtful question ("why do you think this happens?")
@@ -1369,5 +1562,200 @@ def test_hard_five_second_minimum_cooldown(tmp_path: Path):
     can_reply2, reason = safety.can_reply(200, "hello again")
     assert can_reply2 is False
     assert "cooldown active" in reason
+
+
+def test_allowchat_details_with_name_and_username(tmp_path: Path):
+    """Verify /allowchat displays name and username of the added chat."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "allow_details.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # 1. Using stored DB metadata
+        db.record_chat_metadata(-100123456, title="Crypto Alpha", username="cryptoalpha", chat_type="group")
+        res1 = await mgr.handle_control_command("/allowchat -100123456")
+        assert "Group" in res1
+        assert "*Crypto Alpha*" in res1
+        assert "(@cryptoalpha)" in res1
+        assert "-100123456" in res1
+
+        # 2. Resolving via client entity mock
+        class MockEntity:
+            title = "Design Guild"
+            username = "designguild"
+        mock_client = AsyncMock()
+        mock_client.get_entity = AsyncMock(return_value=MockEntity())
+        mgr.set_telegram_client(mock_client)
+
+        res2 = await mgr.handle_control_command("/allowchat -100987654")
+        assert "Group" in res2
+        assert "*Design Guild*" in res2
+        assert "(@designguild)" in res2
+        assert "-100987654" in res2
+
+    asyncio.run(_run())
+
+
+def test_typing_indicator_while_ai_generates(tmp_path: Path):
+    """Verify typing indicator action is triggered while AI generates response in restricted_auto mode."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "typing_ind.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+        mgr.set_mode("restricted_auto")
+
+        action_calls = []
+        class MockActionContext:
+            async def __aenter__(self):
+                action_calls.append("typing_start")
+                return self
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                action_calls.append("typing_end")
+
+        mock_client = AsyncMock()
+        mock_client.action = MagicMock(return_value=MockActionContext())
+        mock_client.send_message = AsyncMock(return_value=MagicMock(id=999))
+        mgr.set_telegram_client(mock_client)
+
+        privacy.allow_chat(12345)
+        # Handle message in restricted_auto mode
+        await mgr.handle_incoming_eligible_message(
+            chat_id=12345,
+            chat_title="Alex Chat",
+            message_id=101,
+            sender_name="Alex",
+            sender_id=54321,
+            text="hello there",
+        )
+        assert mock_client.action.called
+        assert mock_client.action.call_args[0] == (12345, "typing")
+        assert "typing_start" in action_calls
+        assert "typing_end" in action_calls
+
+    asyncio.run(_run())
+
+
+def test_typing_rhythm_and_pause_bursts(tmp_path: Path):
+    """Verify typing duration >= 3.5s produces realistic pause bursts."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "burst.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+        mgr.typing_delay = 5.0
+
+        actions = []
+        class MockActionContext:
+            async def __aenter__(self):
+                actions.append("burst_enter")
+                return self
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                actions.append("burst_exit")
+
+        mock_client = AsyncMock()
+        mock_client.action = MagicMock(return_value=MockActionContext())
+        mock_client.send_message = AsyncMock(return_value=MagicMock(id=500))
+        mgr.set_telegram_client(mock_client)
+
+        await mgr._send_reply(chat_id=123, reply_to_msg_id=0, text="one two three four five six seven eight nine ten", adaptive_delay=False)
+        assert actions.count("burst_enter") >= 2
+        assert actions.count("burst_exit") >= 2
+
+    asyncio.run(_run())
+
+
+def test_typo_injection_and_auto_correction(tmp_path: Path):
+    """Verify typo injection and *correction follow-up message simulation."""
+    # 1. Verification of typo logic
+    orig = "sounds good bro"
+    typo_text, correction = ReplyManager.maybe_inject_typo_correction(orig, probability=1.0)
+    assert typo_text != orig
+    assert correction in ("*sounds", "*good")
+
+    # 0% probability never modifies
+    clean_text, no_corr = ReplyManager.maybe_inject_typo_correction(orig, probability=0.0)
+    assert clean_text == orig
+    assert no_corr is None
+
+    # 2. Control commands /typo
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "typo.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        status_msg = await mgr.handle_control_command("/typo")
+        assert "Typo & Auto-Correction Simulation" in status_msg
+
+        off_msg = await mgr.handle_control_command("/typo off")
+        assert "DISABLED" in off_msg
+        assert db.get_state("typo_correction_enabled") == "0"
+
+        on_msg = await mgr.handle_control_command("/typo on")
+        assert "ENABLED" in on_msg
+        assert db.get_state("typo_correction_enabled") == "1"
+
+        # 3. Sending reply with typo sends correction follow-up
+        sent_messages = []
+        async def mock_send(chat_id, text, **kwargs):
+            sent_messages.append(text)
+            return MagicMock(id=len(sent_messages))
+
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(side_effect=mock_send)
+        mgr.set_telegram_client(mock_client)
+
+        # Force typo injection in _send_reply by temporarily patching probability to 1.0
+        orig_maybe = mgr.maybe_inject_typo_correction
+        mgr.maybe_inject_typo_correction = lambda t, **kw: orig_maybe(t, probability=1.0)
+
+        await mgr._send_reply(chat_id=555, reply_to_msg_id=0, text="sounds good bro", adaptive_delay=False)
+        assert len(sent_messages) == 2
+        # First message had the typo
+        assert sent_messages[0] != "sounds good bro"
+        # Second message was the correction
+        assert sent_messages[1].startswith("*")
+
+    asyncio.run(_run())
+
+
+def test_anti_repetition_suppression_of_duplicate_replies(tmp_path: Path):
+    """Verify identical or repeated replies are suppressed and not repeated consecutively."""
+    cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+    db = Database(tmp_path / "dup.db")
+    safety = SafetyManager(cfg, db)
+    privacy = PrivacyManager(cfg, database=db)
+    generator = ReplyGenerator(cfg, database=db)
+    mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+    chat_id = 999
+    # First time: allowed
+    res1 = mgr._prevent_duplicate_reply(chat_id, "sounds good bro 👍")
+    assert res1 == "sounds good bro 👍"
+
+    # Simulate sending it
+    mgr._recent_replies_history[chat_id] = ["sounds good bro 👍"]
+
+    # Second time with same text: suppressed
+    res2 = mgr._prevent_duplicate_reply(chat_id, "sounds good bro 👍")
+    assert res2 == ""
+
+    # Different text: allowed
+    res3 = mgr._prevent_duplicate_reply(chat_id, "will check and ping you")
+    assert res3 == "will check and ping you"
+
+
+
+
 
 

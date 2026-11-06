@@ -176,6 +176,36 @@ def test_openai_provider_candidate_models_and_fallback():
         assert call_count == 2
 
 
+def test_max_tokens_defaults_to_provider_native():
+    """Verify max_tokens defaults to None (let provider decide) and is omitted from payload to prevent token starvation."""
+    import json
+    from unittest.mock import MagicMock, patch
+    from app.ai.provider import OpenAIProvider
+
+    provider = OpenAIProvider(api_key="test_key", model="mercury-3")
+    assert provider.max_tokens is None
+
+    sent_payload = None
+    def mock_urlopen(req, timeout=15):
+        nonlocal sent_payload
+        sent_payload = json.loads(req.data.decode("utf-8"))
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+        return mock_resp
+
+    with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        provider.generate_reply("Hi", "Be brief")
+        assert "max_tokens" not in sent_payload
+
+    # When user explicitly sets max_tokens
+    provider.max_tokens = 500
+    with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        provider.generate_reply("Hi", "Be brief")
+        assert sent_payload.get("max_tokens") == 500
+
+
+
 def test_custom_prompt_wrapping_and_anti_ai_guardrails():
     """Verify custom persona from Telegram wraps inside unbreakable anti-AI guardrails."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
@@ -223,13 +253,30 @@ def test_conversational_engagement_instruction_in_prompt():
 
 
 def test_fallback_reply_mechanism():
-    """Verify get_fallback_reply produces engaging human responses without blunt word-shortcut dictionaries."""
+    """Verify hardcoded fallback replies are strictly eliminated per user instruction to never send hardcoded messages."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
-    greeting_fb = pm.get_fallback_reply("hi")
-    assert any(h in greeting_fb for h in ("kya chal raha", "caught up", "batao aur", "tell me"))
+    assert pm.get_fallback_reply("hi") == ""
+    assert pm.get_fallback_reply("are you a bot?") == ""
 
-    alibi_fb = pm.get_fallback_reply("are you a bot?")
-    assert "lol" in alibi_fb or "real" in alibi_fb
+
+def test_clean_reply_suppresses_standalone_laughter_and_leading_mentions():
+    """Verify clean_reply suppresses standalone laughter particles and strips leading @mentions."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+    # Standalone laughter returns empty string so reaction or silence occurs instead
+    assert pm.clean_reply("haha") == ""
+    assert pm.clean_reply("hahaha 😂") == ""
+    assert pm.clean_reply("lol") == ""
+    assert pm.clean_reply("lmao 💀") == ""
+    assert pm.clean_reply("rofl") == ""
+    assert pm.clean_reply("xd") == ""
+
+    # Substantive responses with laughter emojis are preserved
+    assert pm.clean_reply("true that 😂") == "true that 😂"
+    assert pm.clean_reply("sounds good bro 👍") == "sounds good bro 👍"
+
+    # Mentions are preserved when AI decides to address someone directly
+    assert pm.clean_reply("@alice sounds good 👍") == "@alice sounds good 👍"
+    assert pm.clean_reply("@bob on my way") == "@bob on my way"
 
 
 def test_never_use_question_marks():
@@ -244,17 +291,18 @@ def test_never_use_question_marks():
     assert "NEVER use question marks" in prompt
 
 
-def test_relocate_trailing_emojis_to_middle():
-    """Verify trailing emojis at the end of messages are relocated between words inside the message."""
+def test_emojis_preserved_naturally_middle_or_end():
+    """Verify emojis are preserved naturally whether in the middle or at the end of messages."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
-    # Trailing emoji moved inside words
+    # Natural emoji at the end
     cleaned1 = pm.clean_reply("all good bro 😂")
-    assert not cleaned1.endswith("😂")
     assert "😂" in cleaned1
+    assert "all good bro" in cleaned1
 
-    cleaned2 = pm.clean_reply("haan bhai 🔥")
-    assert not cleaned2.endswith("🔥")
-    assert "🔥" in cleaned2
+    # Natural emoji in the middle
+    cleaned2 = pm.clean_reply("haan 😂 bro was thinking the same")
+    assert "😂" in cleaned2
+    assert "haan" in cleaned2
 
 
 def test_permanent_context_in_prompt():
@@ -271,9 +319,10 @@ def test_permanent_context_in_prompt():
     assert "AI development" in prompt
 
 
-def test_group_language_rules():
-    """Verify group chats enforce English primarily unless Hindi/Hinglish context is detected."""
+def test_strict_default_english_language_everywhere():
+    """Verify English is strictly enforced everywhere (DMs and groups) unless user explicitly configures another language."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
+    assert pm.language == "english"
 
     # 1. English group context
     prompt_en_group = pm.build_user_prompt(
@@ -281,17 +330,35 @@ def test_group_language_rules():
         incoming_text="what is the release timeline for the project",
         is_group=True,
     )
-    assert "CRITICAL GROUP LANGUAGE RULE (English Only)" in prompt_en_group
+    assert "CRITICAL LANGUAGE RULE (English Only)" in prompt_en_group
     assert "NEVER use Hindi" in prompt_en_group
 
-    # 2. Hindi / Hinglish group context
-    prompt_hi_group = pm.build_user_prompt(
+    # 2. Hindi text in group STILL enforces English by default
+    prompt_hi_input = pm.build_user_prompt(
         sender_name="Rahul",
         incoming_text="kya haal hai bhai sab theek",
         is_group=True,
     )
-    assert "GROUP LANGUAGE (Hindi/Hinglish)" in prompt_hi_group
-    assert "Hindi or Hinglish" in prompt_hi_group
+    assert "CRITICAL LANGUAGE RULE (English Only)" in prompt_hi_input
+    assert "NEVER use Hindi" in prompt_hi_input
+
+    # 3. Only when user explicitly changes language from Telegram (e.g. /lang hindi or /lang dynamic)
+    pm.set_language("hindi")
+    prompt_custom_hi = pm.build_user_prompt(
+        sender_name="Rahul",
+        incoming_text="kya haal hai bhai sab theek",
+        is_group=True,
+    )
+    assert "User configured language is Hindi" in prompt_custom_hi
+    assert "You MUST reply ONLY in Hindi" in prompt_custom_hi
+
+    pm.set_language("dynamic")
+    prompt_dyn = pm.build_user_prompt(
+        sender_name="Rahul",
+        incoming_text="kya haal hai bhai sab theek",
+        is_group=True,
+    )
+    assert "Match the exact language and writing style of the sender" in prompt_dyn
 
 
 def test_clean_reply_suppresses_none_and_word_repetition():
@@ -323,4 +390,44 @@ def test_top_common_emojis_and_active_group_engagement():
     # Active group engagement instruction present
     assert "active Telegram user" in prompt
     assert "understand discussions" in prompt or "chime in naturally" in prompt
+
+
+def test_strict_word_limits_and_hard_cap():
+    """Verify clean_reply enforces strict 15-word ceiling."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+
+    # Short message stays intact
+    short_msg = "lol true 😂"
+    assert pm.clean_reply(short_msg) == short_msg
+
+    # 10-word message stays intact
+    ten_words = "one two three four five six seven eight nine ten"
+    assert pm.clean_reply(ten_words) == ten_words
+
+    # 15-word message stays intact
+    fifteen_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen"
+    assert pm.clean_reply(fifteen_words) == fifteen_words
+
+    # >15-word message is cleanly capped to 15 words
+    twenty_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty"
+    cleaned = pm.clean_reply(twenty_words)
+    words = cleaned.split()
+    assert len(words) == 15
+    assert words[-1] == "fifteen"
+
+
+def test_ist_time_awareness_and_brevity_instructions_in_prompt():
+    """Verify prompt includes IST time-of-day awareness and strict brevity rule."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+    prompt = pm.build_user_prompt(sender_name="Alex", incoming_text="good morning")
+
+    assert "Time Context:" in prompt
+    assert "IST (" in prompt
+    assert any(period in prompt for period in ("morning", "afternoon", "evening", "night"))
+
+    assert "Brevity Rule:" in prompt
+    assert "Cap replies strictly to max 10 words" in prompt
+    assert "10 to 15 words" in prompt
+    assert "NEVER exceed 15 words" in prompt
+
 
