@@ -232,11 +232,9 @@ class ReplyManager:
                     draft = await _do_generate()
             except Exception as e:
                 logger.error(f"Failed to generate AI reply for chat {chat_id}: {e}")
-                if is_mention:
-                    # For mentions, avoid leaking error to Saved Messages; use contextual dynamic fallback
-                    logger.info(f"[MENTION FALLBACK] Using natural dynamic fallback for mention in chat {chat_id}.")
-                    draft = self.generator.prompt_manager.get_fallback_reply(clean_text)
-                else:
+                # AI generation failed: NEVER reply to chat with hardcoded text.
+                # Only let AI generate replies. Safely drop and notify Saved Messages if needed.
+                if not is_mention:
                     await self._notify_issue_to_saved_messages(
                         chat_id=chat_id,
                         chat_title=chat_title,
@@ -244,13 +242,21 @@ class ReplyManager:
                         error_msg=f"AI generation failed: {e}",
                         incoming_text=clean_text,
                     )
-                    return
+                return
+
+        # Check if raw generated response was pure laughter (e.g. "haha", "lol")
+        # In this case, send an emoji reaction (😂) instead of writing "haha" in a text message
+        if draft:
+            import re
+            pure_laugh = re.sub(r"[^a-zA-Z]", "", draft).lower()
+            if pure_laugh and re.match(r"^(?:[ae]*h+[ae]*|lol|lmao|rofl|xd|lmfao)+$", pure_laugh):
+                logger.info(f"[LAUGHTER REACTION] AI generated laughter '{draft}'. Reacting with emoji instead of text.")
+                await self.maybe_send_reaction(chat_id, message_id, "haha")
+                return
 
         if not draft or draft.strip().lower() in ("none", "none.", "null", "null.", "undefined", ""):
-            if is_mention:
-                logger.info(f"[MENTION FALLBACK] Empty AI draft, using dynamic fallback for mention in chat {chat_id}.")
-                draft = self.generator.prompt_manager.get_fallback_reply(clean_text)
-            else:
+            # AI produced empty or null response: NEVER send hardcoded text to peer chats.
+            if not is_mention:
                 logger.warning(f"No valid draft generated for chat {chat_id}.")
                 await self._notify_issue_to_saved_messages(
                     chat_id=chat_id,
@@ -259,7 +265,7 @@ class ReplyManager:
                     error_msg="Empty or None response from AI engine; reply was dropped safely.",
                     incoming_text=clean_text,
                 )
-                return
+            return
 
         # Prevent repeating the same word or exact reply consecutively in this chat
         draft = self._prevent_duplicate_reply(chat_id, draft)
@@ -2143,7 +2149,9 @@ class ReplyManager:
                     await asyncio.sleep(typing_duration)
 
             # Send first message part
-            first_sent = await self._client.send_message(chat_id, first_part, reply_to=reply_to_msg_id)
+            # In groups, chime in naturally without quoting/mentioning unless explicitly mentioned or replying to us
+            actual_reply_to = reply_to_msg_id if (chat_id > 0 or is_mention) else None
+            first_sent = await self._client.send_message(chat_id, first_part, reply_to=actual_reply_to)
             self.safety.mark_reply_sent(chat_id)
             self._last_sent_reply_by_chat[chat_id] = first_part
             if chat_id not in self._recent_replies_history:

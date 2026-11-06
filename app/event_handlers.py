@@ -200,6 +200,19 @@ def register_handlers(
                         logger.debug(f"Group message in {chat_id} ignored: not mentioned and not relevant to group topic.")
                         return
 
+        # Natural emoji reaction for humor and laughter (instead of writing "haha" in text messages)
+        import re
+        lower_text = text.lower()
+        is_humor = any(w in lower_text for w in ("haha", "lol", "lmao", "rofl", "xd", "funny", "joke", "dead", "ded"))
+        pure_laugh_text = re.sub(r"[^a-zA-Z]", "", text).lower()
+        is_pure_laughter = bool(pure_laugh_text and re.match(r"^(?:[ae]*h+[ae]*|lol|lmao|rofl|xd|lmfao)+$", pure_laugh_text))
+
+        if is_humor and (not is_group or not is_reply_to_other):
+            reacted = await reply_manager.maybe_send_reaction(chat_id, message_id, text)
+            if is_pure_laughter and reacted and not is_mention:
+                logger.info(f"[LAUGHTER REACTION ONLY] Reacted with emoji to pure laughter in chat {chat_id}.")
+                return
+
         # Retrieve recent conversation context with aging window (default: 2 hours TTL)
         ttl_hours = float(reply_manager.db.get_state("context_ttl_hours", "2.0"))
         max_age_secs = int(ttl_hours * 3600) if ttl_hours > 0 else None

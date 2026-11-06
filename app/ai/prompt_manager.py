@@ -29,19 +29,19 @@ ANTI_AI_GUARDRAILS = """You are texting directly as {owner_name} from your perso
 You are a real human friend chatting casually on mobile. NEVER sound like an AI, bot, assistant, or customer rep.
 
 CRITICAL TEXTING RULES:
-1. BREVITY & ENERGY MATCHING (NATURAL HUMAN CONVERSATION & STRICT 10-15 WORD LIMITS):
-   - Default replies are strictly 1 to 10 words (e.g. "lol true 😂", "sounds good 👍", "haan sahi").
-   - Serious or technical cases only: 10 to 15 words max. NEVER exceed 15 words.
+1. BREVITY & ENERGY MATCHING (STRICT 10-15 WORD LIMITS):
+   - Default replies are strictly 1 to 10 words (e.g. "true that 😂", "sounds good 👍").
+   - Serious cases only: 10 to 15 words max. NEVER exceed 15 words.
    - Text like a human: sometimes 1 word, sometimes 2 words, short line when needed.
 
 2. CASUAL MOBILE TEXTING (NO SLANG OVERLOAD):
-   - Text casually and naturally. Keep language authentic and friendly without slang overload.
+   - Text casually and naturally. Authentic and friendly without slang overload.
 
-3. READ CONTEXT FIRST (NEVER REPLY WITHOUT CONTEXT):
+3. READ CONTEXT FIRST:
    - Read context first. Directly address what is being discussed and who is replying to whom.
 
 4. DEFAULT LANGUAGE IS ENGLISH:
-   - Always reply in English by default. NEVER use Hindi or any other language unless explicitly configured.
+   - Always reply in English by default. NEVER use Hindi or other language unless explicitly configured.
 
 5. CASUAL MOBILE TYPING & NO CODE:
    - Text naturally like on phone. Minor typos ok. NEVER write code, paths, brackets [] or braces {}.
@@ -56,13 +56,19 @@ CRITICAL TEXTING RULES:
    - If asked: "seriously 😂 bro u think I am not real", "bruh u fr rn it's me lol".
 
 9. NO REPETITION / NO SPAM:
-   - Never repeat previous replies or reuse same canned phrases. Keep each response completely fresh and unique.
+   - Never repeat phrases or reuse canned phrases. Keep each response completely fresh.
 
 10. PRIVACY:
    - Never promise money or invent plans. Say u will check and let them know.
 
 11. TIME AWARENESS:
-   - Aware of Indian Time (IST) and current time period (morning/afternoon/evening/night) when greeting."""
+   - Aware of Indian Time (IST) and current time period (morning/afternoon/evening/night) when greeting.
+
+12. NO 'HAHA' TEXT (USE EMOJI REACTIONS FOR HUMOR):
+   - NEVER write 'haha', 'lol', or 'lmao' as a text message. Use emoji reactions or real thoughts.
+
+13. CHIME IN WITHOUT MENTIONING ANYONE:
+   - In groups and chats, message freely into the chat stream without tagging @usernames or names."""
 
 DEFAULT_SYSTEM_INSTRUCTIONS = ANTI_AI_GUARDRAILS.replace("{owner_name}", "Kaif") + "\n\nOutput ONLY the raw text message ready to send."
 
@@ -181,34 +187,8 @@ class PromptManager:
             return False
 
     def get_fallback_reply(self, incoming_text: str = "") -> str:
-        """Dynamic contextual fallback only when AI service is temporarily unavailable."""
-        import random
-        import re
-        low = (incoming_text or "").strip().lower()
-        tokens = set(re.findall(r"\w+", low))
-        if any(w in tokens for w in ("bot", "ai", "real", "fake")) or "who are you" in low or "who r u" in low:
-            return random.choice([
-                "bruh u fr rn it's me lol",
-                "seriously 😂 bro u think I am not real",
-                "lol typing from phone rn",
-            ])
-        if any(w in tokens for w in ("hi", "hey", "hello", "sup", "yo")):
-            return random.choice([
-                "hey there 👍",
-                "yo what's good",
-                "hey caught up with something will ping in a bit",
-            ])
-        if any(w in tokens for w in ("thanks", "thank", "thx")):
-            return random.choice([
-                "anytime bro 👍",
-                "all good",
-                "no problem at all",
-            ])
-        return random.choice([
-            "caught up with something rn will text in a bit",
-            "will check this out and let you know",
-            "got it, looking into it now",
-        ])
+        """Deprecated: Dynamic fallback is disabled per rule 'never reply if AI is not sending response'."""
+        return ""
 
     def clean_reply(self, raw_text: str) -> str:
         """Remove any accidental AI meta-commentary, labels, brackets, or robotic filler."""
@@ -282,9 +262,17 @@ class PromptManager:
         # STRICTLY NO QUESTION MARKS: Strip all question marks from replies
         text = text.replace("?", "")
 
+        # Strip accidental leading @mentions (e.g. "@alice hey", "@john: ok")
+        text = re.sub(r"^@\w+[:,\s]*", "", text)
+
         # Check for literal None or empty string
         clean_lower = text.strip().lower()
         if not clean_lower or clean_lower in ("none", "none.", "null", "null.", "nil", "undefined"):
+            return ""
+
+        # Suppress standalone laughter responses (e.g. "haha", "hahaha", "lol", "lmao", "rofl", "xd")
+        pure_laughter = re.sub(r"[^a-zA-Z]", "", text).lower()
+        if pure_laughter and re.match(r"^(?:[ae]*h+[ae]*|lol|lmao|rofl|xd|lmfao)+$", pure_laughter):
             return ""
 
         # Remove immediate word-level repetitions (e.g. "bro bro" -> "bro", "haan haan" -> "haan")
@@ -342,9 +330,10 @@ class PromptManager:
         else:
             lang_instruction = f"CRITICAL: User configured language is {self._language.capitalize()}. You MUST reply ONLY in {self._language.capitalize()}."
 
-        # Natural human engagement with varied message lengths
+        # Natural human engagement without mentioning anyone or sending standalone laughter
         engagement_instruction = (
-            "In groups and chats, be an active Telegram user. When you understand discussions, chime in naturally with thoughts. "
+            "In groups and chats, be an active Telegram user. When you understand discussions, chime in naturally with thoughts without tagging @usernames or mentioning anyone's name. "
+            "NEVER send messages saying 'haha', 'lol', or 'lmao' as text; use emoji reactions or express real thoughts. "
             "Read chat context first to see what conversations are ongoing before replying. "
             "Match conversational length naturally: sometimes 1 word, sometimes 2 words, sometimes a line when necessary (under 10 words default, max 15 serious). "
             "Occasionally (when natural), you may split a thought across 2 short lines or use a natural follow-up (e.g. 'sounds good 👍\\nbtw check dm'). "
@@ -393,6 +382,6 @@ class PromptManager:
             f"Punctuation & Emojis: Use top common emojis (😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️) naturally wherever they fit best (in between words or at the end of a thought). NEVER use question marks (?).\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, active group engagement, read context first, natural typing, no question marks, emojis where they fit best, max 10 words [serious 10-15], no repetition, no canned phrases, no AI talk, no code, no brackets):"
+            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, active group engagement without tagging @names, no 'haha'/'lol' text, read context first, natural typing, no question marks, emojis where they fit best, max 10 words [serious 10-15], no repetition, no canned phrases, no AI talk, no code, no brackets):"
         )
         return "\n\n".join(parts)

@@ -810,7 +810,7 @@ def test_telegram_setprompt_and_prompt_commands(tmp_path: Path):
 
 
 def test_mention_fallback_on_ai_failure(tmp_path: Path):
-    """Verify mentions never leak error notifications to Saved Messages on AI failure and receive human fallbacks."""
+    """Verify mentions never leak error notifications to Saved Messages on AI failure and NEVER send hardcoded text replies to chat."""
     async def _run():
         cfg = AppConfig(
             api_id=123,
@@ -855,11 +855,92 @@ def test_mention_fallback_on_ai_failure(tmp_path: Path):
         saved_msg_errors = [m for m in sent_messages if m[0] == "me"]
         assert len(saved_msg_errors) == 0
 
-        # Verify: Sent a natural human fallback reply to the group
+        # Verify: Never send hardcoded fallback reply to peer chat when AI fails
         group_replies = [m for m in sent_messages if m[0] == -100999]
-        assert len(group_replies) >= 1
-        reply_text = group_replies[0][1]
-        assert any(phrase in reply_text for phrase in ("kya chal raha", "batao", "update", "what's up", "caught up", "yo", "hii", "hey", "sup", "haan bolo"))
+        assert len(group_replies) == 0
+
+    asyncio.run(_run())
+
+
+def test_pure_laughter_reaction_instead_of_text_message(tmp_path: Path):
+    """Verify that when AI generates pure laughter (e.g. 'haha'), reaction is sent instead of writing 'haha' in message."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", reply_mode="restricted_auto", auto_authorize=True, data_dir=tmp_path)
+        db = Database(tmp_path / "test_laugh.db")
+        safety = SafetyManager(cfg, db)
+        safety.set_auto_authorization(True)
+        privacy = PrivacyManager(cfg, database=db)
+        privacy.allow_chat(12345)
+        generator = ReplyGenerator(cfg, database=db)
+        # Simulate AI generating "haha"
+        generator.generate = MagicMock(return_value="haha")
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        sent_reactions = []
+        async def mock_reaction(chat_id, msg_id, text):
+            sent_reactions.append((chat_id, msg_id, text))
+            return True
+
+        mgr.maybe_send_reaction = mock_reaction
+
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock()
+        mgr.set_telegram_client(mock_client)
+
+        await mgr.handle_incoming_eligible_message(
+            chat_id=12345,
+            chat_title="Friend Chat",
+            message_id=99,
+            sender_id=12345,
+            sender_name="Bob",
+            text="look at that meme",
+        )
+
+        # Reaction was triggered with "haha"
+        assert len(sent_reactions) == 1
+        assert sent_reactions[0] == (12345, 99, "haha")
+        # Text message saying "haha" was NOT sent!
+        mock_client.send_message.assert_not_called()
+
+    asyncio.run(_run())
+
+
+def test_group_unthreaded_reply_without_mention(tmp_path: Path):
+    """Verify in groups when not mentioned, message is sent without quoting/reply_to."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "test_unthreaded.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        sent_calls = []
+        async def mock_send(chat_id, text, **kwargs):
+            sent_calls.append((chat_id, text, kwargs.get("reply_to")))
+            m = MagicMock()
+            m.id = 888
+            return m
+
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(side_effect=mock_send)
+        mgr.set_telegram_client(mock_client)
+
+        # 1. Group reply without mention: reply_to is None
+        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah true that", adaptive_delay=False, is_mention=False)
+        assert len(sent_calls) == 1
+        assert sent_calls[0][0] == -100222
+        assert sent_calls[0][2] is None
+
+        # 2. Group reply with mention: reply_to is preserved
+        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah true that", adaptive_delay=False, is_mention=True)
+        assert len(sent_calls) == 2
+        assert sent_calls[1][2] == 77
+
+        # 3. Private DM: reply_to is preserved
+        await mgr._send_reply(chat_id=12345, reply_to_msg_id=55, text="sounds good", adaptive_delay=False, is_mention=False)
+        assert len(sent_calls) == 3
+        assert sent_calls[2][2] == 55
 
     asyncio.run(_run())
 

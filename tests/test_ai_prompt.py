@@ -253,14 +253,30 @@ def test_conversational_engagement_instruction_in_prompt():
 
 
 def test_fallback_reply_mechanism():
-    """Verify get_fallback_reply produces engaging human responses without blunt word-shortcut dictionaries or repetitive canned phrases."""
+    """Verify hardcoded fallback replies are strictly eliminated per user instruction to never send hardcoded messages."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
-    greeting_fb = pm.get_fallback_reply("hi")
-    assert any(h in greeting_fb for h in ("caught up", "what's good", "ping", "there", "hey"))
-    assert "just saw your text" not in greeting_fb
+    assert pm.get_fallback_reply("hi") == ""
+    assert pm.get_fallback_reply("are you a bot?") == ""
 
-    alibi_fb = pm.get_fallback_reply("are you a bot?")
-    assert "lol" in alibi_fb or "real" in alibi_fb
+
+def test_clean_reply_suppresses_standalone_laughter_and_leading_mentions():
+    """Verify clean_reply suppresses standalone laughter particles and strips leading @mentions."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+    # Standalone laughter returns empty string so reaction or silence occurs instead
+    assert pm.clean_reply("haha") == ""
+    assert pm.clean_reply("hahaha 😂") == ""
+    assert pm.clean_reply("lol") == ""
+    assert pm.clean_reply("lmao 💀") == ""
+    assert pm.clean_reply("rofl") == ""
+    assert pm.clean_reply("xd") == ""
+
+    # Substantive responses with laughter emojis are preserved
+    assert pm.clean_reply("true that 😂") == "true that 😂"
+    assert pm.clean_reply("sounds good bro 👍") == "sounds good bro 👍"
+
+    # Leading @mentions stripped so bot chimes in without mentioning anyone
+    assert pm.clean_reply("@alice sounds good 👍") == "sounds good 👍"
+    assert pm.clean_reply("@bob: on my way") == "on my way"
 
 
 def test_never_use_question_marks():
