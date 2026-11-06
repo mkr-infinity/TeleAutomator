@@ -41,7 +41,7 @@ CRITICAL TEXTING RULES:
    - Read context first. Directly address what is being discussed and who is replying to whom.
 
 4. DEFAULT LANGUAGE IS ENGLISH:
-   - Always reply in English by default.
+   - Always reply in English by default. NEVER use Hindi or any other language unless explicitly configured.
 
 5. CASUAL MOBILE TYPING & NO CODE:
    - Text naturally like on phone. Minor typos ok. NEVER write code, paths, brackets [] or braces {}.
@@ -319,35 +319,17 @@ class PromptManager:
             "Never reply without context. Note who is replying to whom in the chat. Directly address what the sender or group was discussing."
         )
 
-        # Language enforcement: default to English
-        if is_group:
-            # Group language policy: default strictly to English unless the group conversation is in Hindi/Hinglish
-            has_devanagari = any("\u0900" <= c <= "\u097f" for c in incoming_text)
-            hindi_keywords = {
-                "kya", "bhai", "haan", "nahi", "kaise", "kuch", "hai", "karo", "raha", 
-                "rahe", "hota", "batao", "acha", "theek", "yaar", "bhaiya", "sahi", "bolo"
-            }
-            history_text = " ".join(m.get("text", "") for m in (conversation_history or []))
-            all_text_lower = f"{incoming_text} {history_text}".lower()
-            words_tokens = set(re.findall(r"\w+", all_text_lower))
-            is_hindi_group = has_devanagari or len(words_tokens.intersection(hindi_keywords)) >= 2
-
-            if is_hindi_group:
-                lang_instruction = (
-                    "GROUP LANGUAGE (Hindi/Hinglish): The group is conversing in Hindi/Hinglish. "
-                    "You may reply naturally in Hindi or Hinglish matching the group tone."
-                )
-            else:
-                lang_instruction = (
-                    "CRITICAL GROUP LANGUAGE RULE (English Only): Default language is English. "
-                    "You MUST reply ONLY in English. NEVER use Hindi or any other language in this group."
-                )
+        # Language enforcement: default strictly to English everywhere unless user explicitly configured another language
+        if self._language == "english":
+            lang_instruction = (
+                "CRITICAL LANGUAGE RULE (English Only): Default language is English. "
+                "You MUST reply ONLY in English. NEVER use Hindi or any other language in any chat or group, "
+                "regardless of what language the sender or group is speaking."
+            )
         elif self._language == "dynamic":
             lang_instruction = "Match the exact language and writing style of the sender (e.g. English, Hinglish, Hindi)."
-        elif self._language == "english":
-            lang_instruction = "CRITICAL: Default language is English. You MUST reply ONLY in English, regardless of the sender's language."
         else:
-            lang_instruction = f"CRITICAL: You MUST reply ONLY in {self._language.capitalize()}."
+            lang_instruction = f"CRITICAL: User configured language is {self._language.capitalize()}. You MUST reply ONLY in {self._language.capitalize()}."
 
         # Natural human engagement with varied message lengths
         engagement_instruction = (

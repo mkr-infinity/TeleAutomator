@@ -272,9 +272,10 @@ def test_permanent_context_in_prompt():
     assert "AI development" in prompt
 
 
-def test_group_language_rules():
-    """Verify group chats enforce English primarily unless Hindi/Hinglish context is detected."""
+def test_strict_default_english_language_everywhere():
+    """Verify English is strictly enforced everywhere (DMs and groups) unless user explicitly configures another language."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
+    assert pm.language == "english"
 
     # 1. English group context
     prompt_en_group = pm.build_user_prompt(
@@ -282,17 +283,35 @@ def test_group_language_rules():
         incoming_text="what is the release timeline for the project",
         is_group=True,
     )
-    assert "CRITICAL GROUP LANGUAGE RULE (English Only)" in prompt_en_group
+    assert "CRITICAL LANGUAGE RULE (English Only)" in prompt_en_group
     assert "NEVER use Hindi" in prompt_en_group
 
-    # 2. Hindi / Hinglish group context
-    prompt_hi_group = pm.build_user_prompt(
+    # 2. Hindi text in group STILL enforces English by default
+    prompt_hi_input = pm.build_user_prompt(
         sender_name="Rahul",
         incoming_text="kya haal hai bhai sab theek",
         is_group=True,
     )
-    assert "GROUP LANGUAGE (Hindi/Hinglish)" in prompt_hi_group
-    assert "Hindi or Hinglish" in prompt_hi_group
+    assert "CRITICAL LANGUAGE RULE (English Only)" in prompt_hi_input
+    assert "NEVER use Hindi" in prompt_hi_input
+
+    # 3. Only when user explicitly changes language from Telegram (e.g. /lang hindi or /lang dynamic)
+    pm.set_language("hindi")
+    prompt_custom_hi = pm.build_user_prompt(
+        sender_name="Rahul",
+        incoming_text="kya haal hai bhai sab theek",
+        is_group=True,
+    )
+    assert "User configured language is Hindi" in prompt_custom_hi
+    assert "You MUST reply ONLY in Hindi" in prompt_custom_hi
+
+    pm.set_language("dynamic")
+    prompt_dyn = pm.build_user_prompt(
+        sender_name="Rahul",
+        incoming_text="kya haal hai bhai sab theek",
+        is_group=True,
+    )
+    assert "Match the exact language and writing style of the sender" in prompt_dyn
 
 
 def test_clean_reply_suppresses_none_and_word_repetition():
