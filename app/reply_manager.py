@@ -401,7 +401,6 @@ class ReplyManager:
         # Check if raw generated response was pure laughter (e.g. "haha", "lol")
         # In this case, send an emoji reaction (😂) instead of writing "haha" in a text message
         if draft:
-            import re
             pure_laugh = re.sub(r"[^a-zA-Z]", "", draft).lower()
             if pure_laugh and re.match(r"^(?:[ae]*h+[ae]*|lol|lmao|rofl|xd|lmfao)+$", pure_laugh):
                 logger.info(f"[LAUGHTER REACTION] AI generated laughter '{draft}'. Reacting with emoji instead of text.")
@@ -502,7 +501,6 @@ class ReplyManager:
                 if "cooldown" in reason.lower() or "limit" in reason.lower():
                     # NEVER skip mention messages: schedule deferred reply after cooldown/rate-limit!
                     if is_mention:
-                        import re
                         m = re.search(r"\((\d+)s remaining\)", reason)
                         wait_secs = float(m.group(1)) if m else 5.0
                         logger.info(
@@ -572,7 +570,6 @@ class ReplyManager:
             can_send, reason = self.safety.can_reply(chat_id, draft)
             if not can_send:
                 if "cooldown" in reason.lower() or "limit" in reason.lower():
-                    import re
                     m = re.search(r"\((\d+)s remaining\)", reason)
                     retry_wait = float(m.group(1)) if m else 3.0
                     await asyncio.sleep(retry_wait + 1.0)
@@ -757,7 +754,6 @@ class ReplyManager:
 
     def _parse_duration(self, raw: str) -> Optional[float]:
         """Parse duration strings like '2h', '30m', '1d', or '2' (hours)."""
-        import re
         s = raw.strip().lower()
         if not s:
             return None
@@ -2075,7 +2071,6 @@ class ReplyManager:
     @staticmethod
     def split_reply_messages(text: str, enabled: bool = True) -> list[str]:
         """Split a multi-thought reply into 2 or 3 natural messages without breaking word or clause meaning."""
-        import re
         text = text.strip()
         if not text or not enabled:
             return [text] if text else []
@@ -2117,8 +2112,6 @@ class ReplyManager:
         Returns:
             (modified_text, correction_word) or (text, None)
         """
-        import random
-        import re
         if probability <= 0 or random.random() > probability:
             return text, None
 
@@ -2290,7 +2283,6 @@ class ReplyManager:
         clean = text.strip().lower()
         if not clean:
             return False
-        import re
         broadcast_patterns = [
             r"\b(?:hi|hello|hey|yo|sup|hola|namaste|salaam)\b.*\b(?:guys|everyone|all|folks|people|team|friends|bhai|gang|group)\b",
             r"\b(?:guys|everyone|all|folks|team|bhai log|sab|sabhi)\b.*\b(?:hi|hello|hey|sup|kya haal|kaise ho)\b",
@@ -2320,7 +2312,6 @@ class ReplyManager:
             context_corpus += f" {chat_title}"
 
         if context_corpus.strip():
-            import re
             keywords = set(re.findall(r"\b[a-zA-Z]{4,}\b", context_corpus.lower()))
             stopwords = {"group", "chat", "rules", "always", "this", "that", "with", "from", "have", "will", "what", "here"}
             meaningful_kw = keywords - stopwords

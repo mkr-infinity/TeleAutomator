@@ -2134,6 +2134,7 @@ def test_event_handler_group_broadcast_engagement(tmp_path: Path):
         mgr.set_telegram_client(mock_client)
 
         from app.event_handlers import register_handlers
+        mgr.db.set_state("owner_name", "Danish")
         register_handlers(mock_client, 111, mf, mgr)
 
         # Retrieve registered on_new_message callback

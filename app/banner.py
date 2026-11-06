@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 
 BANNER_TEXT = """
@@ -34,7 +35,6 @@ def print_banner() -> None:
     if hasattr(sys.stdout, "isatty") and sys.stdout.isatty():
         sys.stdout.write(BANNER_TEXT + "\n")
     else:
-        import re
         clean = re.sub(r"\033\[[0-9;]*m", "", BANNER_TEXT)
         sys.stdout.write(clean + "\n")
     sys.stdout.flush()

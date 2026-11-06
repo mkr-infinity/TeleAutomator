@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import re
 from typing import Any
 
@@ -161,7 +162,6 @@ def register_handlers(
                 logger.debug(f"Group message in {chat_id} ignored: strict mention-only active.")
                 return
 
-            import random
             is_broadcast_or_greeting = reply_manager.is_group_broadcast_or_greeting(text)
 
             if is_mention:
@@ -215,8 +215,6 @@ def register_handlers(
         if not is_group or not is_reply_to_other:
             reacted = await reply_manager.maybe_send_reaction(chat_id, message_id, text)
             if reacted and not is_mention:
-                import random
-                import re
                 react_only_prob = float(reply_manager.db.get_state("react_only_probability", str(getattr(reply_manager.config, "react_only_probability", 0.25))))
                 pure_laugh_text = re.sub(r"[^a-zA-Z]", "", text).lower()
                 is_pure_laughter = bool(pure_laugh_text and re.match(r"^(?:[ae]*h+[ae]*|lol|lmao|rofl|xd|lmfao)+$", pure_laugh_text))
