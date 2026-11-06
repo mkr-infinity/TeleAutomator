@@ -1729,6 +1729,15 @@ class ReplyManager:
             if all(len(s) >= 2 for s in sentences):
                 return sentences
 
+        # Natural follow-up split thoughts with clause connectors (e.g. ", btw ", ", also ", ", and ", ", but ")
+        for conn in (", btw ", ", also ", ", and ", ", but ", ", let "):
+            if conn in text.lower():
+                idx = text.lower().find(conn)
+                part1 = text[:idx].strip()
+                part2 = text[idx + 2:].strip()
+                if len(part1.split()) >= 2 and len(part2.split()) >= 2 and len(part1) >= 5 and len(part2) >= 5:
+                    return [part1, part2]
+
         return [text]
 
     async def maybe_send_reaction(self, chat_id: int, message_id: int, text: str) -> bool:
@@ -2005,17 +2014,43 @@ class ReplyManager:
                     logger.warning(f"Reply to chat {chat_id} aborted: emergency stop triggered during delay.")
                     return False
 
-                # Phase 2: Active typing indicator
+                # Phase 2: Active typing indicator with realistic rhythm & pause bursts
                 try:
                     if hasattr(self._client, "action") and callable(self._client.action):
-                        act = self._client.action(chat_id, "typing")
-                        if hasattr(act, "__aenter__"):
-                            async with act:
-                                await asyncio.sleep(typing_duration)
+                        if typing_duration >= 3.5:
+                            burst1 = round(typing_duration * 0.5, 1)
+                            pause = round(random.uniform(0.6, 1.0), 1)
+                            burst2 = max(0.8, round(typing_duration - burst1, 1))
+
+                            act1 = self._client.action(chat_id, "typing")
+                            if hasattr(act1, "__aenter__"):
+                                async with act1:
+                                    await asyncio.sleep(burst1)
+                            else:
+                                if asyncio.iscoroutine(act1):
+                                    act1.close()
+                                await asyncio.sleep(burst1)
+
+                            # Brief hesitation/thinking pause where user stops typing
+                            await asyncio.sleep(pause)
+
+                            act2 = self._client.action(chat_id, "typing")
+                            if hasattr(act2, "__aenter__"):
+                                async with act2:
+                                    await asyncio.sleep(burst2)
+                            else:
+                                if asyncio.iscoroutine(act2):
+                                    act2.close()
+                                await asyncio.sleep(burst2)
                         else:
-                            if asyncio.iscoroutine(act):
-                                act.close()
-                            await asyncio.sleep(typing_duration)
+                            act = self._client.action(chat_id, "typing")
+                            if hasattr(act, "__aenter__"):
+                                async with act:
+                                    await asyncio.sleep(typing_duration)
+                            else:
+                                if asyncio.iscoroutine(act):
+                                    act.close()
+                                await asyncio.sleep(typing_duration)
                     else:
                         await asyncio.sleep(typing_duration)
                 except Exception:
@@ -2048,20 +2083,26 @@ class ReplyManager:
 
                 # Mandatory minimum 5-second cooldown between consecutive message parts
                 followup_delay = random.uniform(5.0, 7.0)
+                followup_typing = min(followup_delay, max(1.5, min(3.5, len(part.split()) * 0.8)))
+                followup_pause = max(0.0, followup_delay - followup_typing)
+
+                if followup_pause > 0:
+                    await asyncio.sleep(followup_pause)
+
                 try:
                     if hasattr(self._client, "action") and callable(self._client.action):
                         act = self._client.action(chat_id, "typing")
                         if hasattr(act, "__aenter__"):
                             async with act:
-                                await asyncio.sleep(followup_delay)
+                                await asyncio.sleep(followup_typing)
                         else:
                             if asyncio.iscoroutine(act):
                                 act.close()
-                            await asyncio.sleep(followup_delay)
+                            await asyncio.sleep(followup_typing)
                     else:
-                        await asyncio.sleep(followup_delay)
+                        await asyncio.sleep(followup_typing)
                 except Exception:
-                    await asyncio.sleep(followup_delay)
+                    await asyncio.sleep(followup_typing)
 
                 sub_sent = await self._client.send_message(chat_id, part)
                 self.safety.mark_reply_sent(chat_id)

@@ -326,6 +326,13 @@ def test_message_splitting_meaning_and_bounds():
     four_parts = ReplyManager.split_reply_messages("part one\npart two\npart three\npart four")
     assert len(four_parts) == 3
 
+    # 6. Natural follow-up split thoughts on conversational connectors
+    split_btw = ReplyManager.split_reply_messages("sounds good bro, btw check your dm")
+    assert split_btw == ["sounds good bro", "btw check your dm"]
+
+    split_also = ReplyManager.split_reply_messages("all ok bro, also let me know once done")
+    assert split_also == ["all ok bro", "also let me know once done"]
+
 
 def test_reaction_and_cooldown_controls(tmp_path: Path):
     """Verify runtime customization of reactions, reaction cooldowns, and chat cooldowns."""
@@ -1446,6 +1453,38 @@ def test_typing_indicator_while_ai_generates(tmp_path: Path):
         assert "typing_end" in action_calls
 
     asyncio.run(_run())
+
+
+def test_typing_rhythm_and_pause_bursts(tmp_path: Path):
+    """Verify typing duration >= 3.5s produces realistic pause bursts."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "burst.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+        mgr.typing_delay = 5.0
+
+        actions = []
+        class MockActionContext:
+            async def __aenter__(self):
+                actions.append("burst_enter")
+                return self
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                actions.append("burst_exit")
+
+        mock_client = AsyncMock()
+        mock_client.action = MagicMock(return_value=MockActionContext())
+        mock_client.send_message = AsyncMock(return_value=MagicMock(id=500))
+        mgr.set_telegram_client(mock_client)
+
+        await mgr._send_reply(chat_id=123, reply_to_msg_id=0, text="one two three four five six seven eight nine ten", adaptive_delay=False)
+        assert actions.count("burst_enter") >= 2
+        assert actions.count("burst_exit") >= 2
+
+    asyncio.run(_run())
+
 
 
 

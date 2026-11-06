@@ -335,7 +335,8 @@ class PromptManager:
         engagement_instruction = (
             "In groups and chats, be an active Telegram user. When you understand discussions, chime in naturally with thoughts. "
             "Read chat context first to see what conversations are ongoing before replying. "
-            "Match conversational length naturally: sometimes 1 word, sometimes 2 words, sometimes a line when necessary. "
+            "Match conversational length naturally: sometimes 1 word, sometimes 2 words, sometimes a line when necessary (under 10 words default, max 15 serious). "
+            "Occasionally (when natural), you may split a thought across 2 short lines or use a natural follow-up (e.g. 'sounds good 👍\\nbtw check dm'). "
             "Keep replies conversational, natural, and engaging (no robotic 1-word shortcuts like nope/dope/yo, no AI talk, no code)."
         )
 
