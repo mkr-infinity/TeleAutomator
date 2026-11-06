@@ -1137,7 +1137,19 @@ class ReplyManager:
                 return "🔒 Auto-reactions *DISABLED*."
             return "Usage: `/reaction on` or `/reaction off`"
 
-        if cmd in ("/quiethours", "/quiet", "/sleep"):
+        if cmd in ("/sleep", "/goodnight"):
+            if len(cmd_parts) >= 2 and cmd_parts[1].lower() in ("off", "stop", "wake", "resume"):
+                self.safety.set_quiet_hours(False)
+                return "☀️ Quiet hours *DISABLED*. Automated replies and reactions are now active 24/7."
+            await self.maybe_send_quiet_hours_goodnight(force=True)
+            self.safety.set_quiet_hours(True)
+            s, e = self.safety.quiet_hours_window
+            return (
+                f"🌙 *Goodnight sign-off sent!* Quiet hours (sleep schedule {s}–{e}) is now *ON*.\n"
+                f"Auto-replies are paused. Send `/quiethours off` or `/resume` to wake up anytime."
+            )
+
+        if cmd in ("/quiethours", "/quiet"):
             if len(cmd_parts) < 2:
                 qh_enabled = self.safety.quiet_hours_enabled
                 qh_start, qh_end = self.safety.quiet_hours_window
@@ -1461,7 +1473,7 @@ class ReplyManager:
                 except ValueError:
                     return "Usage: `/chatty on`, `/chatty off`, or `/chatty <0-100>`"
 
-        if cmd in ("/pause", "/off", "/sleep"):
+        if cmd in ("/pause", "/off"):
             if len(cmd_parts) < 2:
                 return "Usage: `/pause <duration>` (e.g. `/pause 2h`, `/pause 30m`, `/pause 45m`)"
             seconds = self._parse_duration(cmd_parts[1])
@@ -1833,9 +1845,9 @@ class ReplyManager:
         """Update last activity timestamp for group."""
         self._last_group_activity[chat_id] = time.time()
 
-    async def maybe_send_quiet_hours_goodnight(self) -> None:
-        """Before or upon entering quiet hours (2:00 AM IST), write bye/goodnight to active allowlisted groups."""
-        if not self._client or not self.safety.quiet_hours_enabled:
+    async def maybe_send_quiet_hours_goodnight(self, force: bool = False) -> None:
+        """Before or upon entering quiet hours (2:00 AM IST), write bye/goodnight to active allowlisted groups like a human."""
+        if not self._client or (not self.safety.quiet_hours_enabled and not force):
             return
 
         ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -1843,7 +1855,7 @@ class ReplyManager:
         today_str = now_ist.strftime("%Y-%m-%d")
 
         last_goodnight = self.db.get_state("last_quiet_goodnight_date", "")
-        if last_goodnight == today_str:
+        if last_goodnight == today_str and not force:
             return
 
         start_str, _ = self.safety.quiet_hours_window
@@ -1856,7 +1868,9 @@ class ReplyManager:
         curr_mins = now_ist.hour * 60 + now_ist.minute
         # Trigger window: 15 minutes before start up to 15 minutes after (e.g. 01:45 to 02:15 IST)
         diff = (curr_mins - target_mins) % 1440
-        if diff <= 15 or (1440 - diff) <= 15:
+        should_send = force or (diff <= 15 or (1440 - diff) <= 15)
+
+        if should_send:
             allowed_groups = list(self.privacy.allowed_groups)
             if not allowed_groups:
                 known = self.db.get_known_chats()

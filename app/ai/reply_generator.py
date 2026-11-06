@@ -47,7 +47,7 @@ def create_ai_provider(config: AppConfig, database: Optional[Any] = None) -> AIP
 
         reasoning_effort = "default"
         temperature = 0.6
-        max_tokens = 200
+        max_tokens = 400
         if database:
             reasoning_effort = database.get_state("ai_reasoning_effort", "default")
             try:
@@ -55,7 +55,7 @@ def create_ai_provider(config: AppConfig, database: Optional[Any] = None) -> AIP
             except ValueError:
                 pass
             try:
-                max_tokens = int(database.get_state("ai_max_tokens", "200"))
+                max_tokens = int(database.get_state("ai_max_tokens", "400"))
             except ValueError:
                 pass
 

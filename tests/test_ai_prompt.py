@@ -244,17 +244,18 @@ def test_never_use_question_marks():
     assert "NEVER use question marks" in prompt
 
 
-def test_relocate_trailing_emojis_to_middle():
-    """Verify trailing emojis at the end of messages are relocated between words inside the message."""
+def test_emojis_preserved_naturally_middle_or_end():
+    """Verify emojis are preserved naturally whether in the middle or at the end of messages."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
-    # Trailing emoji moved inside words
+    # Natural emoji at the end
     cleaned1 = pm.clean_reply("all good bro 😂")
-    assert not cleaned1.endswith("😂")
     assert "😂" in cleaned1
+    assert "all good bro" in cleaned1
 
-    cleaned2 = pm.clean_reply("haan bhai 🔥")
-    assert not cleaned2.endswith("🔥")
-    assert "🔥" in cleaned2
+    # Natural emoji in the middle
+    cleaned2 = pm.clean_reply("haan 😂 bro was thinking the same")
+    assert "😂" in cleaned2
+    assert "haan" in cleaned2
 
 
 def test_permanent_context_in_prompt():

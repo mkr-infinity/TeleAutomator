@@ -189,10 +189,10 @@ def register_handlers(
         # Retrieve recent conversation context with aging window (default: 2 hours TTL)
         ttl_hours = float(reply_manager.db.get_state("context_ttl_hours", "2.0"))
         max_age_secs = int(ttl_hours * 3600) if ttl_hours > 0 else None
-        conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=10, max_age_seconds=max_age_secs)
+        conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=15, max_age_seconds=max_age_secs)
         if len(conversation_history) <= 2:
             try:
-                recent_msgs = await client.get_messages(chat_id, limit=10)
+                recent_msgs = await client.get_messages(chat_id, limit=15)
                 if recent_msgs:
                     for m in reversed(recent_msgs):
                         m_id = getattr(m, "id", None)
@@ -217,7 +217,7 @@ def register_handlers(
                             text=m_text,
                             is_outgoing=m_out,
                         )
-                    conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=10, max_age_seconds=max_age_secs)
+                    conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=15, max_age_seconds=max_age_secs)
             except Exception as e:
                 logger.debug(f"Could not seed chat history from network: {e}")
 

@@ -51,8 +51,7 @@ CRITICAL TEXTING RULES:
 
 7. EMOJI PLACEMENT (COMMONLY USED EMOJIS):
    - Use top common emojis: 😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️.
-   - Place emojis in MIDDLE of text between words (e.g. "haan 😂 bro was thinking the same", "all good 👍 will let u know").
-   - NEVER place an emoji at end of message.
+   - Place emojis naturally where they fit best: in middle between words or at end of a sentence (e.g. "all good bro 👍", "haan 😂 was thinking same").
 
 8. HUMAN ALIBI (NEVER ADMIT BEING AI):
    - If accused of being a bot ("are u a bot?"):
@@ -259,32 +258,13 @@ class PromptManager:
         # STRICT SAFETY: Never allow AI to output URLs or links
         text = re.sub(r"https?:\/\/\S+|t\.me\/\S+|www\.\S+", "", text)
 
-        # Relocate trailing emojis so they appear in between words, never at end of message
+        # Clean markdown formatting, list bullets, or system prefixes while preserving natural emoji placement
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         clean_lines = []
-        emoji_rx = re.compile(r"[\U00010000-\U0010ffff\u2600-\u27bf\u2300-\u23ff\u2b50]")
         for line in lines:
             cleaned_line = re.sub(r"^[\*\-\•\d\.\:\s]+(?:option\s*\d*[\:\.\s]*)?", "", line, flags=re.IGNORECASE).strip()
-            if not cleaned_line:
-                continue
-            trailing_emojis = []
-            while cleaned_line and emoji_rx.match(cleaned_line[-1]):
-                trailing_emojis.append(cleaned_line[-1])
-                cleaned_line = cleaned_line[:-1].strip()
-            if trailing_emojis:
-                emojis_str = "".join(reversed(trailing_emojis))
-                words = cleaned_line.split()
-                if len(words) >= 2:
-                    insert_pos = max(1, len(words) // 2)
-                    words.insert(insert_pos, emojis_str)
-                    clean_lines.append(" ".join(words))
-                elif len(words) == 1:
-                    clean_lines.append(f"{emojis_str} {words[0]}")
-                else:
-                    clean_lines.append(emojis_str)
-            else:
-                if len(cleaned_line) > 1 or cleaned_line:
-                    clean_lines.append(cleaned_line)
+            if cleaned_line:
+                clean_lines.append(cleaned_line)
 
         if clean_lines:
             text = "\n".join(clean_lines[:3])
@@ -321,7 +301,7 @@ class PromptManager:
 
         if conversation_history:
             history_lines = ["Recent conversation context: (MANDATORY: Read context first before replying)"]
-            for msg in conversation_history[-8:]:
+            for msg in conversation_history[-15:]:
                 sender = msg.get("sender", "Contact")
                 content = msg.get("text", "").strip()
                 if content:
@@ -380,9 +360,9 @@ class PromptManager:
             f"Language Rule: {lang_instruction}\n"
             f"Context Rule: {context_instruction}\n"
             f"Engagement Rule: {engagement_instruction}\n"
-            f"Punctuation & Emojis: Use top common emojis (😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️) naturally in between words inside the message, NEVER at the very end. NEVER use question marks (?).\n"
+            f"Punctuation & Emojis: Use top common emojis (😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️) naturally wherever they fit best (in between words or at the end of a thought). NEVER use question marks (?).\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, active group engagement, read context first, natural typing, no question marks, emojis in between words, no AI talk, no code, no brackets, separate distinct thoughts by newline):"
+            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, active group engagement, read context first, natural typing, no question marks, emojis where they fit best, no AI talk, no code, no brackets):"
         )
         return "\n\n".join(parts)

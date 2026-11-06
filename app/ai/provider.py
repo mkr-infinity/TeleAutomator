@@ -124,7 +124,7 @@ class OpenAIProvider(AIProvider):
         usage_callback: Optional[Any] = None,
         reasoning_effort: str = "default",
         temperature: float = 0.6,
-        max_tokens: int = 200,
+        max_tokens: int = 400,
     ):
         self.api_key = api_key
         self.model = model or "gpt-4o-mini"
