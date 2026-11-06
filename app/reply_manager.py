@@ -216,6 +216,21 @@ class ReplyManager:
                         is_mention=is_mention,
                     )
 
+                # Suggestion 1: Natural Read-Receipt Delay Simulation (2–4s hesitation before marking read)
+                if self._client and self.current_mode == "restricted_auto" and (self.min_delay > 0 or self.max_delay > 0):
+                    read_hesitation = random.uniform(2.0, 4.0)
+                    await asyncio.sleep(read_hesitation)
+                    try:
+                        if hasattr(self._client, "send_read_acknowledge"):
+                            ack_res = self._client.send_read_acknowledge(chat_id, max_id=message_id)
+                            if asyncio.iscoroutine(ack_res):
+                                await ack_res
+                            logger.debug(f"[READ RECEIPT] Marked message {message_id} as read in chat {chat_id}.")
+                    except Exception as e:
+                        logger.debug(f"[READ RECEIPT] Could not send read acknowledgement: {e}")
+                    # Brief pause before starting to type
+                    await asyncio.sleep(random.uniform(0.8, 1.5))
+
                 # Show typing indicator in chat or group while AI thinks/generates reply
                 if self._client and self.current_mode == "restricted_auto":
                     try:
@@ -1633,16 +1648,16 @@ class ReplyManager:
             custom = self.generator.prompt_manager.custom_prompt
             mode_str = f"Custom Persona ({len(custom.split())} words)" if custom else "Default Persona"
             full_inst = self.generator.prompt_manager.system_instructions
-            custom_display = f'"{custom}"' if custom else "None (using default instructions)"
+            custom_display = f'"{custom}"' if custom else "None (using default system_prompt.txt)"
             prompt_preview = full_inst if len(full_inst) <= 3000 else (full_inst[:3000] + "\n...[truncated for telegram display]")
             return (
                 f"📜 *Active System Instructions ({mode_str}):*\n\n"
-                f"• *Anti-AI Guardrails:* ACTIVE 🛡️ (Human conversation, varied lengths, top emojis, human alibi, zero code/brackets)\n"
+                f"• *Anti-AI Guardrails:* ACTIVE 🛡️ (1-5 words, human conversation, top emojis, no names/@usernames, no code)\n"
                 f"• *Custom Persona:* {custom_display}\n"
                 f"• *Active Style:* `{self.generator.style}`\n"
                 f"• *Language:* `{self.generator.language}`\n\n"
-                f"*Compiled Prompt (sent to AI):*\n"
-                f"```\n{prompt_preview}\n```\n\n"
+                f"*Compiled Prompt (sent to AI):*\n\n"
+                f"{prompt_preview}\n\n"
                 f"_Use `/setprompt <text>` to customize persona, or `/setprompt default` to reset._"
             )
 
@@ -1779,7 +1794,8 @@ class ReplyManager:
         delay = delay + jitter
 
         cap_max = min(self.max_delay, 25.0) if is_group else self.max_delay
-        return round(max(self.min_delay, min(cap_max, delay)), 2)
+        hard_floor = 5.0 if (self.min_delay > 0 or self.max_delay > 0) else 0.0
+        return round(max(hard_floor, self.min_delay, min(cap_max, delay)), 2)
 
     @staticmethod
     def split_reply_messages(text: str) -> list[str]:
@@ -2124,14 +2140,14 @@ class ReplyManager:
 
             if total_delay > 0:
                 # Realistic human simulation: pause for reading/thinking, then show typing action
-                # Reference 2: Dynamic typing delay scaling based on reply word count
+                # Dynamic typing delay scaling based on 1 to 5 word responses
                 word_count = len(first_part.split())
-                if word_count <= 3:
-                    target_typing = random.uniform(1.5, 3.0)
-                elif word_count <= 10:
-                    target_typing = random.uniform(3.0, 6.0)
+                if word_count <= 2:
+                    target_typing = random.uniform(1.2, 2.2)
+                elif word_count <= 5:
+                    target_typing = random.uniform(2.2, 3.8)
                 else:
-                    target_typing = random.uniform(6.0, 9.0)
+                    target_typing = random.uniform(3.8, 5.5)
 
                 typing_duration = min(total_delay, target_typing) if total_delay > 1.5 else total_delay
                 reading_delay = max(0.0, total_delay - typing_duration)

@@ -29,10 +29,10 @@ ANTI_AI_GUARDRAILS = """You are texting directly as {owner_name} from your perso
 Real human friend chatting on mobile. NEVER sound like an AI, bot, or assistant.
 
 CRITICAL TEXTING RULES:
-1. BREVITY & ENERGY MATCHING (STRICT 10-15 WORD LIMITS):
-   - Default replies are strictly 1 to 10 words (e.g. "true that 😂", "sounds good 👍").
-   - Serious cases only: 10 to 15 words max. NEVER exceed 15 words.
-   - Text like a human: sometimes 1 word, sometimes 2 words, short line when needed.
+1. BREVITY & ENERGY MATCHING (STRICT 1 TO 5 WORDS):
+   - Default replies are strictly 1 to 5 words (e.g. "true that 😂", "sounds good", "on my way", "nah not really", "cool with me").
+   - Serious cases: 5 to 8 words max. NEVER exceed 8 words.
+   - Text like a human: sometimes 1 word, sometimes 2 words, ultra short line when needed.
 
 2. CASUAL MOBILE TEXTING (NO SLANG OVERLOAD):
    - Text casually and naturally. Authentic and friendly without slang overload.
@@ -98,17 +98,6 @@ class PromptManager:
         """Active custom user persona instructions, if configured."""
         if self._custom_prompt:
             return self._custom_prompt
-        if self.prompt_file and self.prompt_file.exists():
-            try:
-                lines = [
-                    l for l in self.prompt_file.read_text(encoding="utf-8").splitlines()
-                    if not l.strip().startswith("#")
-                ]
-                content = "\n".join(lines).strip()
-                if content and "BREVITY & ENERGY MATCHING" not in content:
-                    return content
-            except Exception:
-                pass
         return ""
 
     @custom_prompt.setter
@@ -118,11 +107,6 @@ class PromptManager:
     def reset_custom_prompt(self) -> None:
         """Clear custom persona and restore default instructions."""
         self._custom_prompt = ""
-        if self.prompt_file and self.prompt_file.exists():
-            try:
-                self.prompt_file.write_text(DEFAULT_SYSTEM_INSTRUCTIONS, encoding="utf-8")
-            except Exception:
-                pass
 
     @property
     def language(self) -> str:
@@ -152,24 +136,43 @@ class PromptManager:
         if name and name.strip():
             self.owner_name = name.strip()
 
+    def get_default_instructions(self) -> str:
+        """Load default instructions from system_prompt.txt file, with fallback."""
+        default_text = ""
+        if self.prompt_file and self.prompt_file.exists():
+            try:
+                default_text = self.prompt_file.read_text(encoding="utf-8").strip()
+            except Exception:
+                pass
+        if not default_text:
+            default_text = self._default_instructions
+        return default_text.replace("{owner_name}", self.owner_name)
+
     def get_system_instructions(self, style_override: Optional[str] = None) -> str:
-        """Return instructions with specified style override, wrapping custom persona in anti-AI guardrails."""
-        guardrails = ANTI_AI_GUARDRAILS.replace("{owner_name}", self.owner_name)
+        """Return instructions for AI generation: uses custom prompt if set, else loads default prompt text."""
         custom = self.custom_prompt
-
-        parts = [guardrails]
-        if custom:
-            parts.append(
-                f"CUSTOM USER PERSONA & INSTRUCTIONS:\n{custom}\n"
-                "Follow these instructions while strictly obeying all human texting rules above."
-            )
-
         target_style = style_override if (style_override and style_override in VALID_STYLES) else self._style
-        if target_style != "casual" and target_style in VALID_STYLES:
-            parts.append(f"ACTIVE STYLE: {VALID_STYLES[target_style]}")
+        style_rule = f"\nACTIVE STYLE: {VALID_STYLES[target_style]}" if (target_style != "casual" and target_style in VALID_STYLES) else ""
 
-        parts.append("Output ONLY the raw text message ready to send.")
-        return "\n\n".join(parts)
+        if custom:
+            # Custom prompt is set: USE CUSTOM PROMPT INSTEAD OF DEFAULT SYSTEM PROMPT!
+            core_guardrails = (
+                f"\n\nCORE ANTI-AI & SAFETY CONSTRAINTS (MANDATORY):\n"
+                f"- Text directly as {self.owner_name} from your personal phone in Telegram.\n"
+                f"- HUMAN ALIBI: Real human friend chatting on mobile. Never sound like an AI, bot, or assistant.\n"
+                f"- BREVITY & ENERGY MATCHING (STRICT 1 TO 5 WORDS): Keep replies strictly between 1 to 5 words (e.g. 'true that 😂', 'sounds good', 'on my way', 'nah not really'). Max 8 words in serious cases only.\n"
+                f"- NEVER write anyone's name, user name, or @username in message text (swipe-to-reply quote threading only).\n"
+                f"- CASUAL MOBILE TEXTING (NO SLANG OVERLOAD): Casual texting tone without slang overload.\n"
+                f"- NO CODE: Never write code, paths, or brackets [] {{}}, no question marks (?).\n"
+                f"- Never write 'haha', 'lol', or 'lmao' as text (use emoji reactions).\n"
+                f"- Never repeat phrases or reuse canned responses. Output ONLY the raw message to send.{style_rule}"
+            )
+            return f"{custom}{core_guardrails}"
+        else:
+            default_text = self.get_default_instructions()
+            if target_style != "casual" and target_style in VALID_STYLES:
+                default_text += f"\n\nACTIVE STYLE: {VALID_STYLES[target_style]}"
+            return default_text
 
     @property
     def system_instructions(self) -> str:
@@ -177,15 +180,9 @@ class PromptManager:
         return self.get_system_instructions()
 
     def save_system_instructions(self, new_instructions: str) -> bool:
-        """Persist updated custom instructions to memory and system_prompt.txt."""
+        """Persist updated custom instructions to memory."""
         self._custom_prompt = new_instructions.strip()
-        if not self.prompt_file:
-            return True
-        try:
-            self.prompt_file.write_text(new_instructions.strip(), encoding="utf-8")
-            return True
-        except Exception:
-            return False
+        return True
 
     def get_fallback_reply(self, incoming_text: str = "") -> str:
         """Deprecated: Dynamic fallback is disabled per rule 'never reply if AI is not sending response'."""
@@ -273,7 +270,11 @@ class PromptManager:
         if sender_name and sender_name not in ("Contact", "You"):
             clean_first = sender_name.lstrip("@").split()[0]
             if len(clean_first) >= 2:
-                text = re.sub(r"^" + re.escape(clean_first) + r"\b[:,\s]*", "", text, flags=re.IGNORECASE)
+                text = re.sub(r"^hey\s+" + re.escape(clean_first) + r"\b[:,\s!]*", "hey ", text, flags=re.IGNORECASE)
+                text = re.sub(r"^hi\s+" + re.escape(clean_first) + r"\b[:,\s!]*", "hi ", text, flags=re.IGNORECASE)
+                text = re.sub(r"^hello\s+" + re.escape(clean_first) + r"\b[:,\s!]*", "hello ", text, flags=re.IGNORECASE)
+                text = re.sub(r"^" + re.escape(clean_first) + r"\b[:,\s!]*", "", text, flags=re.IGNORECASE)
+                text = re.sub(r"\b" + re.escape(clean_first) + r"[,!.]?$", "", text, flags=re.IGNORECASE)
 
         # Strip any leading Name: or Name, or Name -
         text = re.sub(r"^[A-Za-z0-9_]{2,25}[:,\-]\s*", "", text)
@@ -289,10 +290,10 @@ class PromptManager:
         # Remove immediate word-level repetitions (e.g. "bro bro" -> "bro", "haan haan" -> "haan")
         text = re.sub(r'\b(\w+)(?:\s+\1\b)+', r'\1', text, flags=re.IGNORECASE)
 
-        # STRICT 10-15 WORD LIMIT: Hard cap at 15 words maximum
+        # STRICT 1 TO 5 WORDS LIMIT: Hard cap at 8 words maximum
         words = text.split()
-        if len(words) > 15:
-            text = " ".join(words[:15]).rstrip(" ,-—:;")
+        if len(words) > 8:
+            text = " ".join(words[:8]).rstrip(" ,-—:;")
 
         return text.strip()
 
@@ -349,9 +350,9 @@ class PromptManager:
             "In Telegram, mentioning means swiping to reply (quote-threading); you do NOT type the person's name in text. "
             "NEVER send messages saying 'haha', 'lol', or 'lmao' as text; use emoji reactions or express real thoughts. "
             "Read chat context first to see what conversations are ongoing before replying. "
-            "Match conversational length naturally: sometimes 1 word, sometimes 2 words, sometimes a line when necessary (under 10 words default, max 15 serious). "
-            "Occasionally (when natural), you may split a thought across 2 short lines or use a natural follow-up (e.g. 'sounds good 👍\\nbtw check dm'). "
-            "Keep replies conversational, natural, and engaging (no robotic 1-word shortcuts like nope/dope/yo, no AI talk, no code)."
+            "Match conversational length naturally: strictly 1 to 5 words (e.g. 'true that 😂', 'sounds good', 'on my way', max 8 serious). "
+            "Occasionally (when natural), you may split a thought across 2 short lines (e.g. 'sounds good 👍\\ncheck dm'). "
+            "Keep replies conversational, natural, and engaging (no robotic 1-word shortcuts, no AI talk, no code)."
         )
 
         # Reference 1: Time-of-day awareness (IST, UTC+05:30)
@@ -369,11 +370,11 @@ class PromptManager:
             time_period = "night"
         time_context = f"Current Time: {now_ist.strftime('%I:%M %p')} IST ({time_period})"
 
-        # Strict brevity word limits (max 10 words default, 10-15 serious, never > 15)
+        # Strict brevity word limits (strictly 1 to 5 words default, max 8 serious, never > 8)
         brevity_instruction = (
-            "CRITICAL BREVITY RULE: Cap replies strictly to max 10 words by default (e.g. 1-3 words for quick banter, max 10 words). "
-            "In serious or technical discussions only, use 10 to 15 words. "
-            "NEVER exceed 15 words. Avoid long essay replies or lines of text."
+            "CRITICAL BREVITY RULE: Keep replies strictly between 1 to 5 words (e.g. 'true that 😂', 'sounds good', 'on my way', 'nah not really', 'cool with me'). "
+            "In serious inquiries only, use max 6 to 8 words. "
+            "NEVER exceed 8 words. Shorter is always better. Real humans on mobile send 1 to 5 words."
         )
 
         # Anti-repetition rule: never repeat same phrase or opening

@@ -395,27 +395,27 @@ def test_top_common_emojis_and_active_group_engagement():
 
 
 def test_strict_word_limits_and_hard_cap():
-    """Verify clean_reply enforces strict 15-word ceiling."""
+    """Verify clean_reply enforces strict 1 to 5 word guideline with 8-word ceiling."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
 
     # Short message stays intact
-    short_msg = "lol true 😂"
+    short_msg = "true 😂"
     assert pm.clean_reply(short_msg) == short_msg
 
-    # 10-word message stays intact
-    ten_words = "one two three four five six seven eight nine ten"
-    assert pm.clean_reply(ten_words) == ten_words
+    # 5-word message stays intact
+    five_words = "sounds good to me bro"
+    assert pm.clean_reply(five_words) == five_words
 
-    # 15-word message stays intact
-    fifteen_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen"
-    assert pm.clean_reply(fifteen_words) == fifteen_words
+    # 8-word message stays intact
+    eight_words = "one two three four five six seven eight"
+    assert pm.clean_reply(eight_words) == eight_words
 
-    # >15-word message is cleanly capped to 15 words
+    # >8-word message is cleanly capped to 8 words
     twenty_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty"
     cleaned = pm.clean_reply(twenty_words)
     words = cleaned.split()
-    assert len(words) == 15
-    assert words[-1] == "fifteen"
+    assert len(words) == 8
+    assert words[-1] == "eight"
 
 
 def test_ist_time_awareness_and_brevity_instructions_in_prompt():
@@ -428,8 +428,8 @@ def test_ist_time_awareness_and_brevity_instructions_in_prompt():
     assert any(period in prompt for period in ("morning", "afternoon", "evening", "night"))
 
     assert "Brevity Rule:" in prompt
-    assert "Cap replies strictly to max 10 words" in prompt
-    assert "10 to 15 words" in prompt
-    assert "NEVER exceed 15 words" in prompt
+    assert "strictly between 1 to 5 words" in prompt
+    assert "max 6 to 8 words" in prompt
+    assert "NEVER exceed 8 words" in prompt
 
 
