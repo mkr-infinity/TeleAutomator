@@ -1,4 +1,4 @@
-# TeleAutomator - Telegram Chat Automation v2.0.5
+# TeleAutomator - Telegram Chat Automation v2.0.6
 
 ![TeleAutomator Banner](assets/banner.png)
 

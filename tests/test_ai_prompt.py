@@ -325,3 +325,43 @@ def test_top_common_emojis_and_active_group_engagement():
     assert "active Telegram user" in prompt
     assert "understand discussions" in prompt or "chime in naturally" in prompt
 
+
+def test_strict_word_limits_and_hard_cap():
+    """Verify clean_reply enforces strict 15-word ceiling."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+
+    # Short message stays intact
+    short_msg = "lol true 😂"
+    assert pm.clean_reply(short_msg) == short_msg
+
+    # 10-word message stays intact
+    ten_words = "one two three four five six seven eight nine ten"
+    assert pm.clean_reply(ten_words) == ten_words
+
+    # 15-word message stays intact
+    fifteen_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen"
+    assert pm.clean_reply(fifteen_words) == fifteen_words
+
+    # >15-word message is cleanly capped to 15 words
+    twenty_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty"
+    cleaned = pm.clean_reply(twenty_words)
+    words = cleaned.split()
+    assert len(words) == 15
+    assert words[-1] == "fifteen"
+
+
+def test_ist_time_awareness_and_brevity_instructions_in_prompt():
+    """Verify prompt includes IST time-of-day awareness and strict brevity rule."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+    prompt = pm.build_user_prompt(sender_name="Alex", incoming_text="good morning")
+
+    assert "Time Context:" in prompt
+    assert "IST (" in prompt
+    assert any(period in prompt for period in ("morning", "afternoon", "evening", "night"))
+
+    assert "Brevity Rule:" in prompt
+    assert "Cap replies strictly to max 10 words" in prompt
+    assert "10 to 15 words" in prompt
+    assert "NEVER exceed 15 words" in prompt
+
+

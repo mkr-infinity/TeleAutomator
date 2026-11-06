@@ -196,14 +196,39 @@ class ReplyManager:
 
                 # Check for per-chat style/persona override; fallback to global default
                 chat_style = self.db.get_state(f"chat_style_{chat_id}")
-                draft = self.generator.generate(
-                    sender_name=sender_name,
-                    incoming_text=clean_text,
-                    conversation_history=conversation_history,
-                    style_override=chat_style or None,
-                    permanent_context=permanent_context_str,
-                    is_group=(chat_id < 0),
-                )
+
+                async def _do_generate():
+                    return await asyncio.to_thread(
+                        self.generator.generate,
+                        sender_name=sender_name,
+                        incoming_text=clean_text,
+                        conversation_history=conversation_history,
+                        style_override=chat_style or None,
+                        permanent_context=permanent_context_str,
+                        is_group=(chat_id < 0),
+                    )
+
+                # Show typing indicator in chat or group while AI thinks/generates reply
+                if self._client and self.current_mode == "restricted_auto":
+                    try:
+                        if hasattr(self._client, "action") and callable(self._client.action):
+                            act = self._client.action(chat_id, "typing")
+                            if hasattr(act, "__aenter__"):
+                                async with act:
+                                    draft = await _do_generate()
+                            else:
+                                if asyncio.iscoroutine(act):
+                                    try:
+                                        await act
+                                    except Exception:
+                                        pass
+                                draft = await _do_generate()
+                        else:
+                            draft = await _do_generate()
+                    except Exception:
+                        draft = await _do_generate()
+                else:
+                    draft = await _do_generate()
             except Exception as e:
                 logger.error(f"Failed to generate AI reply for chat {chat_id}: {e}")
                 if is_mention:
@@ -669,8 +694,37 @@ class ReplyManager:
             try:
                 cid = int(cmd_parts[1])
                 self.privacy.allow_chat(cid)
+
+                title = ""
+                username = ""
+                if self._client:
+                    try:
+                        entity = await self._client.get_entity(cid)
+                        if hasattr(entity, "title") and entity.title:
+                            title = entity.title
+                        elif hasattr(entity, "first_name") and entity.first_name:
+                            title = f"{entity.first_name} {getattr(entity, 'last_name', '') or ''}".strip()
+                        if hasattr(entity, "username") and entity.username:
+                            username = f"@{entity.username}"
+                    except Exception:
+                        pass
+
+                if not title and self.db:
+                    meta = self.db.get_chat_metadata(cid)
+                    if meta:
+                        title = meta.get("title", "")
+                        if meta.get("username"):
+                            username = f"@{meta.get('username')}"
+
                 target = "Group" if cid < 0 else "Private contact"
-                return f"✅ {target} `{cid}` has been added to the allowlist!"
+                info_parts = []
+                if title:
+                    info_parts.append(f"*{title}*")
+                if username:
+                    info_parts.append(f"({username})")
+                info_str = f" {' '.join(info_parts)}" if info_parts else ""
+
+                return f"✅ {target}{info_str} [ID: `{cid}`] has been added to the allowlist!"
             except ValueError:
                 return "Error: Chat ID must be an integer."
 
@@ -1078,7 +1132,7 @@ class ReplyManager:
             global_cd_range = f"{int(self.safety.min_global_cooldown)}s–{int(self.safety.max_global_cooldown)}s"
             chats_df = await self.get_allowed_chats_dataframe()
             return (
-                f"📊 *TeleAutomator v2.0.5 Status:*\n"
+                f"📊 *TeleAutomator v2.0.6 Status:*\n"
                 f"• Identity Name: `{owner}`\n"
                 f"• Automation: *{pause_str}*\n"
                 f"• Reply Mode: `{mode_display}` (change with `/mode <draft|approval|auto>`)\n"
@@ -1924,10 +1978,16 @@ class ReplyManager:
 
             if total_delay > 0:
                 # Realistic human simulation: pause for reading/thinking, then show typing action
-                combo_lower = first_part.lower()
-                is_quick_banter = any(w in combo_lower for w in ("haha", "lol", "yo", "sup", "ok", "yeah", "yea", "cool", "done"))
-                base_speed = 0.035 if is_quick_banter else 0.05
-                typing_duration = min(total_delay, max(1.5, min(5.0, len(first_part) * base_speed)))
+                # Reference 2: Dynamic typing delay scaling based on reply word count
+                word_count = len(first_part.split())
+                if word_count <= 3:
+                    target_typing = random.uniform(1.5, 3.0)
+                elif word_count <= 10:
+                    target_typing = random.uniform(3.0, 6.0)
+                else:
+                    target_typing = random.uniform(6.0, 9.0)
+
+                typing_duration = min(total_delay, target_typing) if total_delay > 1.5 else total_delay
                 reading_delay = max(0.0, total_delay - typing_duration)
 
                 env_type = "Group" if chat_id < 0 else "Private DM"

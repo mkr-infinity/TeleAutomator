@@ -108,14 +108,28 @@ def register_handlers(
 
         # Resolve chat title and sender name safely
         chat_title = f"Chat {chat_id}"
+        chat_username = ""
         try:
             chat = await event.get_chat()
             if hasattr(chat, "title") and chat.title:
                 chat_title = chat.title
             elif hasattr(chat, "first_name") and chat.first_name:
                 chat_title = chat.first_name
+            if hasattr(chat, "username") and chat.username:
+                chat_username = chat.username
         except Exception:
             pass
+
+        if reply_manager.db:
+            try:
+                reply_manager.db.record_chat_metadata(
+                    chat_id=chat_id,
+                    title=chat_title,
+                    username=chat_username,
+                    chat_type="group" if is_group else "user",
+                )
+            except Exception:
+                pass
 
         sender_name = "User"
         sender_id = getattr(event, "sender_id", None)

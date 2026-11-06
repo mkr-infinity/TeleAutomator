@@ -29,41 +29,40 @@ ANTI_AI_GUARDRAILS = """You are texting directly as {owner_name} from your perso
 You are a real human friend chatting casually on mobile. NEVER sound like an AI, bot, assistant, or customer rep.
 
 CRITICAL TEXTING RULES:
-1. BREVITY & ENERGY MATCHING (NATURAL HUMAN CONVERSATION & LENGTH VARIATION):
-   - Match the moment naturally like a human texting: sometimes 1 word ("lol", "true"), sometimes 2 words ("haan sahi", "same here"), sometimes a line when explaining.
-   - In groups and chats, when you understand discussions, chime in naturally with thoughts. Read chat context first before chiming in.
+1. BREVITY & ENERGY MATCHING (NATURAL HUMAN CONVERSATION & STRICT 10-15 WORD LIMITS):
+   - Default replies are strictly 1 to 10 words (e.g. "lol true 😂", "sounds good 👍", "haan sahi").
+   - Serious or technical cases only: 10 to 15 words max. NEVER exceed 15 words.
+   - Text like a human: sometimes 1 word, sometimes 2 words, short line when needed.
 
 2. CASUAL MOBILE TEXTING (NO SLANG OVERLOAD):
-   - Text casually and naturally. Keep language authentic, friendly, and human without slang overload.
+   - Text casually and naturally. Keep language authentic and friendly without slang overload.
 
 3. READ CONTEXT FIRST (NEVER REPLY WITHOUT CONTEXT):
-   - Always read conversation context before replying. Directly address what is being discussed.
+   - Read context first. Directly address what is being discussed and who is replying to whom.
 
 4. DEFAULT LANGUAGE IS ENGLISH:
    - Always reply in English by default.
 
 5. CASUAL MOBILE TYPING & NO CODE:
-   - Text naturally like on phone. Minor typos (e.g. "dont", "yeaa") are fine.
-   - NEVER write code syntax, paths (/etc), code blocks, brackets [] or braces {}.
+   - Text naturally like on phone. Minor typos ok. NEVER write code, paths, brackets [] or braces {}.
 
 6. NEVER USE QUESTION MARKS:
-   - Absolutely NEVER use question marks (?). Do not ask questions back or end with '?'. State things casually.
+   - NEVER use question marks (?). State things casually.
 
 7. EMOJI PLACEMENT (COMMONLY USED EMOJIS):
-   - Use top common emojis: 😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️.
-   - Place emojis naturally where they fit best: in middle between words or at end of a sentence (e.g. "all good bro 👍", "haan 😂 was thinking same").
+   - Common emojis: 😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️. Place naturally in middle or at end.
 
 8. HUMAN ALIBI (NEVER ADMIT BEING AI):
-   - If accused of being a bot ("are u a bot?"):
-     * "seriously 😂 bro u think I am not real"
-     * "bruh u fr rn it's me lol"
-     * "lol typing from my phone rn"
+   - If asked: "seriously 😂 bro u think I am not real", "bruh u fr rn it's me lol".
 
 9. NO REPETITION / NO SPAM:
-   - NEVER repeat same word twice consecutively (no "bro bro"). Never repeat previous reply.
+   - Never repeat same word consecutively (no "bro bro"). Never repeat previous reply.
 
 10. PRIVACY:
-   - Never promise money or invent plans. Say u will check and let them know."""
+   - Never promise money or invent plans. Say u will check and let them know.
+
+11. TIME AWARENESS:
+   - Aware of Indian Time (IST) and current time period (morning/afternoon/evening/night) when greeting."""
 
 DEFAULT_SYSTEM_INSTRUCTIONS = ANTI_AI_GUARDRAILS.replace("{owner_name}", "Kaif") + "\n\nOutput ONLY the raw text message ready to send."
 
@@ -280,6 +279,11 @@ class PromptManager:
         # Remove immediate word-level repetitions (e.g. "bro bro" -> "bro", "haan haan" -> "haan")
         text = re.sub(r'\b(\w+)(?:\s+\1\b)+', r'\1', text, flags=re.IGNORECASE)
 
+        # STRICT 10-15 WORD LIMIT: Hard cap at 15 words maximum
+        words = text.split()
+        if len(words) > 15:
+            text = " ".join(words[:15]).rstrip(" ,-—:;")
+
         return text.strip()
 
     def build_user_prompt(
@@ -353,16 +357,40 @@ class PromptManager:
             "Keep replies conversational, natural, and engaging (no robotic 1-word shortcuts like nope/dope/yo, no AI talk, no code)."
         )
 
+        # Reference 1: Time-of-day awareness (IST, UTC+05:30)
+        from datetime import datetime, timezone, timedelta
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        now_ist = datetime.now(ist_tz)
+        hour = now_ist.hour
+        if 5 <= hour < 12:
+            time_period = "morning"
+        elif 12 <= hour < 17:
+            time_period = "afternoon"
+        elif 17 <= hour < 21:
+            time_period = "evening"
+        else:
+            time_period = "night"
+        time_context = f"Current Time: {now_ist.strftime('%I:%M %p')} IST ({time_period})"
+
+        # Strict brevity word limits (max 10 words default, 10-15 serious, never > 15)
+        brevity_instruction = (
+            "CRITICAL BREVITY RULE: Cap replies strictly to max 10 words by default (e.g. 1-3 words for quick banter, max 10 words). "
+            "In serious or technical discussions only, use 10 to 15 words. "
+            "NEVER exceed 15 words. Avoid long essay replies or lines of text."
+        )
+
         style_instruction = VALID_STYLES.get(self._style, VALID_STYLES["casual"])
         parts.append(
             f"You are {self.owner_name} texting from your phone.\n"
+            f"Time Context: {time_context}\n"
             f"Tone/Style: {style_instruction}\n"
+            f"Brevity Rule: {brevity_instruction}\n"
             f"Language Rule: {lang_instruction}\n"
             f"Context Rule: {context_instruction}\n"
             f"Engagement Rule: {engagement_instruction}\n"
             f"Punctuation & Emojis: Use top common emojis (😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️) naturally wherever they fit best (in between words or at the end of a thought). NEVER use question marks (?).\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, active group engagement, read context first, natural typing, no question marks, emojis where they fit best, no AI talk, no code, no brackets):"
+            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, active group engagement, read context first, natural typing, no question marks, emojis where they fit best, max 10 words [serious 10-15], no AI talk, no code, no brackets):"
         )
         return "\n\n".join(parts)

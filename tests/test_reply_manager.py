@@ -893,7 +893,7 @@ def test_context_aging_and_clearcontext_safety(tmp_path: Path):
 
 
 def test_version_and_typing_speed_modulation(tmp_path: Path):
-    """Verify v2.0.5 branding in status and smart typing speed modulation."""
+    """Verify v2.0.6 branding in status and smart typing speed modulation."""
     async def _run():
         cfg = AppConfig(
             api_id=123,
@@ -908,9 +908,9 @@ def test_version_and_typing_speed_modulation(tmp_path: Path):
         generator = ReplyGenerator(cfg, database=db)
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
-        # 1. Version v2.0.5 in /status
+        # 1. Version v2.0.6 in /status
         st = await mgr.handle_control_command("/status")
-        assert "TeleAutomator v2.0.5 Status:" in st
+        assert "TeleAutomator v2.0.6 Status:" in st
 
         # 2. Smart typing delay modulation
         # Banter reply ("haha lol cool") vs thoughtful question ("why do you think this happens?")
@@ -1369,5 +1369,83 @@ def test_hard_five_second_minimum_cooldown(tmp_path: Path):
     can_reply2, reason = safety.can_reply(200, "hello again")
     assert can_reply2 is False
     assert "cooldown active" in reason
+
+
+def test_allowchat_details_with_name_and_username(tmp_path: Path):
+    """Verify /allowchat displays name and username of the added chat."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "allow_details.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # 1. Using stored DB metadata
+        db.record_chat_metadata(-100123456, title="Crypto Alpha", username="cryptoalpha", chat_type="group")
+        res1 = await mgr.handle_control_command("/allowchat -100123456")
+        assert "Group" in res1
+        assert "*Crypto Alpha*" in res1
+        assert "(@cryptoalpha)" in res1
+        assert "-100123456" in res1
+
+        # 2. Resolving via client entity mock
+        class MockEntity:
+            title = "Design Guild"
+            username = "designguild"
+        mock_client = AsyncMock()
+        mock_client.get_entity = AsyncMock(return_value=MockEntity())
+        mgr.set_telegram_client(mock_client)
+
+        res2 = await mgr.handle_control_command("/allowchat -100987654")
+        assert "Group" in res2
+        assert "*Design Guild*" in res2
+        assert "(@designguild)" in res2
+        assert "-100987654" in res2
+
+    asyncio.run(_run())
+
+
+def test_typing_indicator_while_ai_generates(tmp_path: Path):
+    """Verify typing indicator action is triggered while AI generates response in restricted_auto mode."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "typing_ind.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+        mgr.set_mode("restricted_auto")
+
+        action_calls = []
+        class MockActionContext:
+            async def __aenter__(self):
+                action_calls.append("typing_start")
+                return self
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                action_calls.append("typing_end")
+
+        mock_client = AsyncMock()
+        mock_client.action = MagicMock(return_value=MockActionContext())
+        mock_client.send_message = AsyncMock(return_value=MagicMock(id=999))
+        mgr.set_telegram_client(mock_client)
+
+        privacy.allow_chat(12345)
+        # Handle message in restricted_auto mode
+        await mgr.handle_incoming_eligible_message(
+            chat_id=12345,
+            chat_title="Alex Chat",
+            message_id=101,
+            sender_name="Alex",
+            sender_id=54321,
+            text="hello there",
+        )
+        assert mock_client.action.called
+        assert mock_client.action.call_args[0] == (12345, "typing")
+        assert "typing_start" in action_calls
+        assert "typing_end" in action_calls
+
+    asyncio.run(_run())
+
 
 
