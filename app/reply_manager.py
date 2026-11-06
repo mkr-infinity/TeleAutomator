@@ -54,6 +54,7 @@ class ReplyManager:
         self._last_reaction_time: float = 0.0
         self._last_reaction_time_by_chat: dict[int, float] = {}
         self._last_sent_reply_by_chat: dict[int, str] = {}
+        self._recent_replies_history: dict[int, list[str]] = {}
         self._last_group_activity: dict[int, float] = {}
         self._next_reaction_cooldown: float = random.uniform(
             float(self.db.get_state("reaction_min_cooldown_seconds", str(getattr(config, "reaction_min_cooldown_seconds", 3.0)))),
@@ -232,11 +233,10 @@ class ReplyManager:
             except Exception as e:
                 logger.error(f"Failed to generate AI reply for chat {chat_id}: {e}")
                 if is_mention:
-                    # For mentions, NEVER drop or send error to Saved Messages! Use human fallback reply
-                    logger.info(f"[MENTION FALLBACK] Using natural human fallback for mention in chat {chat_id}.")
+                    # For mentions, avoid leaking error to Saved Messages; use contextual dynamic fallback
+                    logger.info(f"[MENTION FALLBACK] Using natural dynamic fallback for mention in chat {chat_id}.")
                     draft = self.generator.prompt_manager.get_fallback_reply(clean_text)
                 else:
-                    # Strictly send issue/error to Saved Messages only; never leak to peer chat or group
                     await self._notify_issue_to_saved_messages(
                         chat_id=chat_id,
                         chat_title=chat_title,
@@ -248,7 +248,7 @@ class ReplyManager:
 
         if not draft or draft.strip().lower() in ("none", "none.", "null", "null.", "undefined", ""):
             if is_mention:
-                logger.info(f"[MENTION FALLBACK] Empty or None AI draft, using natural human fallback for mention in chat {chat_id}.")
+                logger.info(f"[MENTION FALLBACK] Empty AI draft, using dynamic fallback for mention in chat {chat_id}.")
                 draft = self.generator.prompt_manager.get_fallback_reply(clean_text)
             else:
                 logger.warning(f"No valid draft generated for chat {chat_id}.")
@@ -1922,8 +1922,19 @@ class ReplyManager:
             return False
 
     def _prevent_duplicate_reply(self, chat_id: int, text: str) -> str:
-        """Allow AI to handle conversation dynamically without hardcoded keyword alternatives."""
-        return text.strip()
+        """Prevent repeating the same exact reply or canned phrase in this chat."""
+        clean = text.strip()
+        if not clean:
+            return ""
+
+        recent = self._recent_replies_history.get(chat_id, [])
+        clean_lower = clean.lower()
+
+        for past in recent:
+            if clean_lower == past.lower():
+                logger.warning(f"Suppressed duplicate reply in chat {chat_id}: '{clean}' was sent recently.")
+                return ""
+        return clean
 
     def is_group_message_relevant(self, chat_id: int, text: str, chat_title: str = "") -> bool:
         """Check if an incoming group message is relevant to the group's topic, context, or active discussion."""
@@ -2135,6 +2146,11 @@ class ReplyManager:
             first_sent = await self._client.send_message(chat_id, first_part, reply_to=reply_to_msg_id)
             self.safety.mark_reply_sent(chat_id)
             self._last_sent_reply_by_chat[chat_id] = first_part
+            if chat_id not in self._recent_replies_history:
+                self._recent_replies_history[chat_id] = []
+            self._recent_replies_history[chat_id].append(first_part)
+            if len(self._recent_replies_history[chat_id]) > 8:
+                self._recent_replies_history[chat_id].pop(0)
             if chat_id < 0:
                 self.mark_group_activity(chat_id)
             first_msg_id = getattr(first_sent, "id", 0)

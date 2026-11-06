@@ -30,7 +30,11 @@ class LocalRuleProvider(AIProvider):
         lower = prompt.lower()
         if any(w in lower for w in ("bot", "ai", "real", "fake", "who are you")):
             return "bruh u fr rn it's me lol"
-        return "haan bolo batao kya chal raha"
+        if any(w in lower for w in ("tonight", "free", "available", "meet", "time", "coming", "there")):
+            return "yeah sounds good, will let you know 👍"
+        if any(w in lower for w in ("thanks", "thank")):
+            return "anytime bro 👍"
+        return "sounds good bro 👍"
 
 
 class GeminiProvider(AIProvider):

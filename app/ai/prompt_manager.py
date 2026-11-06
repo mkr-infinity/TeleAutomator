@@ -56,7 +56,7 @@ CRITICAL TEXTING RULES:
    - If asked: "seriously 😂 bro u think I am not real", "bruh u fr rn it's me lol".
 
 9. NO REPETITION / NO SPAM:
-   - Never repeat same word consecutively (no "bro bro"). Never repeat previous reply.
+   - Never repeat previous replies or reuse same canned phrases. Keep each response completely fresh and unique.
 
 10. PRIVACY:
    - Never promise money or invent plans. Say u will check and let them know.
@@ -181,7 +181,7 @@ class PromptManager:
             return False
 
     def get_fallback_reply(self, incoming_text: str = "") -> str:
-        """Natural human fallback only when AI service is temporarily unavailable."""
+        """Dynamic contextual fallback only when AI service is temporarily unavailable."""
         import random
         import re
         low = (incoming_text or "").strip().lower()
@@ -192,11 +192,22 @@ class PromptManager:
                 "seriously 😂 bro u think I am not real",
                 "lol typing from phone rn",
             ])
+        if any(w in tokens for w in ("hi", "hey", "hello", "sup", "yo")):
+            return random.choice([
+                "hey there 👍",
+                "yo what's good",
+                "hey caught up with something will ping in a bit",
+            ])
+        if any(w in tokens for w in ("thanks", "thank", "thx")):
+            return random.choice([
+                "anytime bro 👍",
+                "all good",
+                "no problem at all",
+            ])
         return random.choice([
-            "haan bolo batao kya chal raha",
-            "all good here, caught up with something will text properly in a bit",
-            "sahi hai bro, batao aur kya update hai",
-            "just saw your text, tell me what's up",
+            "caught up with something rn will text in a bit",
+            "will check this out and let you know",
+            "got it, looking into it now",
         ])
 
     def clean_reply(self, raw_text: str) -> str:
@@ -362,18 +373,26 @@ class PromptManager:
             "NEVER exceed 15 words. Avoid long essay replies or lines of text."
         )
 
+        # Anti-repetition rule: never repeat same phrase or opening
+        repetition_instruction = (
+            "CRITICAL ANTI-REPETITION: Never repeat the same phrase, opening, or wording you already used in previous messages. "
+            "Never reuse canned phrases like 'just saw your text', 'caught up with', or identical greetings. "
+            "Every reply must be fresh, contextual, distinct, and tailored specifically to what was just said."
+        )
+
         style_instruction = VALID_STYLES.get(self._style, VALID_STYLES["casual"])
         parts.append(
             f"You are {self.owner_name} texting from your phone.\n"
             f"Time Context: {time_context}\n"
             f"Tone/Style: {style_instruction}\n"
             f"Brevity Rule: {brevity_instruction}\n"
+            f"Anti-Repetition Rule: {repetition_instruction}\n"
             f"Language Rule: {lang_instruction}\n"
             f"Context Rule: {context_instruction}\n"
             f"Engagement Rule: {engagement_instruction}\n"
             f"Punctuation & Emojis: Use top common emojis (😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️) naturally wherever they fit best (in between words or at the end of a thought). NEVER use question marks (?).\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, active group engagement, read context first, natural typing, no question marks, emojis where they fit best, max 10 words [serious 10-15], no AI talk, no code, no brackets):"
+            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, active group engagement, read context first, natural typing, no question marks, emojis where they fit best, max 10 words [serious 10-15], no repetition, no canned phrases, no AI talk, no code, no brackets):"
         )
         return "\n\n".join(parts)

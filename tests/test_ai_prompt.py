@@ -253,10 +253,11 @@ def test_conversational_engagement_instruction_in_prompt():
 
 
 def test_fallback_reply_mechanism():
-    """Verify get_fallback_reply produces engaging human responses without blunt word-shortcut dictionaries."""
+    """Verify get_fallback_reply produces engaging human responses without blunt word-shortcut dictionaries or repetitive canned phrases."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
     greeting_fb = pm.get_fallback_reply("hi")
-    assert any(h in greeting_fb for h in ("kya chal raha", "caught up", "batao aur", "tell me"))
+    assert any(h in greeting_fb for h in ("caught up", "what's good", "ping", "there", "hey"))
+    assert "just saw your text" not in greeting_fb
 
     alibi_fb = pm.get_fallback_reply("are you a bot?")
     assert "lol" in alibi_fb or "real" in alibi_fb

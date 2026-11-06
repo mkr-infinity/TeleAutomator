@@ -1546,6 +1546,33 @@ def test_typo_injection_and_auto_correction(tmp_path: Path):
     asyncio.run(_run())
 
 
+def test_anti_repetition_suppression_of_duplicate_replies(tmp_path: Path):
+    """Verify identical or repeated replies are suppressed and not repeated consecutively."""
+    cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+    db = Database(tmp_path / "dup.db")
+    safety = SafetyManager(cfg, db)
+    privacy = PrivacyManager(cfg, database=db)
+    generator = ReplyGenerator(cfg, database=db)
+    mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+    chat_id = 999
+    # First time: allowed
+    res1 = mgr._prevent_duplicate_reply(chat_id, "sounds good bro 👍")
+    assert res1 == "sounds good bro 👍"
+
+    # Simulate sending it
+    mgr._recent_replies_history[chat_id] = ["sounds good bro 👍"]
+
+    # Second time with same text: suppressed
+    res2 = mgr._prevent_duplicate_reply(chat_id, "sounds good bro 👍")
+    assert res2 == ""
+
+    # Different text: allowed
+    res3 = mgr._prevent_duplicate_reply(chat_id, "will check and ping you")
+    assert res3 == "will check and ping you"
+
+
+
 
 
 
