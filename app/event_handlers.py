@@ -155,50 +155,61 @@ def register_handlers(
 
         # Group smart engagement decision
         if is_group and reply_manager.db:
-            # Check which person is replying to which person:
-            # If someone is replying to another member (NOT us), never hijack or reply to it unless explicitly mentioned!
-            if is_reply_to_other and not is_explicitly_mentioned:
-                logger.debug(
-                    f"Group message in {chat_id} is a reply from {sender_name} to {reply_target_name or 'another member'}. "
-                    "Skipping reply to avoid intercepting other people's conversation."
-                )
-                return
-
+            # Mention-only filter (default: OFF / "0" so account actively engages in group)
             strict_mention = reply_manager.db.get_state("group_mention_only", "0") == "1"
             if strict_mention and not is_mention:
                 logger.debug(f"Group message in {chat_id} ignored: strict mention-only active.")
                 return
 
             import random
+            is_broadcast_or_greeting = reply_manager.is_group_broadcast_or_greeting(text)
+
             if is_mention:
                 # Direct mention or reply to our account: always reply
                 reply_manager.mark_group_activity(chat_id)
-            else:
-                # Smart human group engagement logic:
-                is_idle_20m = reply_manager.check_group_20m_idle(chat_id)
-                if is_idle_20m:
-                    logger.info(f"[GROUP 20M ENGAGEMENT] 20 minutes elapsed without engagement in group {chat_id}. Engaging naturally.")
+            elif is_broadcast_or_greeting:
+                # Group-wide greeting or open callout (e.g. "hi guys", "hello everyone", "gm all", "anyone free"):
+                # Active human engagement: acknowledge group greetings (~85% reply, ~10% emoji reaction)
+                roll = random.random()
+                if roll < 0.85:
+                    logger.info(f"[GROUP GREETING ENGAGEMENT] Message in {chat_id} addressed the group ('{text[:30]}'). Replying as human.")
                     reply_manager.mark_group_activity(chat_id)
+                elif roll < 0.95:
+                    logger.info(f"[GROUP GREETING REACTION] Reacting with emoji to group greeting in chat {chat_id}.")
+                    await reply_manager.maybe_send_reaction(chat_id, message_id, text)
+                    reply_manager.mark_group_activity(chat_id)
+                    return
                 else:
-                    is_relevant = reply_manager.is_group_message_relevant(chat_id, text, chat_title)
-                    if is_relevant:
-                        # Relevant to group topic: ~65% reply, ~8% selective reaction, ~27% passive reading
-                        roll = random.random()
-                        if roll < 0.65:
-                            logger.info(f"[GROUP TOPIC ENGAGEMENT] Message in {chat_id} is relevant to group topic. Replying ({int(0.65*100)}%).")
-                            reply_manager.mark_group_activity(chat_id)
-                        elif roll < 0.73:
-                            logger.info(f"[GROUP TOPIC REACTION] Message in {chat_id} is relevant. Reacting with emoji.")
-                            await reply_manager.maybe_send_reaction(chat_id, message_id, text)
-                            reply_manager.mark_group_activity(chat_id)
-                            return
-                        else:
-                            logger.debug(f"Group message in {chat_id} relevant, but choosing to read silently.")
-                            return
+                    logger.debug(f"Group broadcast message in {chat_id} acknowledged silently.")
+                    return
+            else:
+                # Active group conversation (even when replying to another member or sending into group stream):
+                # Engages dynamically based on chatty rate without waiting 20 minutes!
+                chatty_prob = float(reply_manager.db.get_state(
+                    "chatty_probability",
+                    str(getattr(reply_manager.config, "chatty_probability", 0.20))
+                ))
+                is_relevant = reply_manager.is_group_message_relevant(chat_id, text, chat_title)
+                # If message is relevant to group topic or discussion, boost engagement
+                effective_prob = max(chatty_prob, 0.40) if is_relevant else chatty_prob
+
+                # If replying to another member specifically, slightly moderate chime-in rate unless relevant
+                if is_reply_to_other and not is_relevant:
+                    effective_prob = effective_prob * 0.70
+
+                if effective_prob > 0.0 and random.random() < effective_prob:
+                    # Decide between text reply (~80%) and emoji reaction (~20%)
+                    if random.random() < 0.80:
+                        logger.info(f"[GROUP ENGAGEMENT] Active chime-in in group {chat_id} (prob: {effective_prob:.2f}). Replying as human.")
+                        reply_manager.mark_group_activity(chat_id)
                     else:
-                        # Message is not relevant to group topic, not a mention, and not after 20m idle
-                        logger.debug(f"Group message in {chat_id} ignored: not mentioned and not relevant to group topic.")
+                        logger.info(f"[GROUP REACTION] Chime-in with emoji reaction in group {chat_id}.")
+                        await reply_manager.maybe_send_reaction(chat_id, message_id, text)
+                        reply_manager.mark_group_activity(chat_id)
                         return
+                else:
+                    logger.debug(f"Group message in {chat_id} read silently (prob: {effective_prob:.2f}).")
+                    return
 
         # Natural emoji reaction across sentiment spectrum (humor, excitement, agreement, surprise, warmth)
         if not is_group or not is_reply_to_other:

@@ -3,7 +3,7 @@
 import asyncio
 import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from app.ai.reply_generator import ReplyGenerator
 from app.config import AppConfig
 from app.privacy_manager import PrivacyManager
@@ -2032,6 +2032,136 @@ def test_multibubble_splitting_and_controls(tmp_path: Path):
         # Should have sent only 1 message bubble
         assert mock_client.send_message.call_count == 1
         assert mock_client.send_message.call_args[0][1] == "sounds good... will let you know"
+
+    asyncio.run(_run())
+
+
+def test_group_broadcast_and_human_engagement(tmp_path: Path):
+    """Verify group broadcast greetings and human chime-in engagement without mentions or 20m delays."""
+    # 1. Test is_group_broadcast_or_greeting unit logic
+    assert ReplyManager.is_group_broadcast_or_greeting("hi guys") is True
+    assert ReplyManager.is_group_broadcast_or_greeting("hello everyone") is True
+    assert ReplyManager.is_group_broadcast_or_greeting("gm all") is True
+    assert ReplyManager.is_group_broadcast_or_greeting("anyone here") is True
+    assert ReplyManager.is_group_broadcast_or_greeting("what's up guys") is True
+    assert ReplyManager.is_group_broadcast_or_greeting("hey folks") is True
+    assert ReplyManager.is_group_broadcast_or_greeting("random note") is False
+
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            reply_mode="restricted_auto",
+            data_dir=tmp_path,
+            global_cooldown_seconds=0,
+            per_chat_cooldown_seconds=0,
+            typing_delay_seconds=0.0,
+            min_delay_seconds=0.0,
+            max_delay_seconds=0.0,
+        )
+        db = Database(tmp_path / "group_engage.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+        safety.set_auto_authorization(True)
+
+        # Verify mention-only filter is OFF by default
+        assert db.get_state("group_mention_only", "0") == "0"
+
+        # Mock telethon client
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(return_value=MagicMock(id=5001))
+        mgr.set_telegram_client(mock_client)
+
+        group_id = -100555666
+        privacy.allow_chat(group_id)
+
+        # Incoming broadcast greeting: "hi guys"
+        await mgr.handle_incoming_eligible_message(
+            chat_id=group_id,
+            chat_title="Friends Group",
+            message_id=101,
+            sender_id=789,
+            sender_name="Charlie",
+            text="hi guys",
+            is_mention=False,
+        )
+
+        # In restricted_auto mode, should engage immediately without needing 20m or tag
+        assert mock_client.send_message.call_count == 1
+
+    asyncio.run(_run())
+
+
+def test_event_handler_group_broadcast_engagement(tmp_path: Path):
+    """Verify that event_handlers dispatches group broadcast greetings without needing mentions."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            reply_mode="restricted_auto",
+            data_dir=tmp_path,
+            global_cooldown_seconds=0,
+            per_chat_cooldown_seconds=0,
+            typing_delay_seconds=0.0,
+            min_delay_seconds=0.0,
+            max_delay_seconds=0.0,
+        )
+        db = Database(tmp_path / "eh_broadcast.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+        safety.set_auto_authorization(True)
+
+        group_id = -100777888
+        privacy.allow_chat(group_id)
+
+        from app.message_filter import MessageFilter
+        mf = MessageFilter(privacy_manager=privacy, safety_manager=safety, my_username="kaif", my_user_id=111, database=db)
+
+        # Mock client
+        mock_client = AsyncMock()
+        handlers = []
+        def mock_on(event_type):
+            def decorator(func):
+                handlers.append(func)
+                return func
+            return decorator
+        mock_client.on = mock_on
+        mock_client.send_message = AsyncMock(return_value=MagicMock(id=999))
+        mgr.set_telegram_client(mock_client)
+
+        from app.event_handlers import register_handlers
+        register_handlers(mock_client, 111, mf, mgr)
+
+        # Retrieve registered on_new_message callback
+        callback = handlers[0]
+
+        # Mock incoming group event for "hello everyone"
+        event = MagicMock()
+        event.chat_id = group_id
+        event.is_group = True
+        event.is_channel = False
+        event.out = False
+        event.sender_id = 9999
+        event.id = 200
+        event.raw_text = "hello everyone"
+        event.message = MagicMock(mentioned=False, action=None)
+        event.is_reply = False
+
+        mock_chat = MagicMock(title="Public Room", username="pubroom")
+        event.get_chat = AsyncMock(return_value=mock_chat)
+        mock_sender = MagicMock(first_name="Sam", username="sammy")
+        event.get_sender = AsyncMock(return_value=mock_sender)
+
+        # Execute event handler with deterministic roll
+        with patch("random.random", return_value=0.1):
+            await callback(event)
+
+        # Account engaged in the group with text reply
+        assert mock_client.send_message.call_count >= 1
 
     asyncio.run(_run())
 
