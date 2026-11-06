@@ -418,7 +418,11 @@ class Database:
             results = []
             for r in reversed(rows):
                 sender = "You" if r["is_outgoing"] == 1 else (r["sender_name"] or "Contact")
-                results.append({"sender": sender, "text": r["text"]})
+                results.append({
+                    "sender": sender,
+                    "text": r["text"],
+                    "is_outgoing": bool(r["is_outgoing"]),
+                })
             return results
 
     def clear_chat_context(self, chat_id: int) -> int:

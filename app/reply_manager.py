@@ -461,6 +461,99 @@ class ReplyManager:
         except Exception as e:
             logger.error(f"Error in deferred mention reply: {e}")
 
+    async def _schedule_spontaneous_followup(
+        self,
+        chat_id: int,
+        sent_text: str,
+        delay_seconds: Optional[float] = None,
+    ) -> None:
+        """Schedule a contextual, delayed follow-up 10–20s after a 1–3 word reply to mimic human trains of thought."""
+        try:
+            delay = delay_seconds if delay_seconds is not None else random.uniform(10.0, 20.0)
+            await asyncio.sleep(delay)
+
+            # Safety checks
+            if self.safety.is_emergency_stopped or self.safety.get_remaining_pause_seconds() > 0:
+                return
+            is_quiet, _ = self.safety.is_in_quiet_hours()
+            if is_quiet:
+                return
+
+            # Check if contact messaged in the meantime; if so, never interrupt
+            recent = self.db.get_recent_chat_messages(chat_id, limit=1)
+            if not recent:
+                return
+            latest = recent[-1]
+            if not latest.get("is_outgoing", False) or latest.get("text") != sent_text:
+                logger.debug(f"[SPONTANEOUS FOLLOW-UP] Aborted: chat {chat_id} had intervening activity.")
+                return
+
+            # Call AI dynamically to generate an ultra-short follow-up thought
+            prompt_instruction = (
+                f"You just texted: \"{sent_text}\". "
+                f"Send an ultra-short spontaneous follow-up thought (1 to 4 words). "
+                f"Natural human texting, no names, no greetings, no code, no question marks."
+            )
+
+            history = self.db.get_recent_chat_messages(chat_id, limit=5)
+            followup_raw = await asyncio.to_thread(
+                self.generator.generate,
+                sender_name="Contact",
+                incoming_text=prompt_instruction,
+                conversation_history=history,
+                is_group=(chat_id < 0),
+                is_mention=False,
+            )
+
+            followup_clean = self.generator.prompt_manager.clean_reply(followup_raw)
+            if not followup_clean or len(followup_clean.split()) > 8:
+                return
+
+            # Check duplicate
+            followup_clean = self._prevent_duplicate_reply(chat_id, followup_clean)
+            if not followup_clean:
+                return
+
+            can_send, reason = self.safety.can_reply(chat_id, followup_clean)
+            if not can_send:
+                logger.debug(f"[SPONTANEOUS FOLLOW-UP] Safety suppression: {reason}")
+                return
+
+            # Short typing burst
+            typing_duration = random.uniform(1.2, 2.5)
+            try:
+                if hasattr(self._client, "action") and callable(self._client.action):
+                    act = self._client.action(chat_id, "typing")
+                    if hasattr(act, "__aenter__"):
+                        async with act:
+                            await asyncio.sleep(typing_duration)
+                    else:
+                        await asyncio.sleep(typing_duration)
+                else:
+                    await asyncio.sleep(typing_duration)
+            except Exception:
+                await asyncio.sleep(typing_duration)
+
+            if self.safety.is_emergency_stopped:
+                return
+
+            sent_msg = await self._client.send_message(chat_id, followup_clean)
+            self.safety.mark_reply_sent(chat_id)
+            sent_id = getattr(sent_msg, "id", 0)
+            if not isinstance(sent_id, int):
+                sent_id = 0
+            self.db.record_chat_message(
+                chat_id=chat_id,
+                message_id=sent_id,
+                sender_id=None,
+                sender_name=self.generator.prompt_manager.owner_name,
+                text=followup_clean,
+                is_outgoing=True,
+            )
+            logger.info(f"[SPONTANEOUS FOLLOW-UP SENT] Sent follow-up '{followup_clean}' to chat {chat_id}.")
+        except Exception as e:
+            logger.debug(f"Error in spontaneous follow-up: {e}")
+
     async def _notify_approval_needed(
         self,
         approval_id: int,
@@ -626,7 +719,8 @@ class ReplyManager:
                 "• `/reactioncooldown <min> <max>` - Set random reaction cooldown (e.g. `3 9` seconds)\n"
                 "• `/chatcooldown <min> <max>` - Custom per-chat reply cooldown (e.g. `5 60`)\n"
                 "• `/globalcooldown <min> <max>` - Custom global reply cooldown (e.g. `5 60`)\n"
-                "• `/ratelimit <per_min> <per_hour>` - Anti-spam rate limits (e.g. `/ratelimit 5 30`)\n\n"
+                "• `/ratelimit <per_min> <per_hour>` - Anti-spam rate limits (e.g. `/ratelimit 5 30`)\n"
+                "• `/followup <on|off>` - Spontaneous delayed follow-ups for short replies\n\n"
                 "*Quiet Hours (Sleep Schedule):*\n"
                 "• `/quiethours on [start] [end]` - Turn ON sleep schedule (e.g. `/quiethours on 23:00 07:00`)\n"
                 "• `/quiethours off` - Turn OFF sleep schedule\n"
@@ -1615,6 +1709,18 @@ class ReplyManager:
                 except ValueError:
                     return "Usage: `/chatty on`, `/chatty off`, or `/chatty <0-100>`"
 
+        if cmd in ("/followup", "/followups", "/spontaneous"):
+            if len(cmd_parts) > 1:
+                sub = cmd_parts[1].lower().strip()
+                if sub in ("on", "enable", "1"):
+                    self.db.set_state("spontaneous_followup_enabled", "1")
+                    return "✅ Spontaneous delayed follow-ups *ENABLED* (10–20s later for 1–3 word replies)."
+                elif sub in ("off", "disable", "0"):
+                    self.db.set_state("spontaneous_followup_enabled", "0")
+                    return "🛑 Spontaneous delayed follow-ups *DISABLED*."
+            curr = "ENABLED" if self.db.get_state("spontaneous_followup_enabled", "1") == "1" else "DISABLED"
+            return f"💬 Spontaneous follow-ups: *{curr}* (Toggle with `/followup <on|off>`)."
+
         if cmd in ("/pause", "/off"):
             if len(cmd_parts) < 2:
                 return "Usage: `/pause <duration>` (e.g. `/pause 2h`, `/pause 30m`, `/pause 45m`)"
@@ -2254,6 +2360,24 @@ class ReplyManager:
                         is_outgoing=True,
                     )
                     logger.info(f"Sent natural typo correction '{typo_correction}' to chat {chat_id}.")
+
+            # Suggestion 2: Spontaneous Delayed Follow-Ups (10–20s later for 1–3 word single-message replies)
+            followup_enabled = self.db.get_state("spontaneous_followup_enabled", "1") == "1"
+            if (
+                followup_enabled
+                and len(msg_parts) == 1
+                and not typo_correction
+                and not is_mention
+                and len(first_part.split()) <= 3
+                and self.current_mode == "restricted_auto"
+            ):
+                if random.random() < 0.18:
+                    asyncio.create_task(
+                        self._schedule_spontaneous_followup(
+                            chat_id=chat_id,
+                            sent_text=first_part,
+                        )
+                    )
 
             # Send subsequent message parts (2 or 3) with short natural typing pause
             for idx, part in enumerate(msg_parts[1:], start=2):

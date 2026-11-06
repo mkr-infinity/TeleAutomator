@@ -228,6 +228,32 @@ def test_custom_prompt_wrapping_and_anti_ai_guardrails():
     assert "BREVITY & ENERGY MATCHING" in pm.system_instructions
 
 
+def test_custom_prompt_word_rule_priority():
+    """Verify that if custom prompt mentions a word limit, it takes priority over the default 8-word cap."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+
+    # 1. Without custom word rule: capped to 8 words
+    ten_words = "one two three four five six seven eight nine ten"
+    assert len(pm.clean_reply(ten_words).split()) == 8
+
+    # 2. With custom word rule specified (e.g. 15 words)
+    pm.custom_prompt = "You are a tech advisor. Always reply in up to 15 words."
+    assert pm.get_custom_word_limit() == 15
+    assert len(pm.clean_reply(ten_words).split()) == 10  # 10 words preserved!
+    fourteen_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
+    assert len(pm.clean_reply(fourteen_words).split()) == 14
+
+    # 3. With custom detailed/paragraphs directive
+    pm.custom_prompt = "You are an author who provides detailed explanations."
+    assert pm.get_custom_word_limit() == 100
+    assert len(pm.clean_reply(fourteen_words).split()) == 14
+
+    # 4. Reset custom prompt: returns to default 8 words cap
+    pm.reset_custom_prompt()
+    assert pm.get_custom_word_limit() is None
+    assert len(pm.clean_reply(ten_words).split()) == 8
+
+
 def test_ai_confession_interception():
     """Verify that any accidental AI admission is intercepted and replaced with human alibi banter."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")

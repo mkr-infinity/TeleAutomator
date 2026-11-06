@@ -1823,6 +1823,70 @@ def test_floodwait_and_peerflood_handling(tmp_path: Path):
     asyncio.run(_run())
 
 
+def test_spontaneous_followup_command_and_execution(tmp_path: Path):
+    """Verify /followup command and spontaneous delayed follow-up behavior."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            data_dir=tmp_path,
+            global_cooldown_seconds=0,
+            per_chat_cooldown_seconds=0,
+            min_delay_seconds=0.0,
+            max_delay_seconds=0.0,
+        )
+        db = Database(tmp_path / "followup.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # 1. /followup command tests
+        res1 = await mgr.handle_control_command("/followup")
+        assert "Spontaneous follow-ups" in res1
+        assert "ENABLED" in res1
+
+        res_off = await mgr.handle_control_command("/followup off")
+        assert "DISABLED" in res_off
+        assert db.get_state("spontaneous_followup_enabled") == "0"
+
+        res_on = await mgr.handle_control_command("/followup on")
+        assert "ENABLED" in res_on
+        assert db.get_state("spontaneous_followup_enabled") == "1"
+
+        # 2. Execution test: Intervening peer message cancels follow-up
+        class MockActionContext:
+            async def __aenter__(self):
+                return self
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                pass
+
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(return_value=MagicMock(id=888))
+        mock_client.action = MagicMock(return_value=MockActionContext())
+        mgr.set_telegram_client(mock_client)
+
+        chat_id = 1234
+        # Record initial reply
+        db.record_chat_message(chat_id, 100, None, "Kaif", "on my way", is_outgoing=True)
+        # Intervening peer message arrives
+        db.record_chat_message(chat_id, 101, 555, "Alice", "okay see ya", is_outgoing=False)
+
+        # Run follow-up with 0s delay
+        await mgr._schedule_spontaneous_followup(chat_id, "on my way", delay_seconds=0.0)
+        # Should NOT send follow-up because peer already replied!
+        mock_client.send_message.assert_not_called()
+
+        # 3. Execution test: No intervening message -> sends follow-up
+        chat_id2 = 5678
+        db.record_chat_message(chat_id2, 200, None, "Kaif", "heading out", is_outgoing=True)
+        await mgr._schedule_spontaneous_followup(chat_id2, "heading out", delay_seconds=0.0)
+        # Should have sent follow-up
+        assert mock_client.send_message.call_count == 1
+
+    asyncio.run(_run())
+
+
 
 
 

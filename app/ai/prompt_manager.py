@@ -136,6 +136,23 @@ class PromptManager:
         if name and name.strip():
             self.owner_name = name.strip()
 
+    def get_custom_word_limit(self) -> Optional[int]:
+        """Check if custom prompt explicitly specifies its own word limit or length rule."""
+        custom = self.custom_prompt.lower()
+        if not custom:
+            return None
+        # Check for explicit word limit like "15 words", "max 20 words", "10-25 words", "reply in 12 words"
+        m = re.search(r"(?:max(?:imum)?\s*|up to\s*|in\s*|\b)(\d+)\s*words?\b", custom)
+        if m:
+            try:
+                return max(1, int(m.group(1)))
+            except ValueError:
+                pass
+        # Check for long format keywords like "detailed", "paragraphs", "essay", "full explanation"
+        if any(term in custom for term in ("detailed", "paragraph", "paragraphs", "in-depth", "essay", "longer response", "explain fully")):
+            return 100
+        return None
+
     def get_default_instructions(self) -> str:
         """Load default instructions from system_prompt.txt file, with fallback."""
         default_text = ""
@@ -149,18 +166,28 @@ class PromptManager:
         return default_text.replace("{owner_name}", self.owner_name)
 
     def get_system_instructions(self, style_override: Optional[str] = None) -> str:
-        """Return instructions for AI generation: uses custom prompt if set, else loads default prompt text."""
+        """Return instructions for AI generation: uses custom prompt as top priority, honoring custom word rules if set."""
         custom = self.custom_prompt
         target_style = style_override if (style_override and style_override in VALID_STYLES) else self._style
         style_rule = f"\nACTIVE STYLE: {VALID_STYLES[target_style]}" if (target_style != "casual" and target_style in VALID_STYLES) else ""
 
         if custom:
-            # Custom prompt is set: USE CUSTOM PROMPT INSTEAD OF DEFAULT SYSTEM PROMPT!
+            # Custom prompt is top priority: if word rule is mentioned in custom prompt, use it; else use 1-5 words default
+            custom_limit = self.get_custom_word_limit()
+            if custom_limit:
+                length_directive = (
+                    f"- BREVITY & ENERGY MATCHING: Follow your custom prompt's word length rule above as first priority."
+                )
+            else:
+                length_directive = (
+                    f"- BREVITY & ENERGY MATCHING (STRICT 1 TO 5 WORDS): Keep replies strictly between 1 to 5 words (e.g. 'true that 😂', 'sounds good', 'on my way', 'nah not really'). Max 8 words in serious cases only."
+                )
+
             core_guardrails = (
                 f"\n\nCORE ANTI-AI & SAFETY CONSTRAINTS (MANDATORY):\n"
                 f"- Text directly as {self.owner_name} from your personal phone in Telegram.\n"
                 f"- HUMAN ALIBI: Real human friend chatting on mobile. Never sound like an AI, bot, or assistant.\n"
-                f"- BREVITY & ENERGY MATCHING (STRICT 1 TO 5 WORDS): Keep replies strictly between 1 to 5 words (e.g. 'true that 😂', 'sounds good', 'on my way', 'nah not really'). Max 8 words in serious cases only.\n"
+                f"{length_directive}\n"
                 f"- NEVER write anyone's name, user name, or @username in message text (swipe-to-reply quote threading only).\n"
                 f"- CASUAL MOBILE TEXTING (NO SLANG OVERLOAD): Casual texting tone without slang overload.\n"
                 f"- NO CODE: Never write code, paths, or brackets [] {{}}, no question marks (?).\n"
@@ -290,10 +317,12 @@ class PromptManager:
         # Remove immediate word-level repetitions (e.g. "bro bro" -> "bro", "haan haan" -> "haan")
         text = re.sub(r'\b(\w+)(?:\s+\1\b)+', r'\1', text, flags=re.IGNORECASE)
 
-        # STRICT 1 TO 5 WORDS LIMIT: Hard cap at 8 words maximum
+        # WORD LIMIT: If custom prompt specifies its own word limit, honor it; otherwise cap at 8 words max
+        custom_cap = self.get_custom_word_limit()
+        effective_cap = custom_cap if custom_cap is not None else 8
         words = text.split()
-        if len(words) > 8:
-            text = " ".join(words[:8]).rstrip(" ,-—:;")
+        if len(words) > effective_cap:
+            text = " ".join(words[:effective_cap]).rstrip(" ,-—:;")
 
         return text.strip()
 
