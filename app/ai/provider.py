@@ -60,7 +60,7 @@ class GeminiProvider(AIProvider):
         payload = {
             "system_instruction": {"parts": [{"text": system_instructions}]},
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.6, "maxOutputTokens": 200},
+            "generationConfig": {"temperature": 0.6},
         }
         data = json.dumps(payload).encode("utf-8")
 
@@ -124,7 +124,7 @@ class OpenAIProvider(AIProvider):
         usage_callback: Optional[Any] = None,
         reasoning_effort: str = "default",
         temperature: float = 0.6,
-        max_tokens: int = 400,
+        max_tokens: Optional[int] = None,
     ):
         self.api_key = api_key
         self.model = model or "gpt-4o-mini"
@@ -174,8 +174,9 @@ class OpenAIProvider(AIProvider):
                     {"role": "user", "content": prompt},
                 ],
                 "temperature": self.temperature,
-                "max_tokens": self.max_tokens,
             }
+            if self.max_tokens is not None and self.max_tokens > 0:
+                payload["max_tokens"] = self.max_tokens
             if is_inception and self.reasoning_effort not in ("off", "none", "", "default"):
                 payload["reasoning_effort"] = self.reasoning_effort
 
@@ -234,8 +235,9 @@ class OpenAIProvider(AIProvider):
             payload: Dict[str, Any] = {
                 "model": m,
                 "messages": [{"role": "user", "content": "hi"}],
-                "max_tokens": 10,
             }
+            if self.max_tokens is not None and self.max_tokens > 0:
+                payload["max_tokens"] = self.max_tokens
             if is_inception and self.reasoning_effort not in ("off", "none", "", "default"):
                 payload["reasoning_effort"] = self.reasoning_effort
             data = json.dumps(payload).encode("utf-8")

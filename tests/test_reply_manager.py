@@ -758,6 +758,9 @@ def test_token_usage_tracker_and_ai_parameters(tmp_path: Path):
         tokens_res = await mgr.handle_control_command("/maxtokens 180")
         assert "180" in tokens_res
         assert db.get_state("ai_max_tokens") == "180"
+        reset_tokens = await mgr.handle_control_command("/maxtokens default")
+        assert "reset to *default*" in reset_tokens
+        assert db.get_state("ai_max_tokens") == ""
 
         # 6. /aiconfig command
         config_res = await mgr.handle_control_command("/aiconfig")

@@ -1045,8 +1045,15 @@ class ReplyManager:
 
         if cmd in ("/maxtokens", "/maxoutput"):
             if len(cmd_parts) < 2:
-                curr = self.db.get_state("ai_max_tokens", "200")
-                return f"📝 *Current Max Output Tokens:* `{curr}`\nUsage: `/maxtokens <tokens>` (e.g. `/maxtokens 250`)"
+                curr = self.db.get_state("ai_max_tokens", "")
+                curr_display = curr if curr else "default (provider decided)"
+                return f"📝 *Current Max Output Tokens:* `{curr_display}`\nUsage: `/maxtokens <tokens>` or `/maxtokens default`"
+            target = cmd_parts[1].lower().strip()
+            if target in ("default", "reset", "auto", "provider", "none", "off"):
+                self.db.set_state("ai_max_tokens", "")
+                if hasattr(self.generator.provider, "max_tokens"):
+                    self.generator.provider.max_tokens = None
+                return "📝 AI max output tokens reset to *default* (let provider decide)."
             try:
                 val = max(10, int(cmd_parts[1]))
                 self.db.set_state("ai_max_tokens", str(val))
@@ -1054,7 +1061,7 @@ class ReplyManager:
                     self.generator.provider.max_tokens = val
                 return f"📝 AI max output tokens set to *{val}*."
             except ValueError:
-                return "Error: Max tokens must be a valid integer."
+                return "Error: Max tokens must be a valid integer or 'default'."
 
         if cmd in ("/aiconfig", "/aisettings"):
             prov = self.db.get_state("ai_provider", self.config.ai_provider)
@@ -1062,7 +1069,8 @@ class ReplyManager:
             url = self.db.get_state("ai_base_url", self.config.ai_base_url or "https://api.inceptionlabs.ai/v1")
             eff = self.db.get_state("ai_reasoning_effort", "default")
             temp = self.db.get_state("ai_temperature", "0.6")
-            mtok = self.db.get_state("ai_max_tokens", "200")
+            raw_mtok = self.db.get_state("ai_max_tokens", "")
+            mtok = raw_mtok if raw_mtok else "default (provider decided)"
             curr_key = self.db.get_state("ai_api_key", self.config.ai_api_key or "")
             masked_key = f"`{curr_key[:7]}...{curr_key[-4:]}`" if len(curr_key) > 11 else ("`Configured`" if curr_key else "`Missing`")
             cands = []

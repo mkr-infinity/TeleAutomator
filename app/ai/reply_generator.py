@@ -47,17 +47,16 @@ def create_ai_provider(config: AppConfig, database: Optional[Any] = None) -> AIP
 
         reasoning_effort = "default"
         temperature = 0.6
-        max_tokens = 400
+        max_tokens = None
         if database:
             reasoning_effort = database.get_state("ai_reasoning_effort", "default")
             try:
                 temperature = float(database.get_state("ai_temperature", "0.6"))
             except ValueError:
                 pass
-            try:
-                max_tokens = int(database.get_state("ai_max_tokens", "400"))
-            except ValueError:
-                pass
+            raw_mtok = database.get_state("ai_max_tokens", "")
+            if raw_mtok and raw_mtok.strip().isdigit() and int(raw_mtok.strip()) > 0:
+                max_tokens = int(raw_mtok.strip())
 
         logger.info(f"Initializing {target_name} OpenAI-compatible AI provider (base_url: {default_base_url or 'default'}).")
         return OpenAIProvider(

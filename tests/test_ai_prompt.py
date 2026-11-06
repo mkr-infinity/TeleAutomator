@@ -176,6 +176,36 @@ def test_openai_provider_candidate_models_and_fallback():
         assert call_count == 2
 
 
+def test_max_tokens_defaults_to_provider_native():
+    """Verify max_tokens defaults to None (let provider decide) and is omitted from payload to prevent token starvation."""
+    import json
+    from unittest.mock import MagicMock, patch
+    from app.ai.provider import OpenAIProvider
+
+    provider = OpenAIProvider(api_key="test_key", model="mercury-3")
+    assert provider.max_tokens is None
+
+    sent_payload = None
+    def mock_urlopen(req, timeout=15):
+        nonlocal sent_payload
+        sent_payload = json.loads(req.data.decode("utf-8"))
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+        return mock_resp
+
+    with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        provider.generate_reply("Hi", "Be brief")
+        assert "max_tokens" not in sent_payload
+
+    # When user explicitly sets max_tokens
+    provider.max_tokens = 500
+    with patch("urllib.request.urlopen", side_effect=mock_urlopen):
+        provider.generate_reply("Hi", "Be brief")
+        assert sent_payload.get("max_tokens") == 500
+
+
+
 def test_custom_prompt_wrapping_and_anti_ai_guardrails():
     """Verify custom persona from Telegram wraps inside unbreakable anti-AI guardrails."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
