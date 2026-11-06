@@ -1486,5 +1486,63 @@ def test_typing_rhythm_and_pause_bursts(tmp_path: Path):
     asyncio.run(_run())
 
 
+def test_typo_injection_and_auto_correction(tmp_path: Path):
+    """Verify typo injection and *correction follow-up message simulation."""
+    # 1. Verification of typo logic
+    orig = "sounds good bro"
+    typo_text, correction = ReplyManager.maybe_inject_typo_correction(orig, probability=1.0)
+    assert typo_text != orig
+    assert correction in ("*sounds", "*good")
+
+    # 0% probability never modifies
+    clean_text, no_corr = ReplyManager.maybe_inject_typo_correction(orig, probability=0.0)
+    assert clean_text == orig
+    assert no_corr is None
+
+    # 2. Control commands /typo
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "typo.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        status_msg = await mgr.handle_control_command("/typo")
+        assert "Typo & Auto-Correction Simulation" in status_msg
+
+        off_msg = await mgr.handle_control_command("/typo off")
+        assert "DISABLED" in off_msg
+        assert db.get_state("typo_correction_enabled") == "0"
+
+        on_msg = await mgr.handle_control_command("/typo on")
+        assert "ENABLED" in on_msg
+        assert db.get_state("typo_correction_enabled") == "1"
+
+        # 3. Sending reply with typo sends correction follow-up
+        sent_messages = []
+        async def mock_send(chat_id, text, **kwargs):
+            sent_messages.append(text)
+            return MagicMock(id=len(sent_messages))
+
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(side_effect=mock_send)
+        mgr.set_telegram_client(mock_client)
+
+        # Force typo injection in _send_reply by temporarily patching probability to 1.0
+        orig_maybe = mgr.maybe_inject_typo_correction
+        mgr.maybe_inject_typo_correction = lambda t, **kw: orig_maybe(t, probability=1.0)
+
+        await mgr._send_reply(chat_id=555, reply_to_msg_id=0, text="sounds good bro", adaptive_delay=False)
+        assert len(sent_messages) == 2
+        # First message had the typo
+        assert sent_messages[0] != "sounds good bro"
+        # Second message was the correction
+        assert sent_messages[1].startswith("*")
+
+    asyncio.run(_run())
+
+
+
 
 

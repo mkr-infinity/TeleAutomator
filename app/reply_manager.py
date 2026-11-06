@@ -1252,6 +1252,25 @@ class ReplyManager:
 
             return "Usage: `/quiethours on [start] [end]`, `/quiethours off`, or `/quiethours <start> <end>`"
 
+        if cmd in ("/typo", "/typos", "/typosim"):
+            if len(cmd_parts) < 2:
+                typo_on = self.db.get_state("typo_correction_enabled", "1") == "1"
+                status = "ON (3-5% chance)" if typo_on else "OFF"
+                return (
+                    f"✍️ *Typo & Auto-Correction Simulation:* *{status}*\n"
+                    f"Simulates occasional realistic smartphone touchscreen typos followed 2s later by a quick correction (e.g. `suonds good` followed by `*sounds`).\n\n"
+                    f"• `/typo on` - Enable natural typo simulation\n"
+                    f"• `/typo off` - Disable typo simulation"
+                )
+            target = cmd_parts[1].lower().strip()
+            if target == "on":
+                self.db.set_state("typo_correction_enabled", "1")
+                return "✍️ Typo & auto-correction simulation *ENABLED* (~4% natural occurrence)."
+            elif target == "off":
+                self.db.set_state("typo_correction_enabled", "0")
+                return "🔒 Typo simulation *DISABLED*."
+            return "Usage: `/typo on` or `/typo off`"
+
         if cmd in ("/reactioncooldown", "/reactcd", "/reactionlimit", "/reactioninterval"):
             min_react = float(self.db.get_state(
                 "reaction_min_cooldown_seconds",
@@ -1740,6 +1759,50 @@ class ReplyManager:
 
         return [text]
 
+    @staticmethod
+    def maybe_inject_typo_correction(text: str, probability: float = 0.04) -> tuple[str, Optional[str]]:
+        """Occasionally simulate a realistic touchscreen fat-finger typo and its immediate *correction follow-up.
+
+        Returns:
+            (modified_text, correction_word) or (text, None)
+        """
+        import random
+        import re
+        if probability <= 0 or random.random() > probability:
+            return text, None
+
+        words = text.split()
+        if len(words) < 3:
+            return text, None
+
+        # Eligible casual words (4 to 8 letters, strictly alphabetic)
+        eligible_indices = [
+            i for i, w in enumerate(words)
+            if re.fullmatch(r"[a-zA-Z]{4,8}", w)
+            and w.lower() not in ("what", "when", "with", "from", "that", "this", "they", "http", "https")
+        ]
+        if not eligible_indices:
+            return text, None
+
+        target_idx = random.choice(eligible_indices)
+        orig_word = words[target_idx]
+        w_lower = orig_word.lower()
+
+        if len(w_lower) >= 4:
+            pos = random.randint(1, len(w_lower) - 2)
+            chars = list(w_lower)
+            chars[pos], chars[pos + 1] = chars[pos + 1], chars[pos]
+            typo_word = "".join(chars)
+            if orig_word.istitle():
+                typo_word = typo_word.capitalize()
+            elif orig_word.isupper():
+                typo_word = typo_word.upper()
+
+            words[target_idx] = typo_word
+            return " ".join(words), f"*{orig_word}"
+
+        return text, None
+
     async def maybe_send_reaction(self, chat_id: int, message_id: int, text: str) -> bool:
         """Add an emoji reaction to the message if reaction features and cooldown permit."""
         if not self._client:
@@ -1977,6 +2040,10 @@ class ReplyManager:
             return False
 
         first_part = msg_parts[0]
+        typo_correction: Optional[str] = None
+        typo_enabled = self.db.get_state("typo_correction_enabled", "1") == "1"
+        if typo_enabled and len(msg_parts) == 1 and not is_mention:
+            first_part, typo_correction = self.maybe_inject_typo_correction(first_part, probability=0.04)
 
         try:
             # Calculate human-like delay adapting to group/DM environment and mentions (5-30s)
@@ -2074,6 +2141,26 @@ class ReplyManager:
                 is_outgoing=True,
             )
             logger.info(f"Successfully sent reply part 1/{len(msg_parts)} to chat {chat_id}.")
+
+            # If typo simulation was triggered, send quick correction follow-up (e.g. *sounds)
+            if typo_correction and not self.safety.is_emergency_stopped:
+                correction_pause = random.uniform(1.8, 3.2)
+                await asyncio.sleep(correction_pause)
+                if not self.safety.is_emergency_stopped:
+                    corr_sent = await self._client.send_message(chat_id, typo_correction)
+                    self.safety.mark_reply_sent(chat_id)
+                    corr_id = getattr(corr_sent, "id", 0)
+                    if not isinstance(corr_id, int):
+                        corr_id = 0
+                    self.db.record_chat_message(
+                        chat_id=chat_id,
+                        message_id=corr_id,
+                        sender_id=None,
+                        sender_name=self.generator.prompt_manager.owner_name,
+                        text=typo_correction,
+                        is_outgoing=True,
+                    )
+                    logger.info(f"Sent natural typo correction '{typo_correction}' to chat {chat_id}.")
 
             # Send subsequent message parts (2 or 3) with short natural typing pause
             for idx, part in enumerate(msg_parts[1:], start=2):
