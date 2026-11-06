@@ -67,9 +67,9 @@ CRITICAL TEXTING RULES:
 12. NO 'HAHA' TEXT (EMOJI REACTIONS FOR HUMOR):
    - NEVER write 'haha', 'lol', or 'lmao'. Use emoji reactions or real thoughts.
 
-13. TOPIC ENGAGEMENT & MENTIONING:
-   - In topic chats, engage naturally with or without mentioning: decide from context whether to address someone or speak into the stream.
-   - MANDATORY: If someone mentions you, you MUST mention and address them. Never reply without mentioning them."""
+13. NEVER WRITE NAMES OR @USERNAMES (SWIPE TO REPLY ONLY):
+   - NEVER write anyone's name, user name, or @username in messages (no "@Alice", no "Alice:", no "Alice,").
+   - In Telegram, mentioning means swiping to reply to link their message. Never type names in the text."""
 
 DEFAULT_SYSTEM_INSTRUCTIONS = ANTI_AI_GUARDRAILS.replace("{owner_name}", "Kaif") + "\n\nOutput ONLY the raw text message ready to send."
 
@@ -191,7 +191,7 @@ class PromptManager:
         """Deprecated: Dynamic fallback is disabled per rule 'never reply if AI is not sending response'."""
         return ""
 
-    def clean_reply(self, raw_text: str) -> str:
+    def clean_reply(self, raw_text: str, sender_name: Optional[str] = None) -> str:
         """Remove any accidental AI meta-commentary, labels, brackets, or robotic filler."""
         text = raw_text.strip().strip('"').strip("'")
 
@@ -268,6 +268,19 @@ class PromptManager:
         if not clean_lower or clean_lower in ("none", "none.", "null", "null.", "nil", "undefined"):
             return ""
 
+        # STRICTLY NEVER WRITE USER NAMES OR @USERNAMES:
+        # Mentioning on Telegram means swiping to reply (quote threading), never writing names in text
+        if sender_name and sender_name not in ("Contact", "You"):
+            clean_first = sender_name.lstrip("@").split()[0]
+            if len(clean_first) >= 2:
+                text = re.sub(r"^" + re.escape(clean_first) + r"\b[:,\s]*", "", text, flags=re.IGNORECASE)
+
+        # Strip any leading Name: or Name, or Name -
+        text = re.sub(r"^[A-Za-z0-9_]{2,25}[:,\-]\s*", "", text)
+
+        # Strip any @username anywhere in the reply
+        text = re.sub(r"@\w+[:,\s]*", "", text)
+
         # Suppress standalone laughter responses (e.g. "haha", "hahaha", "lol", "lmao", "rofl", "xd")
         pure_laughter = re.sub(r"[^a-zA-Z]", "", text).lower()
         if pure_laughter and re.match(r"^(?:[ae]*h+[ae]*|lol|lmao|rofl|xd|lmfao)+$", pure_laughter):
@@ -329,21 +342,11 @@ class PromptManager:
         else:
             lang_instruction = f"CRITICAL: User configured language is {self._language.capitalize()}. You MUST reply ONLY in {self._language.capitalize()}."
 
-        # Natural human engagement with dynamic mentioning
-        if is_mention:
-            mention_rule = (
-                f"MANDATORY MENTION RULE: {sender_name} directly mentioned or replied to you. "
-                f"You MUST mention and directly address {sender_name} while replying (e.g. '@{sender_name} ...' or addressing them by name). Never reply without mentioning them."
-            )
-        else:
-            mention_rule = (
-                "DYNAMIC MENTION RULE: In ongoing topic chats, engage naturally in both ways (with or without mentioning). "
-                "Think and decide from context whether you need to mention someone or chime into the stream freely."
-            )
-
+        # Natural human engagement without writing user names or @usernames
         engagement_instruction = (
             "In groups and chats, be an active Telegram user. When you understand discussions, chime in naturally with thoughts. "
-            f"{mention_rule} "
+            "CRITICAL: NEVER write the user's name, sender's name, or @username in your messages (no '@Alice', no 'Alice:', no 'Alice,'). "
+            "In Telegram, mentioning means swiping to reply (quote-threading); you do NOT type the person's name in text. "
             "NEVER send messages saying 'haha', 'lol', or 'lmao' as text; use emoji reactions or express real thoughts. "
             "Read chat context first to see what conversations are ongoing before replying. "
             "Match conversational length naturally: sometimes 1 word, sometimes 2 words, sometimes a line when necessary (under 10 words default, max 15 serious). "
@@ -393,6 +396,6 @@ class PromptManager:
             f"Punctuation & Emojis: Use top common emojis (😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️) naturally wherever they fit best (in between words or at the end of a thought). NEVER use question marks (?).\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, dynamic topic engagement with or without mentioning [always mention if mentioned], no 'haha'/'lol' text, read context first, natural typing, no question marks, emojis where they fit best, max 10 words [serious 10-15], no repetition, no canned phrases, no AI talk, no code, no brackets):"
+            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, never write any user names or @usernames [swiping to reply links the message], no 'haha'/'lol' text, read context first, natural typing, no question marks, emojis where they fit best, max 10 words [serious 10-15], no repetition, no canned phrases, no AI talk, no code, no brackets):"
         )
         return "\n\n".join(parts)

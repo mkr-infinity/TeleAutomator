@@ -274,9 +274,11 @@ def test_clean_reply_suppresses_standalone_laughter_and_leading_mentions():
     assert pm.clean_reply("true that 😂") == "true that 😂"
     assert pm.clean_reply("sounds good bro 👍") == "sounds good bro 👍"
 
-    # Mentions are preserved when AI decides to address someone directly
-    assert pm.clean_reply("@alice sounds good 👍") == "@alice sounds good 👍"
-    assert pm.clean_reply("@bob on my way") == "@bob on my way"
+    # User names and @mentions are strictly stripped (swipe-to-reply handles thread reference)
+    assert pm.clean_reply("@alice sounds good 👍") == "sounds good 👍"
+    assert pm.clean_reply("@bob on my way") == "on my way"
+    assert pm.clean_reply("Alice: sounds good bro", sender_name="Alice") == "sounds good bro"
+    assert pm.clean_reply("Alice, sounds good bro", sender_name="Alice") == "sounds good bro"
 
 
 def test_never_use_question_marks():

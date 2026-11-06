@@ -932,26 +932,21 @@ def test_group_unthreaded_reply_without_mention(tmp_path: Path):
         assert sent_calls[0][0] == -100222
         assert sent_calls[0][2] is None
 
-        # 2. Group reply where AI specifically mentioned someone: reply_to is preserved
-        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="@bob yeah true that", adaptive_delay=False, is_mention=False)
+        # 2. Group reply with mention: swipe-to-reply preserves reply_to
+        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah true that", adaptive_delay=False, is_mention=True)
         assert len(sent_calls) == 2
         assert sent_calls[1][2] == 77
 
-        # 3. Group reply with mention: reply_to is preserved
-        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah true that", adaptive_delay=False, is_mention=True)
-        assert len(sent_calls) == 3
-        assert sent_calls[2][2] == 77
-
-        # 4. Private DM: reply_to is preserved
+        # 3. Private DM: reply_to is preserved
         await mgr._send_reply(chat_id=12345, reply_to_msg_id=55, text="sounds good", adaptive_delay=False, is_mention=False)
-        assert len(sent_calls) == 4
-        assert sent_calls[3][2] == 55
+        assert len(sent_calls) == 3
+        assert sent_calls[2][2] == 55
 
     asyncio.run(_run())
 
 
 def test_mandatory_mention_when_mentioned_by_peer(tmp_path: Path):
-    """Verify that when someone mentions us in a group, our reply always mentions them."""
+    """Verify that when someone mentions us in a group, reply swipes to reply (reply_to_msg_id) and never writes names in text."""
     async def _run():
         cfg = AppConfig(api_id=123, api_hash="dummy_hash", reply_mode="restricted_auto", auto_authorize=True, data_dir=tmp_path)
         db = Database(tmp_path / "test_peer_mention.db")
@@ -960,7 +955,7 @@ def test_mandatory_mention_when_mentioned_by_peer(tmp_path: Path):
         privacy = PrivacyManager(cfg, database=db)
         privacy.allow_chat(-100888)
         generator = ReplyGenerator(cfg, database=db)
-        # AI generated a response without a mention tag
+        # AI generated a clean response
         generator.generate = MagicMock(return_value="sounds good to me 👍")
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
@@ -987,9 +982,11 @@ def test_mandatory_mention_when_mentioned_by_peer(tmp_path: Path):
 
         assert len(sent_messages) == 1
         chat_id, text, reply_to = sent_messages[0]
-        # Text must mention Alice
-        assert "@Alice" in text or "Alice" in text
-        # Must reply to message ID 404
+        # Text must NEVER write user names or @usernames
+        assert "@" not in text
+        assert "Alice" not in text
+        assert text == "sounds good to me 👍"
+        # Must swipe-to-reply (quote message ID 404)
         assert reply_to == 404
 
     asyncio.run(_run())

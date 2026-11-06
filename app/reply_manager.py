@@ -271,12 +271,6 @@ class ReplyManager:
         # Prevent repeating the same word or exact reply consecutively in this chat
         draft = self._prevent_duplicate_reply(chat_id, draft)
 
-        # Mandatory mention rule: if someone mentioned us in a group, ensure they are mentioned when replying
-        if is_mention and chat_id < 0 and sender_name and sender_name not in ("Contact", "You"):
-            tag_name = sender_name.lstrip("@").split()[0]
-            if f"@{tag_name.lower()}" not in draft.lower() and tag_name.lower() not in draft.lower():
-                draft = f"@{tag_name} {draft}"
-
         mode = self.current_mode
 
         # Mode 1: Draft Only (Default)
@@ -2156,9 +2150,8 @@ class ReplyManager:
                     await asyncio.sleep(typing_duration)
 
             # Send first message part
-            # In groups, reply directly if mentioned or if text includes a mention; otherwise chime into stream
-            has_mention_in_text = bool(re.search(r"@\w+", first_part))
-            actual_reply_to = reply_to_msg_id if (chat_id > 0 or is_mention or has_mention_in_text) else None
+            # In groups, swipe-to-reply directly if mentioned; in DMs always reply_to; otherwise chime into stream
+            actual_reply_to = reply_to_msg_id if (chat_id > 0 or is_mention) else None
             first_sent = await self._client.send_message(chat_id, first_part, reply_to=actual_reply_to)
             self.safety.mark_reply_sent(chat_id)
             self._last_sent_reply_by_chat[chat_id] = first_part
