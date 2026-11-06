@@ -146,3 +146,83 @@ def test_quiet_hours_schedule(tmp_path: Path):
     assert safety.quiet_hours_enabled is False
     can_reply, _ = safety.can_reply(101, "Hello")
     assert can_reply is True
+
+
+def test_antispam_rolling_burst_and_hourly_limits(tmp_path: Path):
+    """Verify rolling 60s burst limit and 3600s hourly limit prevent Telegram spam."""
+    cfg = AppConfig(
+        api_id=123,
+        api_hash="dummy_hash",
+        data_dir=tmp_path,
+        global_cooldown_seconds=1,
+        per_chat_cooldown_seconds=1,
+        min_global_cooldown_seconds=1.0,
+        min_chat_cooldown_seconds=1.0,
+    )
+    db = Database(tmp_path / "test_antispam.db")
+    safety = SafetyManager(cfg, db)
+
+    # Set custom tight limits for test
+    db.set_state("max_replies_per_minute", "3")
+    db.set_state("max_replies_per_hour", "5")
+    assert safety.max_replies_per_minute == 3
+    assert safety.max_replies_per_hour == 5
+
+    # 1. First reply passes
+    can_reply, _ = safety.can_reply(1001, "reply 1")
+    assert can_reply is True
+    safety.mark_reply_sent(1001)
+
+    # Bypass per-chat/global interval for testing rate limits
+    safety._last_global_reply_time = 0.0
+    safety._last_chat_reply_time.clear()
+
+    # 2. Second reply passes
+    can_reply, _ = safety.can_reply(1002, "reply 2")
+    assert can_reply is True
+    safety.mark_reply_sent(1002)
+
+    safety._last_global_reply_time = 0.0
+    safety._last_chat_reply_time.clear()
+
+    # 3. Third reply passes
+    can_reply, _ = safety.can_reply(1003, "reply 3")
+    assert can_reply is True
+    safety.mark_reply_sent(1003)
+
+    safety._last_global_reply_time = 0.0
+    safety._last_chat_reply_time.clear()
+
+    # 4. Fourth reply within 60s is blocked by rolling burst limit (3/3 used)
+    can_reply, reason = safety.can_reply(1004, "reply 4")
+    assert can_reply is False
+    assert "Anti-spam burst limit reached" in reason
+
+
+def test_cooldown_persists_across_restarts(tmp_path: Path):
+    """Verify cooldown timestamps survive SafetyManager / process restarts via SQLite."""
+    cfg = AppConfig(
+        api_id=123,
+        api_hash="dummy_hash",
+        data_dir=tmp_path,
+        global_cooldown_seconds=30,
+        per_chat_cooldown_seconds=60,
+    )
+    db = Database(tmp_path / "test_persist.db")
+    safety1 = SafetyManager(cfg, db)
+
+    # Mark reply sent in chat 777
+    safety1.mark_reply_sent(777)
+
+    # Simulate restart by instantiating new SafetyManager on the same database
+    safety2 = SafetyManager(cfg, db)
+
+    # Global cooldown is still active in new instance
+    can_reply, reason = safety2.can_reply(999, "new chat")
+    assert can_reply is False
+    assert "Global cooldown active" in reason
+
+    # Per-chat cooldown is also active for chat 777
+    can_reply2, reason2 = safety2.can_reply(777, "same chat")
+    assert can_reply2 is False
+    assert "cooldown active" in reason2

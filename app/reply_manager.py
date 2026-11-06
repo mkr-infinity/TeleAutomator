@@ -19,6 +19,12 @@ from app.storage.database import Database
 
 logger = setup_logger(__name__)
 
+try:
+    from telethon.errors import FloodWaitError, PeerFloodError
+except Exception:
+    FloodWaitError = None  # type: ignore
+    PeerFloodError = None  # type: ignore
+
 
 def _parse_time_str(val: str) -> Optional[str]:
     """Parse and normalize HH:MM string."""
@@ -346,14 +352,14 @@ class ReplyManager:
                 if "quiet hours" in reason.lower():
                     # Sleep schedule active: quietly suppress auto-reply without disturbing Saved Messages
                     return
-                if "cooldown" in reason.lower():
-                    # NEVER skip mention messages: schedule deferred reply after cooldown!
+                if "cooldown" in reason.lower() or "limit" in reason.lower():
+                    # NEVER skip mention messages: schedule deferred reply after cooldown/rate-limit!
                     if is_mention:
                         import re
                         m = re.search(r"\((\d+)s remaining\)", reason)
                         wait_secs = float(m.group(1)) if m else 5.0
                         logger.info(
-                            f"[MENTION QUEUED] Cooldown active for chat {chat_id} ({wait_secs}s). "
+                            f"[MENTION QUEUED] Cooldown/rate-limit active for chat {chat_id} ({wait_secs}s). "
                             f"Scheduling deferred reply so mention is NEVER skipped."
                         )
                         asyncio.create_task(
@@ -418,13 +424,20 @@ class ReplyManager:
 
             can_send, reason = self.safety.can_reply(chat_id, draft)
             if not can_send:
-                if "cooldown" in reason.lower():
+                if "cooldown" in reason.lower() or "limit" in reason.lower():
                     import re
                     m = re.search(r"\((\d+)s remaining\)", reason)
                     retry_wait = float(m.group(1)) if m else 3.0
                     await asyncio.sleep(retry_wait + 1.0)
-                    if self.safety.is_emergency_stopped:
+                    if self.safety.is_emergency_stopped or self.safety.get_remaining_pause_seconds() > 0:
                         return
+                    can_send, reason = self.safety.can_reply(chat_id, draft)
+                    if not can_send:
+                        logger.warning(f"Deferred mention reply to chat {chat_id} aborted: {reason}")
+                        return
+                else:
+                    logger.warning(f"Deferred mention reply to chat {chat_id} aborted: {reason}")
+                    return
 
             sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True, is_mention=True)
             if sent:
@@ -597,7 +610,8 @@ class ReplyManager:
                 "• `/reaction on` / `/reaction off` - Enable or disable auto-reactions\n"
                 "• `/reactioncooldown <min> <max>` - Set random reaction cooldown (e.g. `3 9` seconds)\n"
                 "• `/chatcooldown <min> <max>` - Custom per-chat reply cooldown (e.g. `5 60`)\n"
-                "• `/globalcooldown <min> <max>` - Custom global reply cooldown (e.g. `5 60`)\n\n"
+                "• `/globalcooldown <min> <max>` - Custom global reply cooldown (e.g. `5 60`)\n"
+                "• `/ratelimit <per_min> <per_hour>` - Anti-spam rate limits (e.g. `/ratelimit 5 30`)\n\n"
                 "*Quiet Hours (Sleep Schedule):*\n"
                 "• `/quiethours on [start] [end]` - Turn ON sleep schedule (e.g. `/quiethours on 23:00 07:00`)\n"
                 "• `/quiethours off` - Turn OFF sleep schedule\n"
@@ -1145,6 +1159,8 @@ class ReplyManager:
             max_r_sec = float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(self.config, "reaction_max_cooldown_seconds", 9.0))))
             chat_cd_range = f"{int(self.safety.min_chat_cooldown)}s–{int(self.safety.max_chat_cooldown)}s"
             global_cd_range = f"{int(self.safety.min_global_cooldown)}s–{int(self.safety.max_global_cooldown)}s"
+            recent_min = self.db.get_recent_reply_count(60.0) if hasattr(self.db, "get_recent_reply_count") else 0
+            recent_hr = self.db.get_recent_reply_count(3600.0) if hasattr(self.db, "get_recent_reply_count") else 0
             chats_df = await self.get_allowed_chats_dataframe()
             return (
                 f"📊 *TeleAutomator v2.0.6 Status:*\n"
@@ -1157,6 +1173,7 @@ class ReplyManager:
                 f"• Quiet Hours: *{qh_desc}* (change with `/quiethours <on|off|start end>`)\n"
                 f"• Group Banter: `{int(chatty_prob * 100)}%` (change with `/chatty <0-100>`)\n"
                 f"• Cooldowns: Chat=`{chat_cd_range}`, Global=`{global_cd_range}`\n"
+                f"• Anti-Spam: Rate=`{self.safety.max_replies_per_minute}/min, {self.safety.max_replies_per_hour}/hr` (Used: {recent_min}/{recent_hr})\n"
                 f"• Auto Authorized: *{auto_status}*\n"
                 f"• Emergency Stop: *{stop_status}*\n"
                 f"• Pending Approvals: `{pending_count}`\n"
@@ -1398,6 +1415,28 @@ class ReplyManager:
                     return f"✅ Global cooldown updated to *{secs}s*."
             except ValueError:
                 return "Error: Cooldown seconds must be valid integers."
+
+        if cmd in ("/ratelimit", "/spamlimits", "/rate", "/antispam"):
+            if len(cmd_parts) < 2:
+                recent_min = self.db.get_recent_reply_count(60.0) if hasattr(self.db, "get_recent_reply_count") else 0
+                recent_hr = self.db.get_recent_reply_count(3600.0) if hasattr(self.db, "get_recent_reply_count") else 0
+                return (
+                    f"🛡️ *Telegram Anti-Spam Rate Limits:*\n"
+                    f"• Burst Limit: *{self.safety.max_replies_per_minute}* replies/min (Used in last 60s: *{recent_min}*)\n"
+                    f"• Hourly Limit: *{self.safety.max_replies_per_hour}* replies/hour (Used in last 1h: *{recent_hr}*)\n"
+                    f"• Per-Chat Limit: *{self.safety.max_chat_replies_per_minute}* replies/min per chat\n"
+                    f"• Chat Cooldown: *{int(self.safety.min_chat_cooldown)}s – {int(self.safety.max_chat_cooldown)}s*\n"
+                    f"• Global Cooldown: *{int(self.safety.min_global_cooldown)}s – {int(self.safety.max_global_cooldown)}s*\n\n"
+                    f"Usage: `/ratelimit <per_minute> <per_hour>` (e.g. `/ratelimit 5 30`)"
+                )
+            try:
+                per_min = max(1, int(cmd_parts[1]))
+                per_hr = max(per_min, int(cmd_parts[2])) if len(cmd_parts) >= 3 else (per_min * 6)
+                self.db.set_state("max_replies_per_minute", str(per_min))
+                self.db.set_state("max_replies_per_hour", str(per_hr))
+                return f"✅ Anti-spam rate limits updated to *{per_min}* replies/min and *{per_hr}* replies/hour."
+            except ValueError:
+                return "Error: Rate limits must be valid positive integers (e.g. `/ratelimit 5 30`)."
 
         if cmd in ("/model", "/setmodel", "/custommodel"):
             if len(cmd_parts) < 2:
@@ -1925,7 +1964,12 @@ class ReplyManager:
             )
             return True
         except Exception as e:
-            logger.debug(f"[REACTION] Could not send reaction {chosen} to chat {chat_id}: {e}")
+            if (FloodWaitError and isinstance(e, FloodWaitError)) or "floodwait" in e.__class__.__name__.lower():
+                wait_time = getattr(e, "seconds", 30)
+                self.safety.set_timed_pause(wait_time + 2.0)
+                logger.warning(f"[REACTION FLOODWAIT] Reaction triggered Telegram FloodWait ({wait_time}s). Paused automated actions.")
+            else:
+                logger.debug(f"[REACTION] Could not send reaction {chosen} to chat {chat_id}: {e}")
             return False
 
     def _prevent_duplicate_reply(self, chat_id: int, text: str) -> str:
@@ -2241,6 +2285,39 @@ class ReplyManager:
 
             return True
         except Exception as e:
+            # Check for Telegram FloodWaitError
+            if (FloodWaitError and isinstance(e, FloodWaitError)) or "floodwait" in e.__class__.__name__.lower():
+                wait_time = getattr(e, "seconds", 60)
+                self.safety.set_timed_pause(wait_time + 5.0)
+                logger.warning(
+                    f"[TELEGRAM FLOODWAIT] Telegram anti-spam FloodWait triggered! "
+                    f"Pausing all automated actions for {wait_time + 5}s."
+                )
+                await self._notify_issue_to_saved_messages(
+                    chat_id=chat_id,
+                    chat_title="",
+                    sender_name="",
+                    error_msg=f"Telegram FloodWaitError: Pausing automated replies for {wait_time}s as required by Telegram anti-spam guidelines.",
+                    incoming_text=text,
+                )
+                return False
+
+            # Check for Telegram PeerFloodError (account restricted by Telegram anti-spam)
+            if (PeerFloodError and isinstance(e, PeerFloodError)) or "peerflood" in e.__class__.__name__.lower():
+                self.safety.set_emergency_stop(True)
+                logger.critical(
+                    f"[TELEGRAM PEERFLOOD] Telegram anti-spam restriction triggered (PeerFloodError)! "
+                    f"Emergency stop activated to protect account from ban."
+                )
+                await self._notify_issue_to_saved_messages(
+                    chat_id=chat_id,
+                    chat_title="",
+                    sender_name="",
+                    error_msg="Telegram PeerFloodError: Account was restricted by Telegram anti-spam (@SpamBot). All automated actions stopped safely.",
+                    incoming_text=text,
+                )
+                return False
+
             self.safety.record_error()
             logger.error(f"Failed to send message to chat {chat_id}: {e}")
             await self._notify_issue_to_saved_messages(

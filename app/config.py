@@ -84,6 +84,8 @@ class AppConfig:
     max_chat_cooldown_seconds: float = 60.0
     min_global_cooldown_seconds: float = 5.0
     max_global_cooldown_seconds: float = 60.0
+    max_replies_per_minute: int = 5
+    max_replies_per_hour: int = 30
 
     # Language & Reactions
     default_chat_language: str = "english"
@@ -217,6 +219,8 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         max_global_cd = max(min_global_cd, float(os.getenv("MAX_GLOBAL_COOLDOWN_SECONDS", "60.0")))
         reaction_min_cd = max(0.0, float(os.getenv("REACTION_MIN_COOLDOWN_SECONDS", "3.0")))
         reaction_max_cd = max(reaction_min_cd, float(os.getenv("REACTION_MAX_COOLDOWN_SECONDS", "9.0")))
+        max_replies_per_minute = max(1, int(os.getenv("MAX_REPLIES_PER_MINUTE", "5")))
+        max_replies_per_hour = max(1, int(os.getenv("MAX_REPLIES_PER_HOUR", "30")))
         quiet_hours_enabled = _parse_bool(os.getenv("QUIET_HOURS_ENABLED"), default=True)
         quiet_hours_start = os.getenv("QUIET_HOURS_START", "02:00").strip() or "02:00"
         quiet_hours_end = os.getenv("QUIET_HOURS_END", "08:00").strip() or "08:00"
@@ -261,6 +265,8 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         max_chat_cooldown_seconds=max_chat_cd,
         min_global_cooldown_seconds=min_global_cd,
         max_global_cooldown_seconds=max_global_cd,
+        max_replies_per_minute=max_replies_per_minute,
+        max_replies_per_hour=max_replies_per_hour,
         reaction_min_cooldown_seconds=reaction_min_cd,
         reaction_max_cooldown_seconds=reaction_max_cd,
         quiet_hours_enabled=quiet_hours_enabled,

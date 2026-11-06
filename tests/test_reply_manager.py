@@ -1752,6 +1752,77 @@ def test_anti_repetition_suppression_of_duplicate_replies(tmp_path: Path):
     assert res3 == "will check and ping you"
 
 
+def test_ratelimit_control_command(tmp_path: Path):
+    """Verify /ratelimit command displays and updates anti-spam limits."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "ratelimit.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # 1. Query current limits
+        res1 = await mgr.handle_control_command("/ratelimit")
+        assert "Telegram Anti-Spam Rate Limits" in res1
+        assert "Burst Limit" in res1
+        assert "Hourly Limit" in res1
+
+        # 2. Update limits
+        res2 = await mgr.handle_control_command("/ratelimit 8 50")
+        assert "*8*" in res2 and "*50*" in res2
+        assert safety.max_replies_per_minute == 8
+        assert safety.max_replies_per_hour == 50
+
+        # 3. Status includes rate limit info
+        status_res = await mgr.handle_control_command("/status")
+        assert "Anti-Spam: Rate=`8/min, 50/hr`" in status_res
+
+    asyncio.run(_run())
+
+
+def test_floodwait_and_peerflood_handling(tmp_path: Path):
+    """Verify Telegram FloodWaitError pauses automation and PeerFloodError activates emergency stop."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "flood.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        class MockFloodWait(Exception):
+            seconds = 60
+
+        class MockPeerFlood(Exception):
+            pass
+
+        class FloodClient:
+            async def send_message(self, *args, **kwargs):
+                raise MockFloodWait()
+
+        mgr.set_telegram_client(FloodClient())
+
+        # FloodWait triggers timed pause
+        sent1 = await mgr._send_reply(101, 1, "test message", adaptive_delay=False)
+        assert sent1 is False
+        assert safety.get_remaining_pause_seconds() > 50
+
+        # Clear pause and test PeerFlood
+        safety.clear_pause()
+
+        class PeerFloodClient:
+            async def send_message(self, *args, **kwargs):
+                raise MockPeerFlood()
+
+        mgr.set_telegram_client(PeerFloodClient())
+        sent2 = await mgr._send_reply(101, 1, "test message 2", adaptive_delay=False)
+        assert sent2 is False
+        assert safety.is_emergency_stopped is True
+
+    asyncio.run(_run())
+
+
 
 
 
