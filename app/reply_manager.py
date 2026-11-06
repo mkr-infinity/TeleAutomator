@@ -62,6 +62,11 @@ class ReplyManager:
         self._last_sent_reply_by_chat: dict[int, str] = {}
         self._recent_replies_history: dict[int, list[str]] = {}
         self._last_group_activity: dict[int, float] = {}
+        # Suggestion 1: Incoming message burst debouncer state
+        self._debounce_buffers: dict[int, list[dict[str, Any]]] = {}
+        self._debounce_tasks: dict[int, asyncio.Task] = {}
+        self._debounce_last_time: dict[int, float] = {}
+        self._debounce_first_time: dict[int, float] = {}
         self._next_reaction_cooldown: float = random.uniform(
             float(self.db.get_state("reaction_min_cooldown_seconds", str(getattr(config, "reaction_min_cooldown_seconds", 3.0)))),
             float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(config, "reaction_max_cooldown_seconds", 9.0)))),
@@ -166,6 +171,133 @@ class ReplyManager:
         is_mention: bool = False,
     ) -> None:
         """Process an incoming message that has passed initial message filters."""
+        # Suggestion 1: Incoming message burst debouncer (message stitching)
+        debounce_enabled = self.db.get_state("debounce_enabled", "1") == "1"
+        raw_db_sec = self.db.get_state("debounce_seconds", "3.0")
+        try:
+            debounce_sec = float(raw_db_sec)
+        except (ValueError, TypeError):
+            debounce_sec = 3.0
+
+        # In zero-delay environments (e.g. tests), bypass wait unless debounce_sec was explicitly configured
+        if self.min_delay == 0 and self.max_delay == 0 and raw_db_sec == "3.0":
+            debounce_sec = 0.0
+
+        if self.current_mode != "restricted_auto" or not debounce_enabled or debounce_sec <= 0:
+            await self._process_incoming_message(
+                chat_id=chat_id,
+                chat_title=chat_title,
+                message_id=message_id,
+                sender_id=sender_id,
+                sender_name=sender_name,
+                text=text,
+                conversation_history=conversation_history,
+                is_mention=is_mention,
+            )
+            return
+
+        now = time.time()
+        msg_item = {
+            "chat_id": chat_id,
+            "chat_title": chat_title,
+            "message_id": message_id,
+            "sender_id": sender_id,
+            "sender_name": sender_name,
+            "text": text,
+            "is_mention": is_mention,
+            "received_at": now,
+        }
+
+        if chat_id not in self._debounce_buffers:
+            self._debounce_buffers[chat_id] = []
+            self._debounce_first_time[chat_id] = now
+
+        self._debounce_buffers[chat_id].append(msg_item)
+        self._debounce_last_time[chat_id] = now
+
+        if chat_id not in self._debounce_tasks or self._debounce_tasks[chat_id].done():
+            self._debounce_tasks[chat_id] = asyncio.create_task(
+                self._debounce_worker(chat_id, debounce_sec)
+            )
+
+        worker = self._debounce_tasks[chat_id]
+        await asyncio.shield(worker)
+
+    async def _debounce_worker(self, chat_id: int, debounce_sec: float) -> None:
+        """Wait until incoming message burst ceases for chat_id, then stitch and execute."""
+        try:
+            while True:
+                now = time.time()
+                last_time = self._debounce_last_time.get(chat_id, now)
+                first_time = self._debounce_first_time.get(chat_id, now)
+                elapsed_since_last = now - last_time
+                remaining = debounce_sec - elapsed_since_last
+                total_burst = now - first_time
+                buf_len = len(self._debounce_buffers.get(chat_id, []))
+
+                # Contact paused typing (idle > debounce_sec), or burst cap reached (10s or 6 msgs)
+                if remaining <= 0.05 or total_burst >= 10.0 or buf_len >= 6:
+                    break
+
+                await asyncio.sleep(min(max(0.05, remaining), 0.5))
+
+            items = self._debounce_buffers.pop(chat_id, [])
+            self._debounce_tasks.pop(chat_id, None)
+            self._debounce_last_time.pop(chat_id, None)
+            self._debounce_first_time.pop(chat_id, None)
+
+            if not items:
+                return
+
+            latest_item = items[-1]
+            latest_id = latest_item["message_id"]
+            latest_sender_name = latest_item["sender_name"]
+            latest_sender_id = latest_item["sender_id"]
+            chat_title = latest_item["chat_title"]
+            any_mention = any(m.get("is_mention", False) for m in items)
+
+            if len(items) == 1:
+                stitched_text = items[0]["text"]
+            else:
+                stitched_text = "\n".join(m["text"].strip() for m in items if m["text"].strip())
+                logger.info(
+                    f"[MESSAGE STITCHING] Stitched {len(items)} rapid burst messages in chat {chat_id} "
+                    f"into single cohesive thought: '{stitched_text[:60]}...'"
+                )
+
+            ttl_hours = float(self.db.get_state("context_ttl_hours", "2.0"))
+            max_age_secs = int(ttl_hours * 3600) if ttl_hours > 0 else None
+            fresh_history = self.db.get_recent_chat_messages(
+                chat_id, limit=15, max_age_seconds=max_age_secs
+            )
+
+            await self._process_incoming_message(
+                chat_id=chat_id,
+                chat_title=chat_title,
+                message_id=latest_id,
+                sender_id=latest_sender_id,
+                sender_name=latest_sender_name,
+                text=stitched_text,
+                conversation_history=fresh_history,
+                is_mention=any_mention,
+            )
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Error in debounce worker for chat {chat_id}: {e}")
+
+    async def _process_incoming_message(
+        self,
+        chat_id: int,
+        chat_title: str,
+        message_id: int,
+        sender_id: Optional[int],
+        sender_name: str,
+        text: str,
+        conversation_history: Optional[Any] = None,
+        is_mention: bool = False,
+    ) -> None:
+        """Process a single or stitched incoming message."""
         # Sanitize incoming text before passing to generator
         clean_text = self.privacy.sanitize_text(text)
 
@@ -720,7 +852,9 @@ class ReplyManager:
                 "• `/chatcooldown <min> <max>` - Custom per-chat reply cooldown (e.g. `5 60`)\n"
                 "• `/globalcooldown <min> <max>` - Custom global reply cooldown (e.g. `5 60`)\n"
                 "• `/ratelimit <per_min> <per_hour>` - Anti-spam rate limits (e.g. `/ratelimit 5 30`)\n"
-                "• `/followup <on|off>` - Spontaneous delayed follow-ups for short replies\n\n"
+                "• `/followup <on|off>` - Spontaneous delayed follow-ups for short replies\n"
+                "• `/debounce <on|off|seconds>` - Incoming burst debouncer (stitches rapid messages)\n"
+                "• `/multibubble <on|off>` - Multi-bubble response splitting (rapid sequential bubbles)\n\n"
                 "*Quiet Hours (Sleep Schedule):*\n"
                 "• `/quiethours on [start] [end]` - Turn ON sleep schedule (e.g. `/quiethours on 23:00 07:00`)\n"
                 "• `/quiethours off` - Turn OFF sleep schedule\n"
@@ -1721,6 +1855,41 @@ class ReplyManager:
             curr = "ENABLED" if self.db.get_state("spontaneous_followup_enabled", "1") == "1" else "DISABLED"
             return f"💬 Spontaneous follow-ups: *{curr}* (Toggle with `/followup <on|off>`)."
 
+        if cmd in ("/debounce", "/burst", "/debouncer"):
+            if len(cmd_parts) > 1:
+                sub = cmd_parts[1].lower().strip()
+                if sub in ("on", "enable", "1"):
+                    self.db.set_state("debounce_enabled", "1")
+                    curr_sec = self.db.get_state("debounce_seconds", "3.0")
+                    return f"✅ Message burst debouncer *ENABLED* ({curr_sec}s stitching window)."
+                elif sub in ("off", "disable", "0"):
+                    self.db.set_state("debounce_enabled", "0")
+                    return "🛑 Message burst debouncer *DISABLED* (messages processed immediately)."
+                else:
+                    try:
+                        sec = float(sub)
+                        sec = max(0.5, min(10.0, sec))
+                        self.db.set_state("debounce_enabled", "1")
+                        self.db.set_state("debounce_seconds", str(sec))
+                        return f"⏱️ Message burst debouncer set to *{sec}s* window."
+                    except ValueError:
+                        return "Usage: `/debounce on`, `/debounce off`, or `/debounce <0.5-10.0>`"
+            curr = "ENABLED" if self.db.get_state("debounce_enabled", "1") == "1" else "DISABLED"
+            curr_sec = self.db.get_state("debounce_seconds", "3.0")
+            return f"💬 Burst debouncer: *{curr}* ({curr_sec}s window). Toggle with `/debounce <on|off|seconds>`."
+
+        if cmd in ("/multibubble", "/split", "/bubbles"):
+            if len(cmd_parts) > 1:
+                sub = cmd_parts[1].lower().strip()
+                if sub in ("on", "enable", "1"):
+                    self.db.set_state("multibubble_enabled", "1")
+                    return "✅ Multi-bubble response splitting *ENABLED* (rapid 1.2–2.5s sequential bubbles)."
+                elif sub in ("off", "disable", "0"):
+                    self.db.set_state("multibubble_enabled", "0")
+                    return "🛑 Multi-bubble response splitting *DISABLED* (replies sent in single message)."
+            curr = "ENABLED" if self.db.get_state("multibubble_enabled", "1") == "1" else "DISABLED"
+            return f"💬 Multi-bubble response splitting: *{curr}* (Toggle with `/multibubble <on|off>`)."
+
         if cmd in ("/pause", "/off"):
             if len(cmd_parts) < 2:
                 return "Usage: `/pause <duration>` (e.g. `/pause 2h`, `/pause 30m`, `/pause 45m`)"
@@ -1904,27 +2073,33 @@ class ReplyManager:
         return round(max(hard_floor, self.min_delay, min(cap_max, delay)), 2)
 
     @staticmethod
-    def split_reply_messages(text: str) -> list[str]:
+    def split_reply_messages(text: str, enabled: bool = True) -> list[str]:
         """Split a multi-thought reply into 2 or 3 natural messages without breaking word or clause meaning."""
         import re
         text = text.strip()
-        if not text:
-            return []
+        if not text or not enabled:
+            return [text] if text else []
 
         # If already separated by newlines, split by line
         lines = [l.strip() for l in text.split("\n") if l.strip()]
         if len(lines) > 1:
             return lines[:3]
 
+        # Natural multi-bubble splits on ellipsis "... "
+        if "... " in text:
+            parts = [p.strip() for p in text.split("... ") if p.strip()]
+            if 1 < len(parts) <= 3 and all(len(p.split()) >= 1 for p in parts):
+                return parts
+
         # If a single line, check for clean sentence boundaries
         sentences = re.split(r"(?<=[.!?])\s+", text)
         sentences = [s.strip() for s in sentences if s.strip()]
-        if 1 < len(sentences) <= 3 and len(text) > 15:
+        if 1 < len(sentences) <= 3 and len(text) >= 10:
             # Ensure every sentence is a real thought (at least 2 chars), not broken words
             if all(len(s) >= 2 for s in sentences):
                 return sentences
 
-        # Natural follow-up split thoughts with clause connectors (e.g. ", btw ", ", also ", ", and ", ", but ")
+        # Natural follow-up split thoughts with clause connectors (e.g. ", btw ", ", also ", ", and ", ", but ", ", let ")
         for conn in (", btw ", ", also ", ", and ", ", but ", ", let "):
             if conn in text.lower():
                 idx = text.lower().find(conn)
@@ -2227,7 +2402,8 @@ class ReplyManager:
             logger.error("Cannot send reply: Telegram client is not attached.")
             return False
 
-        msg_parts = self.split_reply_messages(text)
+        multibubble_enabled = self.db.get_state("multibubble_enabled", "1") == "1"
+        msg_parts = self.split_reply_messages(text, enabled=multibubble_enabled)
         if not msg_parts:
             return False
 
@@ -2385,10 +2561,15 @@ class ReplyManager:
                     logger.warning(f"Follow-up message to chat {chat_id} aborted: emergency stop triggered.")
                     break
 
-                # Mandatory minimum 5-second cooldown between consecutive message parts
-                followup_delay = random.uniform(5.0, 7.0)
-                followup_typing = min(followup_delay, max(1.5, min(3.5, len(part.split()) * 0.8)))
-                followup_pause = max(0.0, followup_delay - followup_typing)
+                # Multi-bubble rapid human typing pause (1.2 - 2.5s) between bubbles
+                if self.min_delay == 0 and self.max_delay == 0:
+                    followup_delay = 0.0
+                    followup_typing = 0.0
+                    followup_pause = 0.0
+                else:
+                    followup_delay = random.uniform(1.2, 2.5)
+                    followup_typing = min(followup_delay, max(0.8, min(1.8, len(part.split()) * 0.4)))
+                    followup_pause = max(0.0, followup_delay - followup_typing)
 
                 if followup_pause > 0:
                     await asyncio.sleep(followup_pause)

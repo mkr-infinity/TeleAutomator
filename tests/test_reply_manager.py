@@ -1832,6 +1832,7 @@ def test_spontaneous_followup_command_and_execution(tmp_path: Path):
             data_dir=tmp_path,
             global_cooldown_seconds=0,
             per_chat_cooldown_seconds=0,
+            typing_delay_seconds=0.0,
             min_delay_seconds=0.0,
             max_delay_seconds=0.0,
         )
@@ -1883,6 +1884,154 @@ def test_spontaneous_followup_command_and_execution(tmp_path: Path):
         await mgr._schedule_spontaneous_followup(chat_id2, "heading out", delay_seconds=0.0)
         # Should have sent follow-up
         assert mock_client.send_message.call_count == 1
+
+    asyncio.run(_run())
+
+
+def test_incoming_burst_debouncer(tmp_path: Path):
+    """Verify incoming burst debouncer stitches rapid messages into a single thought."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            reply_mode="restricted_auto",
+            data_dir=tmp_path,
+            global_cooldown_seconds=0,
+            per_chat_cooldown_seconds=0,
+            typing_delay_seconds=0.0,
+            min_delay_seconds=0.0,
+            max_delay_seconds=0.0,
+        )
+        db = Database(tmp_path / "debounce.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # 1. /debounce command checks
+        res1 = await mgr.handle_control_command("/debounce")
+        assert "Burst debouncer" in res1
+        assert "ENABLED" in res1
+
+        res_off = await mgr.handle_control_command("/debounce off")
+        assert "DISABLED" in res_off
+        assert db.get_state("debounce_enabled") == "0"
+
+        res_sec = await mgr.handle_control_command("/debounce 2.5")
+        assert "2.5s" in res_sec
+        assert db.get_state("debounce_seconds") == "2.5"
+
+        # 2. Execution check: Short debounce window (0.15s) stitches rapid messages
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(return_value=MagicMock(id=999))
+        mgr.set_telegram_client(mock_client)
+        # Authorize auto
+        safety.set_auto_authorization(True)
+
+        # Set 0.15s debounce window
+        db.set_state("debounce_enabled", "1")
+        db.set_state("debounce_seconds", "0.15")
+
+        chat_id = 4444
+        # Send 2 rapid burst messages
+        await mgr.handle_incoming_eligible_message(
+            chat_id=chat_id,
+            chat_title="Friend",
+            message_id=1,
+            sender_id=777,
+            sender_name="Bob",
+            text="yo",
+        )
+        await asyncio.sleep(0.04)
+        await mgr.handle_incoming_eligible_message(
+            chat_id=chat_id,
+            chat_title="Friend",
+            message_id=2,
+            sender_id=777,
+            sender_name="Bob",
+            text="are you free",
+        )
+
+        # Wait for debounce window to elapse (0.15s + buffer)
+        await asyncio.sleep(0.28)
+
+        # Should have sent only 1 reply instead of 2 separate replies!
+        assert mock_client.send_message.call_count == 1
+
+    asyncio.run(_run())
+
+
+def test_multibubble_splitting_and_controls(tmp_path: Path):
+    """Verify multi-bubble splitting controls and rapid sequential sending."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            reply_mode="restricted_auto",
+            data_dir=tmp_path,
+            global_cooldown_seconds=0,
+            per_chat_cooldown_seconds=0,
+            typing_delay_seconds=0.0,
+            min_delay_seconds=0.0,
+            max_delay_seconds=0.0,
+        )
+        db = Database(tmp_path / "multibubble.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # 1. /multibubble commands
+        res1 = await mgr.handle_control_command("/multibubble")
+        assert "Multi-bubble response splitting" in res1
+        assert "ENABLED" in res1
+
+        res_off = await mgr.handle_control_command("/multibubble off")
+        assert "DISABLED" in res_off
+        assert db.get_state("multibubble_enabled") == "0"
+
+        res_on = await mgr.handle_control_command("/multibubble on")
+        assert "ENABLED" in res_on
+        assert db.get_state("multibubble_enabled") == "1"
+
+        # 2. split_reply_messages tests
+        # Ellipsis multi-bubble split
+        parts_ellipsis = ReplyManager.split_reply_messages("sounds good... will let you know")
+        assert parts_ellipsis == ["sounds good", "will let you know"]
+
+        # Disabled multi-bubble returns single message
+        parts_disabled = ReplyManager.split_reply_messages("sounds good... will let you know", enabled=False)
+        assert parts_disabled == ["sounds good... will let you know"]
+
+        # 3. Execution: multi-bubble sends sequential parts to chat
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(return_value=MagicMock(id=888))
+        mgr.set_telegram_client(mock_client)
+
+        chat_id = 9999
+        await mgr._send_reply(
+            chat_id=chat_id,
+            reply_to_msg_id=10,
+            text="sounds good... will let you know",
+            adaptive_delay=False,
+        )
+        # Should have sent 2 sequential message bubbles
+        assert mock_client.send_message.call_count == 2
+        calls = [c[0][1] for c in mock_client.send_message.call_args_list]
+        assert calls == ["sounds good", "will let you know"]
+
+        # Now test with multibubble disabled
+        db.set_state("multibubble_enabled", "0")
+        mock_client.send_message.reset_mock()
+        await mgr._send_reply(
+            chat_id=chat_id,
+            reply_to_msg_id=11,
+            text="sounds good... will let you know",
+            adaptive_delay=False,
+        )
+        # Should have sent only 1 message bubble
+        assert mock_client.send_message.call_count == 1
+        assert mock_client.send_message.call_args[0][1] == "sounds good... will let you know"
 
     asyncio.run(_run())
 
