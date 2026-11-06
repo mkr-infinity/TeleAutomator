@@ -28,12 +28,25 @@ def register_handlers(
         text = getattr(event, "raw_text", "") or ""
 
         # Check for control commands sent in private 'Saved Messages' (chat with self)
-        # In Telethon, private chat with oneself has chat_id == my_user_id
-        if chat_id == my_user_id and text.startswith("/"):
-            logger.info("Received control command in Saved Messages.")
-            response = await reply_manager.handle_control_command(text)
+        # In Telethon, private chat with oneself has chat_id == my_user_id or private out message to self
+        is_saved_messages = (chat_id == my_user_id) or (
+            getattr(event, "is_private", False)
+            and getattr(event, "out", False)
+            and (getattr(event, "sender_id", None) == my_user_id or chat_id is None)
+        )
+        clean_text = text.strip()
+        if is_saved_messages and clean_text.startswith("/"):
+            logger.info(f"Received control command in Saved Messages: {clean_text.split()[0]}")
+            response = await reply_manager.handle_control_command(clean_text)
             if response:
-                await client.send_message("me", response, parse_mode="md")
+                try:
+                    await client.send_message("me", response, parse_mode="md")
+                except Exception as e:
+                    logger.warning(f"Could not deliver command response with markdown: {e}. Falling back to plain text.")
+                    try:
+                        await client.send_message("me", response, parse_mode=None)
+                    except Exception as e2:
+                        logger.error(f"Failed to deliver command response to Saved Messages: {e2}")
             return
 
         # Regular incoming message handling
@@ -53,10 +66,12 @@ def register_handlers(
         message_obj = getattr(event, "message", None)
         message_id = getattr(event, "id", 0)
 
-        # In groups with mention_only enabled, verify whether the reply or mention actually targets us
+        # In groups, verify who is replying to whom
         reply_msg = None
         is_explicitly_mentioned = False
         is_reply_to_me = False
+        is_reply_to_other = False
+        reply_target_name = ""
 
         if is_group and reply_manager.db:
             raw_text_lower = text.lower()
@@ -78,6 +93,14 @@ def register_handlers(
                         reply_out = getattr(reply_msg, "out", False)
                         if reply_out or reply_sender_id == my_user_id:
                             is_reply_to_me = True
+                        else:
+                            is_reply_to_other = True
+                            try:
+                                r_sender_obj = await reply_msg.get_sender()
+                                if r_sender_obj and getattr(r_sender_obj, "first_name", None):
+                                    reply_target_name = r_sender_obj.first_name
+                            except Exception:
+                                reply_target_name = "User"
                 except Exception:
                     pass
 
@@ -105,18 +128,28 @@ def register_handlers(
         except Exception:
             pass
 
-        # Cache current incoming message into local SQLite database for conversation history
+        # Cache current incoming message into local SQLite database with reply target context
+        recorded_sender = f"{sender_name} (to {reply_target_name})" if reply_target_name else sender_name
         reply_manager.db.record_chat_message(
             chat_id=chat_id,
             message_id=message_id,
             sender_id=sender_id,
-            sender_name=sender_name,
+            sender_name=recorded_sender,
             text=text,
             is_outgoing=False,
         )
 
         # Group smart engagement decision
         if is_group and reply_manager.db:
+            # Check which person is replying to which person:
+            # If someone is replying to another member (NOT us), never hijack or reply to it unless explicitly mentioned!
+            if is_reply_to_other and not is_explicitly_mentioned:
+                logger.debug(
+                    f"Group message in {chat_id} is a reply from {sender_name} to {reply_target_name or 'another member'}. "
+                    "Skipping reply to avoid intercepting other people's conversation."
+                )
+                return
+
             strict_mention = reply_manager.db.get_state("group_mention_only", "0") == "1"
             if strict_mention and not is_mention:
                 logger.debug(f"Group message in {chat_id} ignored: strict mention-only active.")
@@ -135,12 +168,12 @@ def register_handlers(
                 else:
                     is_relevant = reply_manager.is_group_message_relevant(chat_id, text, chat_title)
                     if is_relevant:
-                        # Relevant to group topic: ~65% reply, ~20% reaction, ~15% passive reading
+                        # Relevant to group topic: ~65% reply, ~8% selective reaction, ~27% passive reading
                         roll = random.random()
                         if roll < 0.65:
                             logger.info(f"[GROUP TOPIC ENGAGEMENT] Message in {chat_id} is relevant to group topic. Replying ({int(0.65*100)}%).")
                             reply_manager.mark_group_activity(chat_id)
-                        elif roll < 0.85:
+                        elif roll < 0.73:
                             logger.info(f"[GROUP TOPIC REACTION] Message in {chat_id} is relevant. Reacting with emoji.")
                             await reply_manager.maybe_send_reaction(chat_id, message_id, text)
                             reply_manager.mark_group_activity(chat_id)
@@ -156,7 +189,7 @@ def register_handlers(
         # Retrieve recent conversation context with aging window (default: 2 hours TTL)
         ttl_hours = float(reply_manager.db.get_state("context_ttl_hours", "2.0"))
         max_age_secs = int(ttl_hours * 3600) if ttl_hours > 0 else None
-        conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=8, max_age_seconds=max_age_secs)
+        conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=10, max_age_seconds=max_age_secs)
         if len(conversation_history) <= 2:
             try:
                 recent_msgs = await client.get_messages(chat_id, limit=10)
@@ -184,7 +217,7 @@ def register_handlers(
                             text=m_text,
                             is_outgoing=m_out,
                         )
-                    conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=8, max_age_seconds=max_age_secs)
+                    conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=10, max_age_seconds=max_age_secs)
             except Exception as e:
                 logger.debug(f"Could not seed chat history from network: {e}")
 
@@ -198,7 +231,7 @@ def register_handlers(
         if reply_msg and getattr(reply_msg, "raw_text", None):
             r_text = reply_msg.raw_text.strip()
             if r_text and not any(h.get("text") == r_text for h in conversation_history):
-                r_sender = "You" if (getattr(reply_msg, "out", False) or getattr(reply_msg, "sender_id", None) == my_user_id) else "Contact"
+                r_sender = "You" if (getattr(reply_msg, "out", False) or getattr(reply_msg, "sender_id", None) == my_user_id) else (reply_target_name or "Contact")
                 conversation_history.append({"sender": f"{r_sender} (in reply to)", "text": r_text})
 
         # Process reply generation and dispatch

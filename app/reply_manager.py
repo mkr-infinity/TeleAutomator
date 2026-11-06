@@ -52,6 +52,7 @@ class ReplyManager:
         self.min_delay: float = getattr(config, "min_delay_seconds", 5.0)
         self.max_delay: float = getattr(config, "max_delay_seconds", 60.0)
         self._last_reaction_time: float = 0.0
+        self._last_reaction_time_by_chat: dict[int, float] = {}
         self._last_sent_reply_by_chat: dict[int, str] = {}
         self._last_group_activity: dict[int, float] = {}
         self._next_reaction_cooldown: float = random.uniform(
@@ -546,7 +547,7 @@ class ReplyManager:
         if not cmd_parts:
             return None
 
-        cmd = cmd_parts[0].lower()
+        cmd = cmd_parts[0].lower().split("@")[0]
 
         if cmd in ("/help", "/start"):
             return (
@@ -575,7 +576,7 @@ class ReplyManager:
                 "• `/apikey <key>` - Set/update AI API key directly from Telegram\n"
                 "• `/usage` - Live token tracker & remaining free 100M quota\n"
                 "• `/checkmodels` - Ping and verify candidate models in real time\n"
-                "• `/reasoning <low|medium|high|off>` - Adjust discrete reasoning effort\n"
+                "• `/thinking <default|low|medium|high|off>` - Adjust AI thinking/reasoning effort\n"
                 "• `/temp <0.0-1.0>` - Adjust AI randomness/creativity\n"
                 "• `/maxtokens <tokens>` - Maximum output tokens per response\n"
                 "• `/model <name>` - Set model name or comma-separated fallback chain\n"
@@ -955,24 +956,25 @@ class ReplyManager:
             status_str = "ENABLED" if val == "1" else "DISABLED"
             return f"⚠️ Daily quota warning alerts are now *{status_str}*."
 
-        if cmd in ("/reasoning", "/effort"):
+        if cmd in ("/thinking", "/reasoning", "/effort"):
             if len(cmd_parts) < 2:
-                curr = self.db.get_state("ai_reasoning_effort", "low")
+                curr = self.db.get_state("ai_reasoning_effort", "default")
                 return (
-                    f"🧠 *Current Reasoning Effort:* `{curr}`\n\n"
+                    f"🧠 *Current AI Thinking/Reasoning Effort:* `{curr}` (Default: `default`)\n\n"
                     f"*Options:*\n"
-                    f"• `/reasoning low` - Ultra-fast discrete diffusion generation (Default)\n"
-                    f"• `/reasoning medium` - Balanced reasoning depth\n"
-                    f"• `/reasoning high` - In-depth logical analysis\n"
-                    f"• `/reasoning off` - Disable explicit reasoning effort parameter"
+                    f"• `/thinking default` - Model's native default thinking (Default, no forced low/high)\n"
+                    f"• `/thinking low` - Ultra-fast discrete generation\n"
+                    f"• `/thinking medium` - Balanced reasoning depth\n"
+                    f"• `/thinking high` - In-depth logical analysis\n"
+                    f"• `/thinking off` - Disable explicit reasoning effort parameter"
                 )
             target = cmd_parts[1].lower().strip()
-            if target not in ("low", "medium", "high", "off", "none"):
-                return "Invalid reasoning effort. Choose `low`, `medium`, `high`, or `off`."
+            if target not in ("default", "low", "medium", "high", "off", "none"):
+                return "Invalid thinking/reasoning effort. Choose `default`, `low`, `medium`, `high`, or `off`."
             self.db.set_state("ai_reasoning_effort", target)
             if hasattr(self.generator.provider, "reasoning_effort"):
                 self.generator.provider.reasoning_effort = target
-            return f"🧠 AI reasoning effort set to *{target}*."
+            return f"🧠 AI thinking/reasoning effort set to *{target}*."
 
         if cmd in ("/temp", "/temperature"):
             if len(cmd_parts) < 2:
@@ -1004,7 +1006,7 @@ class ReplyManager:
             prov = self.db.get_state("ai_provider", self.config.ai_provider)
             mod = self.db.get_state("ai_model", self.config.ai_model or "mercury-3")
             url = self.db.get_state("ai_base_url", self.config.ai_base_url or "https://api.inceptionlabs.ai/v1")
-            eff = self.db.get_state("ai_reasoning_effort", "low")
+            eff = self.db.get_state("ai_reasoning_effort", "default")
             temp = self.db.get_state("ai_temperature", "0.6")
             mtok = self.db.get_state("ai_max_tokens", "200")
             curr_key = self.db.get_state("ai_api_key", self.config.ai_api_key or "")
@@ -1021,7 +1023,7 @@ class ReplyManager:
                 f"• Active Model: `{getattr(self.generator.provider, 'model', mod)}`\n"
                 f"• Fallback Sequence: {cand_str}\n"
                 f"• API Key: {masked_key} (change via `/apikey <key>`)\n"
-                f"• Reasoning Effort: `{eff}` (change via `/reasoning <effort>`)\n"
+                f"• Thinking / Reasoning Effort: `{eff}` (change via `/thinking <effort>`)\n"
                 f"• Temperature: `{temp}` (change via `/temp <0.0-1.0>`)\n"
                 f"• Max Output Tokens: `{mtok}` (change via `/maxtokens <tokens>`)\n\n"
                 f"_Quick Setup:_ `/setai <provider> <api_key> <endpoint> [model]` or `/setai mercury <key>`\n"
@@ -1488,19 +1490,20 @@ class ReplyManager:
             self.db.set_state("owner_name", new_name)
             return f"✅ Identity updated! The AI will now reply as '{new_name}'."
 
-        if cmd == "/prompt":
+        if cmd in ("/prompt", "/showprompt", "/getprompt", "/activeprompt"):
             custom = self.generator.prompt_manager.custom_prompt
             mode_str = f"Custom Persona ({len(custom.split())} words)" if custom else "Default Persona"
             full_inst = self.generator.prompt_manager.system_instructions
             custom_display = f'"{custom}"' if custom else "None (using default instructions)"
+            prompt_preview = full_inst if len(full_inst) <= 3000 else (full_inst[:3000] + "\n...[truncated for telegram display]")
             return (
                 f"📜 *Active System Instructions ({mode_str}):*\n\n"
-                f"• *Anti-AI Guardrails:* ACTIVE 🛡️ (1-word brevity matching, Gen-Z slang, human alibi, zero code/brackets)\n"
+                f"• *Anti-AI Guardrails:* ACTIVE 🛡️ (Human conversation, varied lengths, top emojis, human alibi, zero code/brackets)\n"
                 f"• *Custom Persona:* {custom_display}\n"
                 f"• *Active Style:* `{self.generator.style}`\n"
                 f"• *Language:* `{self.generator.language}`\n\n"
                 f"*Compiled Prompt (sent to AI):*\n"
-                f"```\n{full_inst[:3800]}\n```\n\n"
+                f"```\n{prompt_preview}\n```\n\n"
                 f"_Use `/setprompt <text>` to customize persona, or `/setprompt default` to reset._"
             )
 
@@ -1681,7 +1684,7 @@ class ReplyManager:
             logger.debug("[REACTION] Suppressed reaction: quiet hours sleep schedule active.")
             return False
 
-        # Check randomized interval cooldown (3s to 9s)
+        # Check randomized interval cooldown
         now = time.time()
         min_react_cd = float(self.db.get_state(
             "reaction_min_cooldown_seconds",
@@ -1694,6 +1697,12 @@ class ReplyManager:
         if (now - self._last_reaction_time) < self._next_reaction_cooldown:
             wait_rem = round(self._next_reaction_cooldown - (now - self._last_reaction_time), 1)
             logger.debug(f"[REACTION] Cooldown active ({wait_rem}s remaining before next reaction).")
+            return False
+
+        # Per-chat reaction cooldown (minimum 25s between reactions in the same chat to prevent spam)
+        last_chat_react = self._last_reaction_time_by_chat.get(chat_id, 0.0)
+        if (now - last_chat_react) < 25.0:
+            logger.debug(f"[REACTION] Per-chat reaction cooldown active for {chat_id}.")
             return False
 
         # Check rolling rate limit
@@ -1723,24 +1732,20 @@ class ReplyManager:
             "🤷", "🤷‍♀️", "😡"
         ]
 
-        # Natural sentiment & tone mapping with full emoji variety (featuring top common emojis: 😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️)
+        # Natural sentiment & tone mapping with full emoji variety (selective, thoughtful, non-spammy)
         lower = text.lower()
         has_sentiment = True
         if any(w in lower for w in ("haha", "lol", "lmao", "rofl", "xd", "funny", "lmfao", "joke", "dead", "ded")):
-            chosen = random.choice(["😂", "🤣", "💀", "😁", "🤪", "🤡", "😎"])
-        elif any(w in lower for w in ("fire", "op", "w", "nice", "cool", "goat", "lit", "win", "awesome", "pro")):
-            chosen = random.choice(["🔥", "⚡", "💯", "🆒", "🏆", "🤩", "👏"])
-        elif any(w in lower for w in ("thanks", "thx", "love", "heart", "tysm", "appreciate", "cute", "sweet")):
-            chosen = random.choice(["❤️", "❤️‍🔥", "🥰", "😍", "💘", "😘", "🙏", "🤗"])
-        elif any(w in lower for w in ("ok", "okay", "done", "yes", "yeah", "yep", "sure", "alright", "got it", "true", "deal", "agree")):
-            chosen = random.choice(["👍", "👌", "🤝", "🫡", "✍️", "🆒"])
-        elif any(w in lower for w in ("no", "nah", "nope", "bad", "disagree", "worst", "hate", "bruh")):
-            chosen = random.choice(["👎", "💔", "😐", "🤨", "🗿", "🥱"])
-        elif any(w in lower for w in ("omg", "what", "wait", "wow", "damn", "seriously", "bro what", "look")):
-            chosen = random.choice(["🤯", "😱", "👀", "😨", "👻"])
-        elif any(w in lower for w in ("why", "how", "who", "where", "?", "idk", "wonder", "really")):
-            chosen = random.choice(["🤔", "🧐", "🤓", "👀"])
-        elif any(w in lower for w in ("sad", "rip", "sorry", "unfortunate", "cry", "pain")):
+            chosen = random.choice(["😂", "🤣", "💀", "😁"])
+        elif any(w in lower for w in ("congrats", "congratulations", "huge w", "promoted", "won", "awesome work", "let's go", "fire", "lit", "goat")):
+            chosen = random.choice(["🔥", "⚡", "💯", "🏆", "🤩", "👏"])
+        elif any(w in lower for w in ("thanks", "thank you", "tysm", "love you", "heart", "appreciate it", "grateful")):
+            chosen = random.choice(["❤️", "❤️‍🔥", "🥰", "🙏", "🤗"])
+        elif any(w in lower for w in ("deal", "sounds good", "done deal", "agreed", "let's do it", "partner")):
+            chosen = random.choice(["👍", "🤝", "🫡"])
+        elif any(w in lower for w in ("wtf", "no way", "holy shit", "damn bro", "unreal", "omg")):
+            chosen = random.choice(["🤯", "😱", "👀"])
+        elif any(w in lower for w in ("rip", "sorry to hear", "unfortunate", "so sad", "pain")):
             chosen = random.choice(["😢", "😭", "💔"])
         else:
             has_sentiment = False
@@ -1759,6 +1764,7 @@ class ReplyManager:
             now = time.time()
             self.db.record_reaction(now)
             self._last_reaction_time = now
+            self._last_reaction_time_by_chat[chat_id] = now
             self._next_reaction_cooldown = random.uniform(min_react_cd, max_react_cd)
             logger.info(
                 f"[REACTION] Reacted {chosen} to message {message_id} in chat {chat_id}. "
@@ -1966,7 +1972,8 @@ class ReplyManager:
                     logger.warning(f"Follow-up message to chat {chat_id} aborted: emergency stop triggered.")
                     break
 
-                followup_delay = random.uniform(1.0, 1.8)
+                # Mandatory minimum 5-second cooldown between consecutive message parts
+                followup_delay = random.uniform(5.0, 7.0)
                 try:
                     if hasattr(self._client, "action") and callable(self._client.action):
                         act = self._client.action(chat_id, "typing")

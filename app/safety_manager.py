@@ -305,19 +305,29 @@ class SafetyManager:
         if len(text) > self.config.max_message_length:
             return False, f"Message length ({len(text)}) exceeds maximum allowed ({self.config.max_message_length})"
 
-        # Global cooldown check (randomized between min and max)
-        global_cd = self._next_global_cooldown or self._pick_random_global_cooldown()
+        # Global cooldown check (minimum 5s hard floor + randomized interval)
         time_since_global = now - self._last_global_reply_time
-        if time_since_global < global_cd:
-            wait_time = max(1, int(global_cd - time_since_global))
+        floor_global = min(5.0, self.min_global_cooldown)
+        if time_since_global < floor_global:
+            wait_time = max(1, int(round(floor_global - time_since_global)))
             return False, f"Global cooldown active ({wait_time}s remaining)"
 
-        # Per-chat cooldown check (randomized between min 5s and max 60s)
-        chat_cd = self._next_chat_cooldown.get(chat_id) or self._pick_random_chat_cooldown()
+        global_cd = max(floor_global, self._next_global_cooldown or self._pick_random_global_cooldown())
+        if time_since_global < global_cd:
+            wait_time = max(1, int(round(global_cd - time_since_global)))
+            return False, f"Global cooldown active ({wait_time}s remaining)"
+
+        # Per-chat cooldown check (minimum 5s hard floor + randomized interval)
         last_chat_time = self._last_chat_reply_time.get(chat_id, 0.0)
         time_since_chat = now - last_chat_time
+        floor_chat = min(5.0, self.min_chat_cooldown)
+        if time_since_chat < floor_chat:
+            wait_time = max(1, int(round(floor_chat - time_since_chat)))
+            return False, f"Per-chat cooldown active for chat {chat_id} ({wait_time}s remaining)"
+
+        chat_cd = max(floor_chat, self._next_chat_cooldown.get(chat_id) or self._pick_random_chat_cooldown())
         if time_since_chat < chat_cd:
-            wait_time = max(1, int(chat_cd - time_since_chat))
+            wait_time = max(1, int(round(chat_cd - time_since_chat)))
             return False, f"Per-chat cooldown active for chat {chat_id} ({wait_time}s remaining)"
 
         return True, "OK"

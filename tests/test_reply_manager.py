@@ -1294,6 +1294,80 @@ def test_reactions_only_for_relative_sentiment(tmp_path: Path):
         sentiment_res = await mgr.maybe_send_reaction(101, 2, "haha that was so funny lol")
         assert sentiment_res is True
 
+        # 3. Per-chat reaction cooldown: immediate next reaction in same chat returns False
+        spam_res = await mgr.maybe_send_reaction(101, 3, "lmao another one")
+        assert spam_res is False
+
     asyncio.run(_run())
+
+
+def test_ai_thinking_command_and_customization(tmp_path: Path):
+    """Verify /thinking command defaults to 'default' and allows customizing reasoning effort."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "test_thinking.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        # 1. Default thinking is 'default' (no forced low or high)
+        info = await mgr.handle_control_command("/thinking")
+        assert "Current AI Thinking/Reasoning Effort:* `default`" in info
+        assert "/thinking default" in info
+
+        # 2. Set to high
+        res_high = await mgr.handle_control_command("/thinking high")
+        assert "set to *high*" in res_high
+        assert db.get_state("ai_reasoning_effort") == "high"
+
+        # 3. Set to default
+        res_def = await mgr.handle_control_command("/thinking default")
+        assert "set to *default*" in res_def
+        assert db.get_state("ai_reasoning_effort") == "default"
+
+    asyncio.run(_run())
+
+
+def test_prompt_command_and_aliases_display_active_prompt(tmp_path: Path):
+    """Verify /prompt, /showprompt, /getprompt display the active system prompt."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "test_prompt_cmd.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        for alias in ("/prompt", "/showprompt", "/getprompt", "/activeprompt"):
+            res = await mgr.handle_control_command(alias)
+            assert "Active System Instructions" in res
+            assert "Compiled Prompt" in res
+            assert "Anti-AI Guardrails" in res
+
+    asyncio.run(_run())
+
+
+def test_hard_five_second_minimum_cooldown(tmp_path: Path):
+    """Verify minimum message cooldown of 5 seconds between consecutive replies."""
+    cfg = AppConfig(
+        api_id=123,
+        api_hash="dummy_hash",
+        data_dir=tmp_path,
+        global_cooldown_seconds=30,
+        per_chat_cooldown_seconds=60,
+    )
+    db = Database(tmp_path / "test_hard_cd.db")
+    safety = SafetyManager(cfg, db)
+
+    # Initial check passes
+    can_reply, _ = safety.can_reply(200, "hello")
+    assert can_reply is True
+
+    # After sending a reply, immediate next reply is blocked by cooldown
+    safety.mark_reply_sent(200)
+    can_reply2, reason = safety.can_reply(200, "hello again")
+    assert can_reply2 is False
+    assert "cooldown active" in reason
 
 

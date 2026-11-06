@@ -45,11 +45,11 @@ def create_ai_provider(config: AppConfig, database: Optional[Any] = None) -> AIP
             if not default_base_url:
                 default_base_url = "https://api.inceptionlabs.ai/v1"
 
-        reasoning_effort = "low"
+        reasoning_effort = "default"
         temperature = 0.6
         max_tokens = 200
         if database:
-            reasoning_effort = database.get_state("ai_reasoning_effort", "low")
+            reasoning_effort = database.get_state("ai_reasoning_effort", "default")
             try:
                 temperature = float(database.get_state("ai_temperature", "0.6"))
             except ValueError:
