@@ -932,15 +932,117 @@ def test_group_unthreaded_reply_without_mention(tmp_path: Path):
         assert sent_calls[0][0] == -100222
         assert sent_calls[0][2] is None
 
-        # 2. Group reply with mention: reply_to is preserved
-        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah true that", adaptive_delay=False, is_mention=True)
+        # 2. Group reply where AI specifically mentioned someone: reply_to is preserved
+        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="@bob yeah true that", adaptive_delay=False, is_mention=False)
         assert len(sent_calls) == 2
         assert sent_calls[1][2] == 77
 
-        # 3. Private DM: reply_to is preserved
-        await mgr._send_reply(chat_id=12345, reply_to_msg_id=55, text="sounds good", adaptive_delay=False, is_mention=False)
+        # 3. Group reply with mention: reply_to is preserved
+        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah true that", adaptive_delay=False, is_mention=True)
         assert len(sent_calls) == 3
-        assert sent_calls[2][2] == 55
+        assert sent_calls[2][2] == 77
+
+        # 4. Private DM: reply_to is preserved
+        await mgr._send_reply(chat_id=12345, reply_to_msg_id=55, text="sounds good", adaptive_delay=False, is_mention=False)
+        assert len(sent_calls) == 4
+        assert sent_calls[3][2] == 55
+
+    asyncio.run(_run())
+
+
+def test_mandatory_mention_when_mentioned_by_peer(tmp_path: Path):
+    """Verify that when someone mentions us in a group, our reply always mentions them."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", reply_mode="restricted_auto", auto_authorize=True, data_dir=tmp_path)
+        db = Database(tmp_path / "test_peer_mention.db")
+        safety = SafetyManager(cfg, db)
+        safety.set_auto_authorization(True)
+        privacy = PrivacyManager(cfg, database=db)
+        privacy.allow_chat(-100888)
+        generator = ReplyGenerator(cfg, database=db)
+        # AI generated a response without a mention tag
+        generator.generate = MagicMock(return_value="sounds good to me 👍")
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        sent_messages = []
+        async def mock_send(chat_id, text, **kwargs):
+            sent_messages.append((chat_id, text, kwargs.get("reply_to")))
+            m = MagicMock()
+            m.id = 111
+            return m
+
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(side_effect=mock_send)
+        mgr.set_telegram_client(mock_client)
+
+        await mgr.handle_incoming_eligible_message(
+            chat_id=-100888,
+            chat_title="Dev Hub",
+            message_id=404,
+            sender_id=777,
+            sender_name="Alice",
+            text="@Kaif can you check this?",
+            is_mention=True,
+        )
+
+        assert len(sent_messages) == 1
+        chat_id, text, reply_to = sent_messages[0]
+        # Text must mention Alice
+        assert "@Alice" in text or "Alice" in text
+        # Must reply to message ID 404
+        assert reply_to == 404
+
+    asyncio.run(_run())
+
+
+def test_multi_sentiment_reactions(tmp_path: Path):
+    """Verify dynamic reactions work across excitement, agreement, surprise, and gratitude."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "test_sentiments.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        mock_client = AsyncMock()
+        mock_client.get_input_entity = AsyncMock(return_value="peer_entity")
+        reactions_sent = []
+        async def mock_call(req):
+            reactions_sent.append(req.reaction[0].emoticon)
+        mock_client.side_effect = mock_call
+        mgr.set_telegram_client(mock_client)
+
+        # 1. Excitement / congrats
+        mgr._next_reaction_cooldown = 0.0
+        mgr._last_reaction_time = 0.0
+        mgr._last_reaction_time_by_chat.clear()
+        res1 = await mgr.maybe_send_reaction(1001, 1, "huge w bro congrats!")
+        assert res1 is True
+        assert reactions_sent[-1] in ("🔥", "⚡", "💯", "🏆", "🤩", "👏")
+
+        # 2. Agreement / deal
+        mgr._next_reaction_cooldown = 0.0
+        mgr._last_reaction_time = 0.0
+        mgr._last_reaction_time_by_chat.clear()
+        res2 = await mgr.maybe_send_reaction(1002, 2, "done deal partner")
+        assert res2 is True
+        assert reactions_sent[-1] in ("👍", "🤝", "🫡", "👌")
+
+        # 3. Surprise / shock
+        mgr._next_reaction_cooldown = 0.0
+        mgr._last_reaction_time = 0.0
+        mgr._last_reaction_time_by_chat.clear()
+        res3 = await mgr.maybe_send_reaction(1003, 3, "wtf no way unreal")
+        assert res3 is True
+        assert reactions_sent[-1] in ("🤯", "😱", "👀")
+
+        # 4. Neutral text: returns False
+        mgr._next_reaction_cooldown = 0.0
+        mgr._last_reaction_time = 0.0
+        mgr._last_reaction_time_by_chat.clear()
+        res4 = await mgr.maybe_send_reaction(1004, 4, "the sky is blue today")
+        assert res4 is False
 
     asyncio.run(_run())
 

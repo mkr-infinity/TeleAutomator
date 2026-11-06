@@ -274,9 +274,9 @@ def test_clean_reply_suppresses_standalone_laughter_and_leading_mentions():
     assert pm.clean_reply("true that 😂") == "true that 😂"
     assert pm.clean_reply("sounds good bro 👍") == "sounds good bro 👍"
 
-    # Leading @mentions stripped so bot chimes in without mentioning anyone
-    assert pm.clean_reply("@alice sounds good 👍") == "sounds good 👍"
-    assert pm.clean_reply("@bob: on my way") == "on my way"
+    # Mentions are preserved when AI decides to address someone directly
+    assert pm.clean_reply("@alice sounds good 👍") == "@alice sounds good 👍"
+    assert pm.clean_reply("@bob on my way") == "@bob on my way"
 
 
 def test_never_use_question_marks():

@@ -26,7 +26,7 @@ VALID_STYLES: Dict[str, str] = {
 # =============================================================================
 
 ANTI_AI_GUARDRAILS = """You are texting directly as {owner_name} from your personal phone in Telegram.
-You are a real human friend chatting casually on mobile. NEVER sound like an AI, bot, assistant, or customer rep.
+Real human friend chatting on mobile. NEVER sound like an AI, bot, or assistant.
 
 CRITICAL TEXTING RULES:
 1. BREVITY & ENERGY MATCHING (STRICT 10-15 WORD LIMITS):
@@ -38,13 +38,13 @@ CRITICAL TEXTING RULES:
    - Text casually and naturally. Authentic and friendly without slang overload.
 
 3. READ CONTEXT FIRST:
-   - Read context first. Directly address what is being discussed and who is replying to whom.
+   - Read context first. Address what is discussed and who is replying to whom.
 
 4. DEFAULT LANGUAGE IS ENGLISH:
    - Always reply in English by default. NEVER use Hindi or other language unless explicitly configured.
 
-5. CASUAL MOBILE TYPING & NO CODE:
-   - Text naturally like on phone. Minor typos ok. NEVER write code, paths, brackets [] or braces {}.
+5. CASUAL TYPING & NO CODE:
+   - Text naturally on phone. Minor typos ok. NEVER write code, paths, or brackets [] {}.
 
 6. NEVER USE QUESTION MARKS:
    - NEVER use question marks (?). State things casually.
@@ -53,22 +53,23 @@ CRITICAL TEXTING RULES:
    - Common emojis: 😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️. Place naturally in middle or at end.
 
 8. HUMAN ALIBI (NEVER ADMIT BEING AI):
-   - If asked: "seriously 😂 bro u think I am not real", "bruh u fr rn it's me lol".
+   - If asked: "seriously 😂 bro u think I am not real", "bruh it's me lol".
 
 9. NO REPETITION / NO SPAM:
    - Never repeat phrases or reuse canned phrases. Keep each response completely fresh.
 
 10. PRIVACY:
-   - Never promise money or invent plans. Say u will check and let them know.
+   - Never promise money or plans. Say u will check and let them know.
 
 11. TIME AWARENESS:
-   - Aware of Indian Time (IST) and current time period (morning/afternoon/evening/night) when greeting.
+   - Aware of Indian Time (IST) and time period (morning/afternoon/evening/night) when greeting.
 
-12. NO 'HAHA' TEXT (USE EMOJI REACTIONS FOR HUMOR):
-   - NEVER write 'haha', 'lol', or 'lmao' as a text message. Use emoji reactions or real thoughts.
+12. NO 'HAHA' TEXT (EMOJI REACTIONS FOR HUMOR):
+   - NEVER write 'haha', 'lol', or 'lmao'. Use emoji reactions or real thoughts.
 
-13. CHIME IN WITHOUT MENTIONING ANYONE:
-   - In groups and chats, message freely into the chat stream without tagging @usernames or names."""
+13. TOPIC ENGAGEMENT & MENTIONING:
+   - In topic chats, engage naturally with or without mentioning: decide from context whether to address someone or speak into the stream.
+   - MANDATORY: If someone mentions you, you MUST mention and address them. Never reply without mentioning them."""
 
 DEFAULT_SYSTEM_INSTRUCTIONS = ANTI_AI_GUARDRAILS.replace("{owner_name}", "Kaif") + "\n\nOutput ONLY the raw text message ready to send."
 
@@ -262,9 +263,6 @@ class PromptManager:
         # STRICTLY NO QUESTION MARKS: Strip all question marks from replies
         text = text.replace("?", "")
 
-        # Strip accidental leading @mentions (e.g. "@alice hey", "@john: ok")
-        text = re.sub(r"^@\w+[:,\s]*", "", text)
-
         # Check for literal None or empty string
         clean_lower = text.strip().lower()
         if not clean_lower or clean_lower in ("none", "none.", "null", "null.", "nil", "undefined"):
@@ -292,6 +290,7 @@ class PromptManager:
         conversation_history: Optional[List[Dict[str, str]]] = None,
         permanent_context: Optional[str] = None,
         is_group: bool = False,
+        is_mention: bool = False,
     ) -> str:
         """Create prompt containing message context, history, permanent chat context, language rule, and dynamic owner identity."""
         parts: List[str] = []
@@ -330,9 +329,21 @@ class PromptManager:
         else:
             lang_instruction = f"CRITICAL: User configured language is {self._language.capitalize()}. You MUST reply ONLY in {self._language.capitalize()}."
 
-        # Natural human engagement without mentioning anyone or sending standalone laughter
+        # Natural human engagement with dynamic mentioning
+        if is_mention:
+            mention_rule = (
+                f"MANDATORY MENTION RULE: {sender_name} directly mentioned or replied to you. "
+                f"You MUST mention and directly address {sender_name} while replying (e.g. '@{sender_name} ...' or addressing them by name). Never reply without mentioning them."
+            )
+        else:
+            mention_rule = (
+                "DYNAMIC MENTION RULE: In ongoing topic chats, engage naturally in both ways (with or without mentioning). "
+                "Think and decide from context whether you need to mention someone or chime into the stream freely."
+            )
+
         engagement_instruction = (
-            "In groups and chats, be an active Telegram user. When you understand discussions, chime in naturally with thoughts without tagging @usernames or mentioning anyone's name. "
+            "In groups and chats, be an active Telegram user. When you understand discussions, chime in naturally with thoughts. "
+            f"{mention_rule} "
             "NEVER send messages saying 'haha', 'lol', or 'lmao' as text; use emoji reactions or express real thoughts. "
             "Read chat context first to see what conversations are ongoing before replying. "
             "Match conversational length naturally: sometimes 1 word, sometimes 2 words, sometimes a line when necessary (under 10 words default, max 15 serious). "
@@ -382,6 +393,6 @@ class PromptManager:
             f"Punctuation & Emojis: Use top common emojis (😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️) naturally wherever they fit best (in between words or at the end of a thought). NEVER use question marks (?).\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, active group engagement without tagging @names, no 'haha'/'lol' text, read context first, natural typing, no question marks, emojis where they fit best, max 10 words [serious 10-15], no repetition, no canned phrases, no AI talk, no code, no brackets):"
+            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, dynamic topic engagement with or without mentioning [always mention if mentioned], no 'haha'/'lol' text, read context first, natural typing, no question marks, emojis where they fit best, max 10 words [serious 10-15], no repetition, no canned phrases, no AI talk, no code, no brackets):"
         )
         return "\n\n".join(parts)

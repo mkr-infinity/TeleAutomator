@@ -200,18 +200,19 @@ def register_handlers(
                         logger.debug(f"Group message in {chat_id} ignored: not mentioned and not relevant to group topic.")
                         return
 
-        # Natural emoji reaction for humor and laughter (instead of writing "haha" in text messages)
-        import re
-        lower_text = text.lower()
-        is_humor = any(w in lower_text for w in ("haha", "lol", "lmao", "rofl", "xd", "funny", "joke", "dead", "ded"))
-        pure_laugh_text = re.sub(r"[^a-zA-Z]", "", text).lower()
-        is_pure_laughter = bool(pure_laugh_text and re.match(r"^(?:[ae]*h+[ae]*|lol|lmao|rofl|xd|lmfao)+$", pure_laugh_text))
-
-        if is_humor and (not is_group or not is_reply_to_other):
+        # Natural emoji reaction across sentiment spectrum (humor, excitement, agreement, surprise, warmth)
+        if not is_group or not is_reply_to_other:
             reacted = await reply_manager.maybe_send_reaction(chat_id, message_id, text)
-            if is_pure_laughter and reacted and not is_mention:
-                logger.info(f"[LAUGHTER REACTION ONLY] Reacted with emoji to pure laughter in chat {chat_id}.")
-                return
+            if reacted and not is_mention:
+                import random
+                import re
+                react_only_prob = float(reply_manager.db.get_state("react_only_probability", str(getattr(reply_manager.config, "react_only_probability", 0.25))))
+                pure_laugh_text = re.sub(r"[^a-zA-Z]", "", text).lower()
+                is_pure_laughter = bool(pure_laugh_text and re.match(r"^(?:[ae]*h+[ae]*|lol|lmao|rofl|xd|lmfao)+$", pure_laugh_text))
+                words = text.strip().split()
+                if is_pure_laughter or (len(words) <= 3 and random.random() < react_only_prob):
+                    logger.info(f"[SENTIMENT REACTION ONLY] Reacted with emoji to sentiment in chat {chat_id}; completed interaction.")
+                    return
 
         # Retrieve recent conversation context with aging window (default: 2 hours TTL)
         ttl_hours = float(reply_manager.db.get_state("context_ttl_hours", "2.0"))

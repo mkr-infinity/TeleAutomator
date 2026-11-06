@@ -124,6 +124,7 @@ class ReplyGenerator:
         style_override: Optional[str] = None,
         permanent_context: Optional[str] = None,
         is_group: bool = False,
+        is_mention: bool = False,
     ) -> str:
         """Generate a draft reply text considering conversation context when provided."""
         prompt = self.prompt_manager.build_user_prompt(
@@ -132,6 +133,7 @@ class ReplyGenerator:
             conversation_history=conversation_history,
             permanent_context=permanent_context,
             is_group=is_group,
+            is_mention=is_mention,
         )
         instructions = self.prompt_manager.get_system_instructions(style_override=style_override)
         try:

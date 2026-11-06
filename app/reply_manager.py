@@ -207,6 +207,7 @@ class ReplyManager:
                         style_override=chat_style or None,
                         permanent_context=permanent_context_str,
                         is_group=(chat_id < 0),
+                        is_mention=is_mention,
                     )
 
                 # Show typing indicator in chat or group while AI thinks/generates reply
@@ -269,6 +270,12 @@ class ReplyManager:
 
         # Prevent repeating the same word or exact reply consecutively in this chat
         draft = self._prevent_duplicate_reply(chat_id, draft)
+
+        # Mandatory mention rule: if someone mentioned us in a group, ensure they are mentioned when replying
+        if is_mention and chat_id < 0 and sender_name and sender_name not in ("Contact", "You"):
+            tag_name = sender_name.lstrip("@").split()[0]
+            if f"@{tag_name.lower()}" not in draft.lower() and tag_name.lower() not in draft.lower():
+                draft = f"@{tag_name} {draft}"
 
         mode = self.current_mode
 
@@ -1889,13 +1896,13 @@ class ReplyManager:
         has_sentiment = True
         if any(w in lower for w in ("haha", "lol", "lmao", "rofl", "xd", "funny", "lmfao", "joke", "dead", "ded")):
             chosen = random.choice(["😂", "🤣", "💀", "😁"])
-        elif any(w in lower for w in ("congrats", "congratulations", "huge w", "promoted", "won", "awesome work", "let's go", "fire", "lit", "goat")):
+        elif any(w in lower for w in ("congrats", "congratulations", "huge w", "promoted", "won", "awesome work", "let's go", "fire", "lit", "goat", "legend", "insane", "superb")):
             chosen = random.choice(["🔥", "⚡", "💯", "🏆", "🤩", "👏"])
         elif any(w in lower for w in ("thanks", "thank you", "tysm", "love you", "heart", "appreciate it", "grateful")):
             chosen = random.choice(["❤️", "❤️‍🔥", "🥰", "🙏", "🤗"])
-        elif any(w in lower for w in ("deal", "sounds good", "done deal", "agreed", "let's do it", "partner")):
-            chosen = random.choice(["👍", "🤝", "🫡"])
-        elif any(w in lower for w in ("wtf", "no way", "holy shit", "damn bro", "unreal", "omg")):
+        elif any(w in lower for w in ("deal", "sounds good", "done deal", "agreed", "let's do it", "partner", "perfect", "done", "alright")):
+            chosen = random.choice(["👍", "🤝", "🫡", "👌"])
+        elif any(w in lower for w in ("wtf", "no way", "holy shit", "damn bro", "unreal", "omg", "crazy", "wild")):
             chosen = random.choice(["🤯", "😱", "👀"])
         elif any(w in lower for w in ("rip", "sorry to hear", "unfortunate", "so sad", "pain")):
             chosen = random.choice(["😢", "😭", "💔"])
@@ -2149,8 +2156,9 @@ class ReplyManager:
                     await asyncio.sleep(typing_duration)
 
             # Send first message part
-            # In groups, chime in naturally without quoting/mentioning unless explicitly mentioned or replying to us
-            actual_reply_to = reply_to_msg_id if (chat_id > 0 or is_mention) else None
+            # In groups, reply directly if mentioned or if text includes a mention; otherwise chime into stream
+            has_mention_in_text = bool(re.search(r"@\w+", first_part))
+            actual_reply_to = reply_to_msg_id if (chat_id > 0 or is_mention or has_mention_in_text) else None
             first_sent = await self._client.send_message(chat_id, first_part, reply_to=actual_reply_to)
             self.safety.mark_reply_sent(chat_id)
             self._last_sent_reply_by_chat[chat_id] = first_part
