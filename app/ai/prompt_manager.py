@@ -26,6 +26,12 @@ VALID_STYLES: Dict[str, str] = {
 #   /style <casual|concise|formal|humorous>
 # =============================================================================
 
+# Varied human emoji palette (48 emojis) — examples the AI may pick from; placement stays mixed or none
+HUMAN_EMOJI_POOL = (
+    "😂 🤣 💀 😁 🤡 🙈 🔥 ⚡ 💯 🏆 🤩 👏 🎉 🥂 ❤️ 🥰 😍 🙏 🤗 😘 💋 👍 🤝 🫡 👌 😎 "
+    "🤯 😱 👀 🤨 😢 😭 💔 🥱 😴 🗿 😐 🥴 🌚 🆒 🦄 👾 🤷 ✍️ 💅 🕊️ 😇 🙃"
+).split()
+
 ANTI_AI_GUARDRAILS = """You are texting directly as {owner_name} from your personal phone in Telegram.
 Real human friend chatting on mobile. NEVER sound like an AI, bot, or assistant.
 
@@ -52,6 +58,7 @@ CRITICAL TEXTING RULES:
 
 7. EMOJI PLACEMENT (NATURAL, OPTIONAL, ANY EMOJI):
    - Pick ANY emoji that genuinely matches the meaning of your words — never a fixed set.
+   - Examples of the natural range available to you: {emoji_examples}
    - Vary placement like a real human: sometimes one at the end, sometimes in the middle, often NO emoji at all (roughly every third reply emoji-free).
    - Max one emoji per reply. Never force an emoji into every message.
 
@@ -168,6 +175,7 @@ class PromptManager:
             default_text = self._default_instructions
         effective_name = (self.owner_name or "").strip() or "User"
         default_text = default_text.replace("{owner_name}", effective_name)
+        default_text = default_text.replace("{emoji_examples}", " ".join(HUMAN_EMOJI_POOL))
         if effective_name.lower() != "kaif":
             # Seamless migration if an older system_prompt.txt explicitly contained literal "Kaif"
             default_text = re.sub(r"\bas Kaif\b", f"as {effective_name}", default_text, flags=re.IGNORECASE)
@@ -200,6 +208,7 @@ class PromptManager:
                 f"- CASUAL MOBILE TEXTING (NO SLANG OVERLOAD): Casual texting tone without slang overload.\n"
                 f"- NO CODE: Never write code, paths, or brackets [] {{}}, no question marks (?).\n"
                 f"- Never write 'haha', 'lol', or 'lmao' as text (use emoji reactions).\n"
+                f"- EMOJIS: Any genuinely fitting emoji with varied placement (end/mid-line/none, often none). Examples: {' '.join(HUMAN_EMOJI_POOL)}\n"
                 f"- Never repeat phrases or reuse canned responses. Output ONLY the raw message to send.{style_rule}"
             )
             return f"{custom}{core_guardrails}"

@@ -150,6 +150,41 @@ class ReplyGenerator:
             # Never return fallbacks to groups or peer chats; raise so caller alerts Saved Messages exclusively
             raise RuntimeError(f"AI generation failed: {e}") from e
 
+    def summarize_chat_history(self, chat_title: str, existing_summary: str, raw_text: str) -> str:
+        """Condense recent group chat messages into a short rolling recap using AI (no hardcoded text)."""
+        if not raw_text or not raw_text.strip():
+            return ""
+        from app.ai.provider import LocalRuleProvider
+        if isinstance(self.provider, LocalRuleProvider):
+            return ""
+        prompt = (
+            f"You are building permanent memory for a Telegram group chat '{chat_title}'.\n\n"
+            f"Recap so far:\n{existing_summary.strip() or '(none)'}\n\n"
+            f"New recent messages:\n{raw_text}\n\n"
+            f"Update the recap in under 120 words: key ongoing topics, running jokes, who is interacting with whom, and the group's mood/vibe. "
+            f"Output ONLY the updated recap text, no preamble."
+        )
+        try:
+            draft = self.provider.generate_reply(prompt, "You are a concise chat-memory system. Output only the updated recap.")
+            return draft.strip()[:1500]
+        except Exception as e:
+            logger.error(f"Failed to summarize chat history: {e}")
+            return ""
+
+    def generate_goodnight_signoff(self) -> str:
+        """AI-written casual goodnight line for quiet-hours sign-off (never hardcoded)."""
+        from app.ai.provider import LocalRuleProvider
+        if isinstance(self.provider, LocalRuleProvider):
+            return ""
+        prompt = (
+            "It's 2am IST and you are about to sleep. Write ONE very short casual goodnight line to say in a friends group. "
+            "Max 8 words, casual human mobile texting, light slang or small emoji ok, no question marks. "
+            f"Reply as {self.prompt_manager.owner_name} speaking to the group. Output ONLY the line."
+        )
+        instructions = self.prompt_manager.get_system_instructions()
+        draft = self.provider.generate_reply(prompt, instructions)
+        return self.prompt_manager.clean_reply(draft)
+
     def distill_group_context(self, chat_title: str, raw_text: str) -> str:
         """Distill raw pinned messages and group announcements into concise permanent context using AI."""
         if not raw_text or not raw_text.strip():

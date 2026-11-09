@@ -50,6 +50,7 @@ class TelegramService:
         self._running = False
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._last_context_purge = 0.0
+        self._last_summary_check = 0.0
 
     async def initialize(self) -> TelegramClient:
         """Create and connect the Telethon client, verifying personal account identity."""
@@ -205,6 +206,14 @@ class TelegramService:
                             logger.info(f"[CONTEXT PURGE] Deleted {removed} cached messages older than {ttl_hours}h.")
                 except Exception as e:
                     logger.debug(f"Context purge error: {e}")
+
+            # Every 30 minutes, refresh AI-generated rolling context recaps for active chats
+            if now - self._last_summary_check >= 1800.0:
+                self._last_summary_check = now
+                try:
+                    await self.reply_manager.refresh_group_summaries()
+                except Exception as e:
+                    logger.debug(f"Group summary refresh error: {e}")
 
             await asyncio.sleep(30)
 

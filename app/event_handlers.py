@@ -223,10 +223,12 @@ def register_handlers(
                     logger.info(f"[SENTIMENT REACTION ONLY] Reacted with emoji to sentiment in chat {chat_id}; completed interaction.")
                     return
 
-        # Retrieve recent conversation context with aging window (default: 2 hours TTL)
+        # Retrieve recent conversation context with aging window (default: 4 hours TTL).
+        # Groups get a wider window (30 msgs) so constant chatter keeps full context.
         ttl_hours = float(reply_manager.db.get_state("context_ttl_hours", "4.0"))
         max_age_secs = int(ttl_hours * 3600) if ttl_hours > 0 else None
-        conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=15, max_age_seconds=max_age_secs)
+        history_limit = 30 if getattr(event, "is_group", False) else 15
+        conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=history_limit, max_age_seconds=max_age_secs)
         if len(conversation_history) <= 2:
             try:
                 recent_msgs = await client.get_messages(chat_id, limit=15)
@@ -254,7 +256,7 @@ def register_handlers(
                             text=m_text,
                             is_outgoing=m_out,
                         )
-                    conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=15, max_age_seconds=max_age_secs)
+                    conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=history_limit, max_age_seconds=max_age_secs)
             except Exception as e:
                 logger.debug(f"Could not seed chat history from network: {e}")
 

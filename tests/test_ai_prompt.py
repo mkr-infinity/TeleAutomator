@@ -1,7 +1,7 @@
 """Tests for PromptManager and ReplyGenerator."""
 
 from pathlib import Path
-from app.ai.prompt_manager import PromptManager, VALID_STYLES
+from app.ai.prompt_manager import PromptManager, VALID_STYLES, HUMAN_EMOJI_POOL
 from app.ai.reply_generator import ReplyGenerator
 from app.ai.provider import LocalRuleProvider
 from app.config import AppConfig
@@ -66,6 +66,7 @@ def test_prompt_clean_reply_and_anti_robotic():
 
 def test_emoji_rule_varied_placement():
     """Emoji rules instruct varied placement (end/mid/none), any emoji, no fixed set."""
+    assert len(HUMAN_EMOJI_POOL) >= 30
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
     prompt = pm.build_user_prompt(sender_name="Alice", incoming_text="where should we meet")
     assert "emoji-free" in prompt

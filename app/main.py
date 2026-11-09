@@ -56,7 +56,7 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
         safety.set_auto_authorization(True)
 
     privacy = PrivacyManager(config, database=db)
-    generator = ReplyGenerator(config)
+    generator = ReplyGenerator(config, database=db)
     if style_override:
         generator.set_style(style_override)
         db.set_state("reply_style", style_override)

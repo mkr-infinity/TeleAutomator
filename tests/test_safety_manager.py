@@ -148,8 +148,9 @@ def test_quiet_hours_schedule(tmp_path: Path):
     assert can_reply is True
 
 
-def test_antispam_rolling_burst_and_hourly_limits(tmp_path: Path):
-    """Verify rolling 60s burst limit and 3600s hourly limit prevent Telegram spam."""
+def test_antispam_rolling_burst_limit(tmp_path: Path):
+    """Verify rolling 60s burst limit (dynamic cap frozen for the test) prevents Telegram spam."""
+    import time as _time
     cfg = AppConfig(
         api_id=123,
         api_hash="dummy_hash",
@@ -162,11 +163,11 @@ def test_antispam_rolling_burst_and_hourly_limits(tmp_path: Path):
     db = Database(tmp_path / "test_antispam.db")
     safety = SafetyManager(cfg, db)
 
-    # Set custom tight limits for test
+    # Set custom tight limit and freeze the dynamic cap for determinism
     db.set_state("max_replies_per_minute", "3")
-    db.set_state("max_replies_per_hour", "5")
     assert safety.max_replies_per_minute == 3
-    assert safety.max_replies_per_hour == 5
+    safety._minute_cap = 3
+    safety._minute_cap_ts = _time.time() + 3600.0  # cap never re-rolls mid-test
 
     # 1. First reply passes
     can_reply, _ = safety.can_reply(1001, "reply 1")

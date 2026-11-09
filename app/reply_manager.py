@@ -336,6 +336,10 @@ class ReplyManager:
                     perm_parts.append(f"📌 Pinned message / group rules:\n{pinned_text}")
                 if notes:
                     perm_parts.append(f"📝 Important chat notes & background:\n{notes}")
+                # AI-generated rolling recap of recent chat context (refreshed by background job)
+                ai_summary = self.db.get_chat_summary(chat_id)
+                if ai_summary:
+                    perm_parts.append(f"🧠 AI recap of this chat's recent conversations (so you remember older banter):\n{ai_summary}")
                 permanent_context_str = "\n\n".join(perm_parts) if perm_parts else None
 
                 # Check for per-chat style/persona override; fallback to global default
@@ -852,7 +856,7 @@ class ReplyManager:
                 "• `/reactioncooldown <min> <max>` - Set random reaction cooldown (e.g. `15 60` seconds)\n"
                 "• `/chatcooldown <min> <max>` - Custom per-chat reply cooldown (e.g. `5 60`)\n"
                 "• `/globalcooldown <min> <max>` - Custom global reply cooldown (e.g. `5 60`)\n"
-                "• `/ratelimit <per_min> <per_hour>` - Anti-spam rate limits (e.g. `/ratelimit 5 30`)\n"
+                "• `/ratelimit <per_min>` - Anti-spam base burst limit (e.g. `/ratelimit 5`)\n"
                 "• `/followup <on|off>` - Spontaneous delayed follow-ups for short replies\n"
                 "• `/debounce <on|off|seconds>` - Incoming burst debouncer (stitches rapid messages)\n"
                 "• `/multibubble <on|off>` - Multi-bubble response splitting (rapid sequential bubbles)\n\n"
@@ -1404,7 +1408,6 @@ class ReplyManager:
             chat_cd_range = f"{int(self.safety.min_chat_cooldown)}s–{int(self.safety.max_chat_cooldown)}s"
             global_cd_range = f"{int(self.safety.min_global_cooldown)}s–{int(self.safety.max_global_cooldown)}s"
             recent_min = self.db.get_recent_reply_count(60.0) if hasattr(self.db, "get_recent_reply_count") else 0
-            recent_hr = self.db.get_recent_reply_count(3600.0) if hasattr(self.db, "get_recent_reply_count") else 0
             chats_df = await self.get_allowed_chats_dataframe()
             return (
                 f"📊 *TeleAutomator v2.0.6 Status:*\n"
@@ -1417,7 +1420,7 @@ class ReplyManager:
                 f"• Quiet Hours: *{qh_desc}* (change with `/quiethours <on|off|start end>`)\n"
                 f"• Group Banter: `{int(chatty_prob * 100)}%` (change with `/chatty <0-100>`)\n"
                 f"• Cooldowns: Chat=`{chat_cd_range}`, Global=`{global_cd_range}`\n"
-                f"• Anti-Spam: Rate=`{self.safety.max_replies_per_minute}/min, {self.safety.max_replies_per_hour}/hr` (Used: {recent_min}/{recent_hr})\n"
+                f"• Anti-Spam: Rate=`{self.safety.max_replies_per_minute}/min base (dynamic)` (Used: {recent_min})\n"
                 f"• Auto Authorized: *{auto_status}*\n"
                 f"• Emergency Stop: *{stop_status}*\n"
                 f"• Pending Approvals: `{pending_count}`\n"
@@ -1663,24 +1666,21 @@ class ReplyManager:
         if cmd in ("/ratelimit", "/spamlimits", "/rate", "/antispam"):
             if len(cmd_parts) < 2:
                 recent_min = self.db.get_recent_reply_count(60.0) if hasattr(self.db, "get_recent_reply_count") else 0
-                recent_hr = self.db.get_recent_reply_count(3600.0) if hasattr(self.db, "get_recent_reply_count") else 0
                 return (
                     f"🛡️ *Telegram Anti-Spam Rate Limits:*\n"
-                    f"• Burst Limit: *{self.safety.max_replies_per_minute}* replies/min (Used in last 60s: *{recent_min}*)\n"
-                    f"• Hourly Limit: *{self.safety.max_replies_per_hour}* replies/hour (Used in last 1h: *{recent_hr}*)\n"
+                    f"• Burst Limit: *{self.safety.max_replies_per_minute}* replies/min base, dynamic *(Used in last 60s: *{recent_min}*)*\n"
                     f"• Per-Chat Limit: *{self.safety.max_chat_replies_per_minute}* replies/min per chat\n"
                     f"• Chat Cooldown: *{int(self.safety.min_chat_cooldown)}s – {int(self.safety.max_chat_cooldown)}s*\n"
                     f"• Global Cooldown: *{int(self.safety.min_global_cooldown)}s – {int(self.safety.max_global_cooldown)}s*\n\n"
-                    f"Usage: `/ratelimit <per_minute> <per_hour>` (e.g. `/ratelimit 5 30`)"
+                    f"The per-minute cap randomly fluctuates around your base value and auto-boosts in busy chats (human-style).\n"
+                    f"Usage: `/ratelimit <per_minute>` (e.g. `/ratelimit 5`)"
                 )
             try:
                 per_min = max(1, int(cmd_parts[1]))
-                per_hr = max(per_min, int(cmd_parts[2])) if len(cmd_parts) >= 3 else (per_min * 6)
                 self.db.set_state("max_replies_per_minute", str(per_min))
-                self.db.set_state("max_replies_per_hour", str(per_hr))
-                return f"✅ Anti-spam rate limits updated to *{per_min}* replies/min and *{per_hr}* replies/hour."
+                return f"✅ Anti-spam base burst limit updated to *{per_min}* replies/min (dynamic range applies on top)."
             except ValueError:
-                return "Error: Rate limits must be valid positive integers (e.g. `/ratelimit 5 30`)."
+                return "Error: Rate limit must be a valid positive integer (e.g. `/ratelimit 5`)."
 
         if cmd in ("/model", "/setmodel", "/custommodel"):
             if len(cmd_parts) < 2:
@@ -1925,10 +1925,13 @@ class ReplyManager:
             mode_str = f"Custom Persona ({len(custom.split())} words)" if custom else "Default Persona"
             full_inst = self.generator.prompt_manager.system_instructions
             custom_display = f'"{custom}"' if custom else "None (using default system_prompt.txt)"
-            prompt_preview = full_inst if len(full_inst) <= 3000 else (full_inst[:3000] + "\n...[truncated for telegram display]")
+            if len(custom_display) > 1200:
+                custom_display = custom_display[:1100].rstrip() + '...[truncated]'
+            # Keep the whole response well under Telegram's 4096-char message limit, or delivery fails silently
+            prompt_preview = full_inst if len(full_inst) <= 2400 else (full_inst[:2360].rstrip() + "\n...[truncated for Telegram display]")
             return (
                 f"📜 *Active System Instructions ({mode_str}):*\n\n"
-                f"• *Anti-AI Guardrails:* ACTIVE 🛡️ (1-5 words, human conversation, any fitting emojis with varied placement, no names/@usernames, no code)\n"
+                f"• *Anti-AI Guardrails:* ACTIVE 🛡️ (max one line, human conversation, any fitting emojis with varied placement, no names/@usernames, no code)\n"
                 f"• *Custom Persona:* {custom_display}\n"
                 f"• *Active Style:* `{self.generator.style}`\n"
                 f"• *Language:* `{self.generator.language}`\n\n"
@@ -2362,6 +2365,47 @@ class ReplyManager:
         """Update last activity timestamp for group."""
         self._last_group_activity[chat_id] = time.time()
 
+    async def refresh_group_summaries(self, min_new_messages: int = 15, max_payload: int = 40) -> None:
+        """AI-generated rolling context recap per busy allowlisted group (saved for prompts)."""
+        groups: set = set()
+        try:
+            private_set, group_set = self.privacy.get_all_allowed_chats()
+            groups.update(group_set)
+            groups.update(private_set)
+        except Exception:
+            pass
+        if not groups:
+            try:
+                known = self.db.get_known_chats()
+                groups = {c["chat_id"] for c in known if c.get("chat_id", 0) < 0 and self.privacy.is_chat_allowed(c["chat_id"], True)}
+            except Exception:
+                return
+        # Also private chats are summarized when active
+        for cid in list(groups):
+            try:
+                marker = int(self.db.get_state(f"chat_summary_marker_{cid}", "0"))
+                new_count = self.db.count_chat_messages_since(cid, marker)
+                if new_count < min_new_messages:
+                    continue
+                raw = self.db.get_chat_messages_since_text(cid, marker, limit=max_payload)
+                if not raw:
+                    continue
+                meta = self.db.get_chat_metadata(cid) or {}
+                title = meta.get("title") or ("this group" if cid < 0 else "this chat")
+                summary = await asyncio.to_thread(
+                    self.generator.summarize_chat_history,
+                    title,
+                    self.db.get_chat_summary(cid),
+                    raw,
+                )
+                if not summary:
+                    continue
+                self.db.set_chat_summary(cid, summary)
+                self.db.set_state(f"chat_summary_marker_{cid}", str(self.db.latest_chat_message_row_id(cid)))
+                logger.info(f"[AI CONTEXT SUMMARY] Updated rolling recap for chat {cid} ({new_count} new messages).")
+            except Exception as e:
+                logger.debug(f"[AI CONTEXT SUMMARY] Could not summarize chat {cid}: {e}")
+
     async def maybe_send_quiet_hours_goodnight(self, force: bool = False) -> None:
         """Before or upon entering quiet hours (2:00 AM IST), write bye/goodnight to active allowlisted groups like a human."""
         if not self._client or (not self.safety.quiet_hours_enabled and not force):
@@ -2388,20 +2432,24 @@ class ReplyManager:
         should_send = force or (diff <= 15 or (1440 - diff) <= 15)
 
         if should_send:
-            allowed_groups = list(self.privacy.allowed_groups)
+            try:
+                _, allowed_groups = self.privacy.get_all_allowed_chats()
+                allowed_groups = list(allowed_groups)
+            except Exception:
+                allowed_groups = []
             if not allowed_groups:
                 known = self.db.get_known_chats()
                 allowed_groups = [c["chat_id"] for c in known if c.get("chat_id", 0) < 0 and self.privacy.is_chat_allowed(c["chat_id"], True)]
 
             if allowed_groups:
-                phrases = [
-                    "bye guys, going to sleep rn",
-                    "aight guys heading to bed, talk tomorrow",
-                    "goodnight everyone, sleeping now",
-                    "gn guys, sleep time for me",
-                    "bye guys, off to sleep rn",
-                ]
-                text = random.choice(phrases)
+                # Goodnight text is AI-generated (never hardcoded); skip if the AI fails
+                try:
+                    text = await asyncio.to_thread(self.generator.generate_goodnight_signoff)
+                except Exception as e:
+                    logger.warning(f"[QUIET HOURS SIGN-OFF] AI sign-off generation failed, not sending canned text: {e}")
+                    text = ""
+                if not text:
+                    return
                 for gid in allowed_groups:
                     try:
                         peer = await self._client.get_input_entity(gid)
