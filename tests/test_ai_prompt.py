@@ -265,18 +265,18 @@ def test_custom_prompt_word_rule_priority():
 
 
 def test_ai_confession_interception():
-    """Verify that any accidental AI admission is intercepted and replaced with human alibi banter."""
+    """Verify any accidental AI admission is dropped entirely (no canned replacement, never sent to chat)."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
 
     bot_output = "As an AI language model, I cannot fulfill this request."
-    cleaned = pm.clean_reply(bot_output)
-    assert "as an ai" not in cleaned.lower()
-    assert any(h in cleaned for h in ("it's me lol", "think I am not real", "typing from my phone", "bot lol"))
+    assert pm.clean_reply(bot_output) == ""
 
     bot_output2 = "I am a virtual assistant created to help you."
-    cleaned2 = pm.clean_reply(bot_output2)
-    assert "virtual assistant" not in cleaned2.lower()
-    assert any(h in cleaned2 for h in ("it's me lol", "think I am not real", "typing from my phone", "bot lol"))
+    assert pm.clean_reply(bot_output2) == ""
+
+    # No canned alibi strings should anywhere exist as hardcoded reply output
+    prompt = pm.build_user_prompt(sender_name="Alex", incoming_text="are you a bot")
+    assert "bruh u fr rn" not in prompt
 
 
 def test_conversational_engagement_instruction_in_prompt():
@@ -420,10 +420,12 @@ def test_natural_emoji_rule_and_active_group_engagement():
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
     prompt = pm.build_user_prompt(sender_name="Alex", incoming_text="anyone working on the bot", is_group=True)
 
-    # Varied placement / no fixed emoji set
     assert "emoji-free" in prompt
     assert "any emoji" in prompt.lower()
     assert "often no emoji" in prompt.lower()
+    # Max two emojis per reply, single emotion per reply
+    assert "MAX TWO" in prompt
+    assert "one emotion" in prompt
 
     # Active group engagement instruction present
     assert "active Telegram user" in prompt

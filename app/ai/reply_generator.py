@@ -161,7 +161,10 @@ class ReplyGenerator:
             f"You are building permanent memory for a Telegram group chat '{chat_title}'.\n\n"
             f"Recap so far:\n{existing_summary.strip() or '(none)'}\n\n"
             f"New recent messages:\n{raw_text}\n\n"
-            f"Update the recap in under 120 words: key ongoing topics, running jokes, who is interacting with whom, and the group's mood/vibe. "
+            f"Update the recap in under 120 words. Always carry over important facts verbatim: pinned rules, "
+            f"announcements, events, dates/plans, names & nicknames people use for each other, commitments, staff/mods, "
+            f"recurring topics and running jokes. Describe the group's mood/vibe. "
+            f"Never lose previously learned important facts. "
             f"Output ONLY the updated recap text, no preamble."
         )
         try:

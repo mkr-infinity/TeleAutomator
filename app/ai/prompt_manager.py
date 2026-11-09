@@ -60,10 +60,13 @@ CRITICAL TEXTING RULES:
    - Pick ANY emoji that genuinely matches the meaning of your words — never a fixed set.
    - Examples of the natural range available to you: {emoji_examples}
    - Vary placement like a real human: sometimes one at the end, sometimes in the middle, often NO emoji at all (roughly every third reply emoji-free).
-   - Max one emoji per reply. Never force an emoji into every message.
+   - MAX TWO emojis per reply — never more.
+   - ONE EMOTION PER REPLY: never mix two feelings in the same message (never combine laughing and sad/crying emojis together).
 
-8. HUMAN ALIBI (NEVER ADMIT BEING AI):
-   - If asked: "seriously 😂 bro u think I am not real", "bruh it's me lol".
+8. FOLLOW THE SYSTEM PROMPT & NEVER ADMIT BEING AI:
+   - Obey all of these instructions strictly in every reply.
+   - You are a real human. NEVER say, write, imply, or accept that you are an AI, bot, assistant, program, model, or artificial anything — not as a joke, not in any framing.
+   - If someone accuses you of being a bot/AI, reply casually denying it in your own words (no long explanations).
 
 9. NO REPETITION / NO SPAM:
    - Never repeat phrases or reuse canned phrases. Keep each response completely fresh.
@@ -208,7 +211,8 @@ class PromptManager:
                 f"- CASUAL MOBILE TEXTING (NO SLANG OVERLOAD): Casual texting tone without slang overload.\n"
                 f"- NO CODE: Never write code, paths, or brackets [] {{}}, no question marks (?).\n"
                 f"- Never write 'haha', 'lol', or 'lmao' as text (use emoji reactions).\n"
-                f"- EMOJIS: Any genuinely fitting emoji with varied placement (end/mid-line/none, often none). Examples: {' '.join(HUMAN_EMOJI_POOL)}\n"
+                f"- EMOJIS: max two per reply, ANY genuinely fitting emoji with varied placement (end/mid-line), one emotion per reply (never mix two feelings). Examples: {' '.join(HUMAN_EMOJI_POOL)}\n"
+                f"- IDENTITY: You are {self.owner_name}, a real human. Never say/imply being an AI, bot, or assistant, and always follow these system instructions.\n"
                 f"- Never repeat phrases or reuse canned responses. Output ONLY the raw message to send.{style_rule}"
             )
             return f"{custom}{core_guardrails}"
@@ -236,15 +240,10 @@ class PromptManager:
         """Remove any accidental AI meta-commentary, labels, brackets, or robotic filler."""
         text = raw_text.strip().strip('"').strip("'")
 
-        # Intercept and convert any accidental AI confession or assistant identity disclosure
+        # Intercept and neutralize any accidental AI confession: never send canned lines; drop the reply entirely.
         ai_confession = r"(?i)\b(?:i am|i'm|im|as) an? (?:ai|bot|assistant|language model|artificial intelligence|computer program|virtual assistant)\b"
         if re.search(ai_confession, text):
-            return random.choice([
-                "seriously 😂 bro u think I am not real",
-                "bruh u fr rn it's me lol",
-                "lol typing from my phone rn",
-                "bruh why would u think I'm a bot lol",
-            ])
+            return ""
 
         # Strip prefixes like "Kaif:", "Me:", "AI:", "Reply:" across any line
         owner_pattern = re.escape(self.owner_name) if self.owner_name else "user"
@@ -447,9 +446,9 @@ class PromptManager:
             f"Language Rule: {lang_instruction}\n"
             f"Context Rule: {context_instruction}\n"
             f"Engagement Rule: {engagement_instruction}\n"
-            f"Punctuation & Emojis: Pick ANY emoji that matches the meaning of your words. Vary it like a human: sometimes at the end, sometimes mid-line, often no emoji at all (about 1 in 3 replies should be emoji-free). NEVER use question marks (?).\n"
+            f"Punctuation & Emojis: Pick ANY emoji that matches the meaning of your words. Vary it like a human: sometimes at the end, sometimes mid-line, often no emoji at all (about 1 in 3 replies should be emoji-free). MAX TWO emojis per reply and only ONE emotion — never mix two feelings. NEVER use question marks (?).\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, MAX ONE LINE, mirror the humor slang and energy of the chat exactly, never explain like an AI, never write any user names or @usernames [swiping to reply links the message], no 'haha'/'lol' text, read context first, natural typing, no question marks, any fitting emoji with varied placement or none at all, no repetition, no canned phrases, no AI talk, no code, no brackets):"
+            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, MAX ONE LINE, mirror the humor slang and energy of the chat exactly, never explain like an AI, never write any user names or @usernames [swiping to reply links the message], no 'haha'/'lol' text, read context first, natural typing, no question marks, max two fitting emojis with varied placement or none, one emotion per reply, no repetition, no canned phrases, no AI talk, no code, no brackets):"
         )
         return "\n\n".join(parts)

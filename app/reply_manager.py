@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 import random
 import re
 import shutil
@@ -60,7 +61,8 @@ class ReplyManager:
         self._last_reaction_time: float = 0.0
         self._next_reaction_time_by_chat: dict[int, float] = {}
         self._last_sent_reply_by_chat: dict[int, str] = {}
-        self._recent_replies_history: dict[int, list[str]] = {}
+        # Persisted sent-reply history: survives restarts so no phrase is ever reused even days later
+        self._recent_replies_history: dict[int, list[str]] = self._load_recent_replies_history()
         self._last_group_activity: dict[int, float] = {}
         # Suggestion 1: Incoming message burst debouncer state
         self._debounce_buffers: dict[int, list[dict[str, Any]]] = {}
@@ -395,15 +397,16 @@ class ReplyManager:
                     draft = await _do_generate()
             except Exception as e:
                 logger.error(f"Failed to generate AI reply for chat {chat_id}: {e}")
-                # AI generation failed: NEVER reply to chat with hardcoded text.
-                # Only let AI generate replies. Safely drop and notify Saved Messages if needed.
+                # AI provider/model/API-key failure: always alert Saved Messages so the owner can fix it fast.
                 if not is_mention:
+                    provider = getattr(self.generator.config, "ai_provider", "")
                     await self._notify_issue_to_saved_messages(
                         chat_id=chat_id,
                         chat_title=chat_title,
                         sender_name=sender_name,
-                        error_msg=f"AI generation failed: {e}",
+                        error_msg=f"AI provider/model failed (provider='{provider}', all fallbacks exhausted): {e}",
                         incoming_text=clean_text,
+                        force=True,
                     )
                 return
 
@@ -733,19 +736,28 @@ class ReplyManager:
         sender_name: str,
         error_msg: str,
         incoming_text: str = "",
+        force: bool = False,
     ) -> None:
         """Send internal error/issue alerts exclusively to user's private Saved Messages."""
         if not self._client:
             return
 
-        # Suppress alerts if automation is paused, emergency stopped, in quiet hours, or in draft mode
-        if self.safety.is_emergency_stopped or self.safety.get_remaining_pause_seconds() > 0:
+        if force:
+            # AI provider/key failures must ALWAYS reach Saved Messages (throttled to one per 10 minutes)
+            now_ts = time.time()
+            last_ts = float(self.db.get_state("last_ai_failure_alert_ts", "0") or 0)
+            if (now_ts - last_ts) < 600.0:
+                return
+            self.db.set_state("last_ai_failure_alert_ts", str(now_ts))
+        # Otherwise suppress alerts if automation is paused, emergency stopped, in quiet hours, or in draft mode
+        elif self.safety.is_emergency_stopped or self.safety.get_remaining_pause_seconds() > 0:
             return
-        is_quiet, _ = self.safety.is_in_quiet_hours()
-        if is_quiet:
-            return
-        if self.current_mode == "draft":
-            return
+        else:
+            is_quiet, _ = self.safety.is_in_quiet_hours()
+            if is_quiet:
+                return
+            if self.current_mode == "draft":
+                return
 
         try:
             target_name = chat_title or f"Chat {chat_id}"
@@ -2141,10 +2153,16 @@ class ReplyManager:
         w_lower = orig_word.lower()
 
         if len(w_lower) >= 4:
-            pos = random.randint(1, len(w_lower) - 2)
+            # Pick an adjacent-char swap that visually changes the word (avoids identical-char swaps producing no typo)
             chars = list(w_lower)
+            swap_candidates = [i for i in range(1, len(w_lower) - 1) if chars[i] != chars[i + 1]]
+            if not swap_candidates:
+                return text, None
+            pos = random.choice(swap_candidates)
             chars[pos], chars[pos + 1] = chars[pos + 1], chars[pos]
             typo_word = "".join(chars)
+            if typo_word == orig_word.lower():
+                return text, None
             if orig_word.istitle():
                 typo_word = typo_word.capitalize()
             elif orig_word.isupper():
@@ -2155,7 +2173,26 @@ class ReplyManager:
 
         return text, None
 
-    async def maybe_send_reaction(self, chat_id: int, message_id: int, text: str) -> bool:
+    def _load_recent_replies_history(self) -> dict[int, list[str]]:
+        """Restore the persisted per-chat sent-reply history (anti-repetition across restarts)."""
+        data = self.db.get_state("recent_replies_by_chat", "")
+        if not data:
+            return {}
+        try:
+            parsed = json.loads(data)
+            return {int(chat_id): list(texts) for chat_id, texts in parsed.items()}
+        except Exception:
+            return {}
+
+    def _save_recent_replies_history(self) -> None:
+        try:
+            self.db.set_state("recent_replies_by_chat", json.dumps(self._recent_replies_history))
+        except Exception as e:
+            logger.debug(f"Could not persist recent replies history: {e}")
+
+    async def maybe_send_reaction(
+        self, chat_id: int, message_id: int, text: str, allow_any_emoji: bool = False
+    ) -> bool:
         """Add an emoji reaction to the message if reaction features and cooldown permit."""
         if not self._client:
             return False
@@ -2248,7 +2285,11 @@ class ReplyManager:
             has_sentiment = False
             chosen = ""
 
-        # Only react when there is clear, relative sentiment to the message; never react unnecessarily
+        # Only react when there is clear, relative sentiment to the message; never react unnecessarily.
+        # Own-reply reactions (allow_any_emoji=True) fall back to any fitting vibe emoji so the choice still feels natural.
+        if (not has_sentiment or not chosen) and allow_any_emoji:
+            chosen = random.choice(["👍", "🔥", "😎", "😂", "💯", "🗿", "🆒", "👀"])
+            has_sentiment = True
         if not has_sentiment or not chosen:
             return False
 
@@ -2481,9 +2522,16 @@ class ReplyManager:
 
         first_part = msg_parts[0]
         typo_correction: Optional[str] = None
+        edit_fix_original: Optional[str] = None
         typo_enabled = self.db.get_state("typo_correction_enabled", "1") == "1"
         if typo_enabled and len(msg_parts) == 1 and not is_mention:
             first_part, typo_correction = self.maybe_inject_typo_correction(first_part, probability=0.04)
+            if not typo_correction and self.current_mode == "restricted_auto" and random.random() < 0.10:
+                # Self-edit simulation: send with a small typo, then edit the same message clean ~seconds later
+                edited = self.maybe_inject_typo_correction(first_part, probability=1.0)[0]
+                if edited != first_part:
+                    edit_fix_original = first_part
+                    first_part = edited
 
         try:
             # Calculate human-like delay adapting to group/DM environment and mentions (5-30s)
@@ -2491,6 +2539,10 @@ class ReplyManager:
                 total_delay = self.calculate_adaptive_delay(chat_id, first_part, is_mention=is_mention)
             else:
                 total_delay = self.typing_delay
+
+            if self.typing_delay > 0 or self.min_delay > 0 or self.max_delay > 0:
+                # Human floor: never reply instantly — always at least a ~3-4.5s random thinking pause
+                total_delay = max(total_delay, random.uniform(3.0, 4.5))
 
             if total_delay > 0:
                 # Realistic human simulation: pause for reading/thinking, then show typing action
@@ -2526,7 +2578,7 @@ class ReplyManager:
                     if hasattr(self._client, "action") and callable(self._client.action):
                         if typing_duration >= 3.5:
                             burst1 = round(typing_duration * 0.5, 1)
-                            pause = round(random.uniform(0.6, 1.0), 1)
+                            pause = round(random.uniform(0.8, 1.4), 1)
                             burst2 = max(0.8, round(typing_duration - burst1, 1))
 
                             act1 = self._client.action(chat_id, "typing")
@@ -2572,8 +2624,9 @@ class ReplyManager:
             if chat_id not in self._recent_replies_history:
                 self._recent_replies_history[chat_id] = []
             self._recent_replies_history[chat_id].append(first_part)
-            if len(self._recent_replies_history[chat_id]) > 8:
+            while len(self._recent_replies_history[chat_id]) > 12:
                 self._recent_replies_history[chat_id].pop(0)
+            self._save_recent_replies_history()
             if chat_id < 0:
                 self.mark_group_activity(chat_id)
             first_msg_id = getattr(first_sent, "id", 0)
@@ -2588,6 +2641,28 @@ class ReplyManager:
                 is_outgoing=True,
             )
             logger.info(f"Successfully sent reply part 1/{len(msg_parts)} to chat {chat_id}.")
+
+            # Human touch: occasionally react to your own message just like a real person (20%)
+            if (first_msg_id and self.current_mode == "restricted_auto" and not self.safety.is_emergency_stopped
+                    and random.random() < 0.20):
+                try:
+                    reacted = await self.maybe_send_reaction(chat_id, first_msg_id, first_part, allow_any_emoji=True)
+                    if reacted:
+                        logger.info(f"[OWN-REPLY REACTION] Reacted to own message {first_msg_id} in chat {chat_id}.")
+                except Exception as e:
+                    logger.debug(f"[OWN-REPLY REACTION] Could not react to own message: {e}")
+
+            # Quick-fire typo self-edit (suggestion #2): fix the sent typo by editing the same message ~2s later
+            if edit_fix_original is not None and first_msg_id and not self.safety.is_emergency_stopped:
+                self._last_sent_reply_by_chat[chat_id] = edit_fix_original
+                if self._recent_replies_history.get(chat_id):
+                    self._recent_replies_history[chat_id][-1] = edit_fix_original
+                await asyncio.sleep(random.uniform(1.5, 3.0))
+                try:
+                    await self._client.edit_message(chat_id, first_msg_id, edit_fix_original)
+                    logger.info(f"[SELF EDIT] Edited own message {first_msg_id} in chat {chat_id} to fix the typo.")
+                except Exception as e:
+                    logger.debug(f"[SELF EDIT] Could not edit message {first_msg_id}: {e}")
 
             # If typo simulation was triggered, send quick correction follow-up (e.g. *sounds)
             if typo_correction and not self.safety.is_emergency_stopped:

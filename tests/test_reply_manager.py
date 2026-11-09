@@ -2308,6 +2308,107 @@ def test_event_handler_group_broadcast_engagement(tmp_path: Path):
     asyncio.run(_run())
 
 
+def test_self_edit_fix_simulation(tmp_path: Path):
+    """Verify self-edit typo simulation: send message with typo, then edit the same message clean seconds later."""
+    from types import SimpleNamespace
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            data_dir=tmp_path,
+            reply_mode="restricted_auto",
+        )
+        db = Database(tmp_path / "edit.db")
+        db.set_state("multibubble_enabled", "0")
+        db.set_state("reaction_enabled", "0")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        client = MagicMock()
+        client.send_message = AsyncMock(return_value=SimpleNamespace(id=734))
+        client.edit_message = AsyncMock()
+        mgr._client = client
+
+        original = "bro my phone glitched hard"
+        with patch("app.reply_manager.random.random", return_value=0.05), \
+                patch("app.reply_manager.random.uniform", return_value=0.0), \
+                patch("app.reply_manager.asyncio.sleep", new=AsyncMock(return_value=None)):
+            ok = await mgr._send_reply(chat_id=-100, reply_to_msg_id=5, text=original, adaptive_delay=False, is_mention=False)
+
+        assert ok is True
+        # Exactly one bubble was sent, and a fast same-message edit followed with the clean original text
+        sent_text = client.send_message.await_args.args[1]
+        assert sent_text != original  # typo'd version went out first
+        client.edit_message.assert_awaited_once_with(-100, 734, original)
+
+    asyncio.run(_run())
+
+
+def test_provider_failure_forces_saved_messages_alert(tmp_path: Path):
+    """AI provider/key failures must always alert Saved Messages, even in draft mode, throttled per 10 minutes."""
+    from types import SimpleNamespace
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "alert.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, ReplyGenerator(cfg, database=db))
+        mgr._client = MagicMock()
+        mgr._client.send_message = AsyncMock(return_value=SimpleNamespace(id=1))
+        mgr.set_mode("draft")  # normally suppressed mode
+
+        await mgr._notify_issue_to_saved_messages(
+            chat_id=-42, chat_title="Devs", sender_name="Raj",
+            error_msg="AI provider/model failed (provider='custom', all fallbacks exhausted): 401",
+            force=True,
+        )
+        assert mgr._client.send_message.await_count == 1
+        sent_alert = mgr._client.send_message.await_args.args[1]
+        assert "AI provider" in sent_alert
+
+        # Second alert within 10 minutes is throttled
+        await mgr._notify_issue_to_saved_messages(chat_id=-42, chat_title="Devs", sender_name="Raj", error_msg="again", force=True)
+        assert mgr._client.send_message.await_count == 1
+
+    asyncio.run(_run())
+
+
+def test_recent_replies_persist_across_restart(tmp_path: Path):
+    """Sent-reply anti-repetition history must survive a restart (persisted to SQLite)."""
+    from types import SimpleNamespace
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "persist.db")
+        db.set_state("multibubble_enabled", "0")
+        db.set_state("reaction_enabled", "0")
+        db.set_state("typo_correction_enabled", "0")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        client = MagicMock()
+        client.send_message = AsyncMock(return_value=SimpleNamespace(id=9))
+        mgr._client = client
+
+        with patch("app.reply_manager.random.random", return_value=0.99), \
+                patch("app.reply_manager.random.uniform", return_value=0.0), \
+                patch("app.reply_manager.asyncio.sleep", new=AsyncMock(return_value=None)):
+            await mgr._send_reply(chat_id=55, reply_to_msg_id=1, text="shipping todays build now on main", adaptive_delay=False, is_mention=False)
+
+        assert db.get_state("recent_replies_by_chat") != ""
+
+        # Simulate restart: new manager loads persisted history
+        mgr2 = ReplyManager(cfg, db, safety, privacy, generator)
+        assert "shipping todays build now on main" in mgr2._recent_replies_history[55]
+        # Duplicate reply is suppressed after the restart
+        assert mgr2._prevent_duplicate_reply(55, "shipping todays build now on main") == ""
+
+    asyncio.run(_run())
+
+
 
 
 
