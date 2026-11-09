@@ -30,10 +30,10 @@ ANTI_AI_GUARDRAILS = """You are texting directly as {owner_name} from your perso
 Real human friend chatting on mobile. NEVER sound like an AI, bot, or assistant.
 
 CRITICAL TEXTING RULES:
-1. BREVITY & ENERGY MATCHING (STRICT 1 TO 5 WORDS):
-   - Default replies are strictly 1 to 5 words (e.g. "true that 😂", "sounds good", "on my way", "nah not really", "cool with me").
-   - Serious cases: 5 to 8 words max. NEVER exceed 8 words.
-   - Text like a human: sometimes 1 word, sometimes 2 words, ultra short line when needed.
+1. ONE-LINE BREVITY & ENERGY MATCHING (MAX ONE LINE):
+   - Keep replies to MAX ONE LINE. Never write multiple lines, paragraphs, or long essays.
+   - Match the exact humor, energy, and chat vibe of the conversation.
+   - Real humans never explain or lecture like an AI assistant. NEVER explain — reply directly and casually.
 
 2. CASUAL MOBILE TEXTING (NO SLANG OVERLOAD):
    - Text casually and naturally. Authentic and friendly without slang overload.
@@ -186,7 +186,7 @@ class PromptManager:
                 )
             else:
                 length_directive = (
-                    f"- BREVITY & ENERGY MATCHING (STRICT 1 TO 5 WORDS): Keep replies strictly between 1 to 5 words (e.g. 'true that 😂', 'sounds good', 'on my way', 'nah not really'). Max 8 words in serious cases only."
+                    f"- ONE-LINE BREVITY & ENERGY MATCHING (MAX ONE LINE): Keep replies to MAX ONE LINE. Match the exact humor, energy, and chat vibe of the conversation. Never explain like an AI assistant."
                 )
 
             core_guardrails = (
@@ -322,12 +322,20 @@ class PromptManager:
         # Remove immediate word-level repetitions (e.g. "bro bro" -> "bro", "haan haan" -> "haan")
         text = re.sub(r'\b(\w+)(?:\s+\1\b)+', r'\1', text, flags=re.IGNORECASE)
 
-        # WORD LIMIT: If custom prompt specifies its own word limit, honor it; otherwise cap at 8 words max
+        # ONE-LINE ENFORCEMENT: Keep to max one line, matching humor and chat vibe without stiff word truncation
         custom_cap = self.get_custom_word_limit()
-        effective_cap = custom_cap if custom_cap is not None else 8
-        words = text.split()
-        if len(words) > effective_cap:
-            text = " ".join(words[:effective_cap]).rstrip(" ,-—:;")
+        if custom_cap is not None:
+            words = text.split()
+            if len(words) > custom_cap:
+                text = " ".join(words[:custom_cap]).rstrip(" ,-—:;")
+        else:
+            lines = [l.strip() for l in text.splitlines() if l.strip()]
+            if lines:
+                text = lines[0]
+            # Safety limit: if a single line is excessively long (>25 words), cap at 20 words
+            words = text.split()
+            if len(words) > 25:
+                text = " ".join(words[:20]).rstrip(" ,-—:;")
 
         return text.strip()
 
@@ -384,7 +392,7 @@ class PromptManager:
             "In Telegram, mentioning means swiping to reply (quote-threading); you do NOT type the person's name in text. "
             "NEVER send messages saying 'haha', 'lol', or 'lmao' as text; use emoji reactions or express real thoughts. "
             "Read chat context first to see what conversations are ongoing before replying. "
-            "Match conversational length naturally: strictly 1 to 5 words (e.g. 'true that 😂', 'sounds good', 'on my way', max 8 serious). "
+            "Match conversational length and vibe naturally: MAX ONE LINE. Match the humor and energy of the chat. Never explain like an AI. "
             "Occasionally (when natural), you may split a thought across 2 short lines (e.g. 'sounds good 👍\\ncheck dm'). "
             "Keep replies conversational, natural, and engaging (no robotic 1-word shortcuts, no AI talk, no code)."
         )
@@ -404,11 +412,11 @@ class PromptManager:
             time_period = "night"
         time_context = f"Current Time: {now_ist.strftime('%I:%M %p')} IST ({time_period})"
 
-        # Strict brevity word limits (strictly 1 to 5 words default, max 8 serious, never > 8)
+        # One-line brevity & chat vibe rule (max one line, match humor & chat vibe, never explain)
         brevity_instruction = (
-            "CRITICAL BREVITY RULE: Keep replies strictly between 1 to 5 words (e.g. 'true that 😂', 'sounds good', 'on my way', 'nah not really', 'cool with me'). "
-            "In serious inquiries only, use max 6 to 8 words. "
-            "NEVER exceed 8 words. Shorter is always better. Real humans on mobile send 1 to 5 words."
+            "CRITICAL BREVITY & VIBE RULE: Keep replies to MAX ONE LINE. Never send multiple paragraphs, essays, or long texts. "
+            "Match the exact humor, energy, and chat vibe of the conversation naturally. "
+            "NEVER explain or lecture like an AI assistant. Real humans never explain — text casually and directly."
         )
 
         # Anti-repetition rule: never repeat same phrase or opening
@@ -431,6 +439,6 @@ class PromptManager:
             f"Punctuation & Emojis: Use top common emojis (😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️) naturally wherever they fit best (in between words or at the end of a thought). NEVER use question marks (?).\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, never write any user names or @usernames [swiping to reply links the message], no 'haha'/'lol' text, read context first, natural typing, no question marks, emojis where they fit best, max 10 words [serious 10-15], no repetition, no canned phrases, no AI talk, no code, no brackets):"
+            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, MAX ONE LINE, match humor and chat vibe, never explain like an AI, never write any user names or @usernames [swiping to reply links the message], no 'haha'/'lol' text, read context first, natural typing, no question marks, emojis where they fit best, no repetition, no canned phrases, no AI talk, no code, no brackets):"
         )
         return "\n\n".join(parts)

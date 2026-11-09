@@ -229,29 +229,29 @@ def test_custom_prompt_wrapping_and_anti_ai_guardrails():
 
 
 def test_custom_prompt_word_rule_priority():
-    """Verify that if custom prompt mentions a word limit, it takes priority over the default 8-word cap."""
+    """Verify that if custom prompt mentions a word limit, it takes priority over default single-line behavior."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
 
-    # 1. Without custom word rule: capped to 8 words
-    ten_words = "one two three four five six seven eight nine ten"
-    assert len(pm.clean_reply(ten_words).split()) == 8
+    # 1. Without custom word rule: natural one-line preserved, multi-lines kept to first line
+    multiline = "sounds good to me\nwill check later"
+    assert pm.clean_reply(multiline) == "sounds good to me"
 
-    # 2. With custom word rule specified (e.g. 15 words)
-    pm.custom_prompt = "You are a tech advisor. Always reply in up to 15 words."
-    assert pm.get_custom_word_limit() == 15
-    assert len(pm.clean_reply(ten_words).split()) == 10  # 10 words preserved!
-    fourteen_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
-    assert len(pm.clean_reply(fourteen_words).split()) == 14
+    # 2. With custom word rule specified (e.g. 5 words)
+    pm.custom_prompt = "Always reply in up to 5 words."
+    assert pm.get_custom_word_limit() == 5
+    ten_words = "one two three four five six seven eight nine ten"
+    assert len(pm.clean_reply(ten_words).split()) == 5
 
     # 3. With custom detailed/paragraphs directive
     pm.custom_prompt = "You are an author who provides detailed explanations."
     assert pm.get_custom_word_limit() == 100
+    fourteen_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
     assert len(pm.clean_reply(fourteen_words).split()) == 14
 
-    # 4. Reset custom prompt: returns to default 8 words cap
+    # 4. Reset custom prompt: returns to default max one line
     pm.reset_custom_prompt()
     assert pm.get_custom_word_limit() is None
-    assert len(pm.clean_reply(ten_words).split()) == 8
+    assert pm.clean_reply("line one\nline two") == "line one"
 
 
 def test_ai_confession_interception():
@@ -432,20 +432,21 @@ def test_strict_word_limits_and_hard_cap():
     five_words = "sounds good to me bro"
     assert pm.clean_reply(five_words) == five_words
 
-    # 8-word message stays intact
-    eight_words = "one two three four five six seven eight"
-    assert pm.clean_reply(eight_words) == eight_words
+    # Natural 12-word human sentence stays intact without stiff word truncation
+    twelve_words = "hahaha bro you actually did that what a legend will see you tomorrow"
+    assert pm.clean_reply(twelve_words) == twelve_words
 
-    # >8-word message is cleanly capped to 8 words
-    twenty_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty"
-    cleaned = pm.clean_reply(twenty_words)
-    words = cleaned.split()
-    assert len(words) == 8
-    assert words[-1] == "eight"
+    # Multi-line responses are kept to MAX ONE LINE
+    multiline = "sounds good bro 👍\ncheck this other thing out"
+    assert pm.clean_reply(multiline) == "sounds good bro 👍"
+
+    # Excessively long run-on messages (>25 words) are capped for safety
+    thirty_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty"
+    assert len(pm.clean_reply(thirty_words).split()) == 20
 
 
 def test_ist_time_awareness_and_brevity_instructions_in_prompt():
-    """Verify prompt includes IST time-of-day awareness and strict brevity rule."""
+    """Verify prompt includes IST time-of-day awareness, MAX ONE LINE rule, and vibe matching."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
     prompt = pm.build_user_prompt(sender_name="Alex", incoming_text="good morning")
 
@@ -454,9 +455,10 @@ def test_ist_time_awareness_and_brevity_instructions_in_prompt():
     assert any(period in prompt for period in ("morning", "afternoon", "evening", "night"))
 
     assert "Brevity Rule:" in prompt
-    assert "strictly between 1 to 5 words" in prompt
-    assert "max 6 to 8 words" in prompt
-    assert "NEVER exceed 8 words" in prompt
+    assert "MAX ONE LINE" in prompt
+    assert "humor" in prompt
+    assert "vibe" in prompt
+    assert "NEVER explain" in prompt
 
 
 def test_dynamic_owner_name_without_hardcoding(tmp_path: Path):
