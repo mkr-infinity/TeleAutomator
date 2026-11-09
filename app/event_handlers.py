@@ -224,7 +224,7 @@ def register_handlers(
                     return
 
         # Retrieve recent conversation context with aging window (default: 2 hours TTL)
-        ttl_hours = float(reply_manager.db.get_state("context_ttl_hours", "2.0"))
+        ttl_hours = float(reply_manager.db.get_state("context_ttl_hours", "4.0"))
         max_age_secs = int(ttl_hours * 3600) if ttl_hours > 0 else None
         conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=15, max_age_seconds=max_age_secs)
         if len(conversation_history) <= 2:

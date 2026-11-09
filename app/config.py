@@ -90,10 +90,10 @@ class AppConfig:
     # Language & Reactions
     default_chat_language: str = "english"
     reaction_enabled: bool = True
-    reaction_max_per_window: int = 4
-    reaction_window_seconds: int = 600
-    reaction_min_cooldown_seconds: float = 3.0
-    reaction_max_cooldown_seconds: float = 9.0
+    reaction_max_per_window: int = 6
+    reaction_window_seconds: int = 1800
+    reaction_min_cooldown_seconds: float = 15.0
+    reaction_max_cooldown_seconds: float = 60.0
 
     # Group Dynamics & Participation
     chatty_probability: float = 0.15
@@ -209,16 +209,16 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         max_delay = max(min_delay, float(os.getenv("MAX_REPLY_DELAY_SECONDS", "60.0")))
         default_chat_language = os.getenv("DEFAULT_CHAT_LANGUAGE", "english").strip().lower() or "english"
         reaction_enabled = _parse_bool(os.getenv("REACTION_ENABLED"), default=True)
-        reaction_max_per_window = max(1, int(os.getenv("REACTION_MAX_PER_WINDOW", "4")))
-        reaction_window_seconds = max(10, int(os.getenv("REACTION_WINDOW_SECONDS", "600")))
+        reaction_max_per_window = max(1, int(os.getenv("REACTION_MAX_PER_WINDOW", "6")))
+        reaction_window_seconds = max(10, int(os.getenv("REACTION_WINDOW_SECONDS", "1800")))
         chatty_probability = max(0.0, min(1.0, float(os.getenv("CHATTY_PROBABILITY", "0.15"))))
         react_only_probability = max(0.0, min(1.0, float(os.getenv("REACT_ONLY_PROBABILITY", "0.25"))))
         min_chat_cd = max(0.0, float(os.getenv("MIN_CHAT_COOLDOWN_SECONDS", "5.0")))
         max_chat_cd = max(min_chat_cd, float(os.getenv("MAX_CHAT_COOLDOWN_SECONDS", "60.0")))
         min_global_cd = max(0.0, float(os.getenv("MIN_GLOBAL_COOLDOWN_SECONDS", "5.0")))
         max_global_cd = max(min_global_cd, float(os.getenv("MAX_GLOBAL_COOLDOWN_SECONDS", "60.0")))
-        reaction_min_cd = max(0.0, float(os.getenv("REACTION_MIN_COOLDOWN_SECONDS", "3.0")))
-        reaction_max_cd = max(reaction_min_cd, float(os.getenv("REACTION_MAX_COOLDOWN_SECONDS", "9.0")))
+        reaction_min_cd = max(0.0, float(os.getenv("REACTION_MIN_COOLDOWN_SECONDS", "15.0")))
+        reaction_max_cd = max(reaction_min_cd, float(os.getenv("REACTION_MAX_COOLDOWN_SECONDS", "60.0")))
         max_replies_per_minute = max(1, int(os.getenv("MAX_REPLIES_PER_MINUTE", "5")))
         max_replies_per_hour = max(1, int(os.getenv("MAX_REPLIES_PER_HOUR", "30")))
         quiet_hours_enabled = _parse_bool(os.getenv("QUIET_HOURS_ENABLED"), default=True)

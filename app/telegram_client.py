@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Optional
 
 from telethon import TelegramClient
@@ -48,6 +49,7 @@ class TelegramService:
         self.client: Optional[TelegramClient] = None
         self._running = False
         self._heartbeat_task: Optional[asyncio.Task] = None
+        self._last_context_purge = 0.0
 
     async def initialize(self) -> TelegramClient:
         """Create and connect the Telethon client, verifying personal account identity."""
@@ -190,6 +192,19 @@ class TelegramService:
                 await self.reply_manager.maybe_send_quiet_hours_goodnight()
             except Exception as e:
                 logger.debug(f"Quiet hours goodnight check error: {e}")
+
+            # Every 4 hours, hard-delete cached chat messages older than the context TTL window
+            now = time.monotonic()
+            if now - self._last_context_purge >= 14400.0:
+                self._last_context_purge = now
+                try:
+                    ttl_hours = float(self.db.get_state("context_ttl_hours", "4.0"))
+                    if ttl_hours > 0:
+                        removed = self.db.prune_messages_older_than(ttl_hours * 3600)
+                        if removed:
+                            logger.info(f"[CONTEXT PURGE] Deleted {removed} cached messages older than {ttl_hours}h.")
+                except Exception as e:
+                    logger.debug(f"Context purge error: {e}")
 
             await asyncio.sleep(30)
 

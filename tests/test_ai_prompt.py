@@ -64,6 +64,15 @@ def test_prompt_clean_reply_and_anti_robotic():
     assert pm.clean_reply("AI: I am on it") == "I am on it"
 
 
+def test_emoji_rule_varied_placement():
+    """Emoji rules instruct varied placement (end/mid/none), any emoji, no fixed set."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+    prompt = pm.build_user_prompt(sender_name="Alice", incoming_text="where should we meet")
+    assert "emoji-free" in prompt
+    # The old fixed 8-emoji list must be gone
+    assert "😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️" not in prompt
+
+
 def test_reply_generator_with_history(tmp_path: Path):
     cfg = AppConfig(
         api_id=123,
@@ -405,15 +414,15 @@ def test_clean_reply_suppresses_none_and_word_repetition():
     assert pm.clean_reply("cool cool cool") == "cool"
 
 
-def test_top_common_emojis_and_active_group_engagement():
-    """Verify minimum 5 commonly used emojis and active group engagement instructions are in prompt."""
+def test_natural_emoji_rule_and_active_group_engagement():
+    """Verify the varied any-emoji rule and active group engagement instructions are in prompt."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
     prompt = pm.build_user_prompt(sender_name="Alex", incoming_text="anyone working on the bot", is_group=True)
 
-    # Minimum 5 commonly used emojis present
-    top_emojis = ["😂", "👍", "🔥", "👀", "🤝", "💀", "💯", "❤️"]
-    found_emojis = [em for em in top_emojis if em in prompt]
-    assert len(found_emojis) >= 5
+    # Varied placement / no fixed emoji set
+    assert "emoji-free" in prompt
+    assert "any emoji" in prompt.lower()
+    assert "often no emoji" in prompt.lower()
 
     # Active group engagement instruction present
     assert "active Telegram user" in prompt

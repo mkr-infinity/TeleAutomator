@@ -58,7 +58,7 @@ class ReplyManager:
         self.min_delay: float = getattr(config, "min_delay_seconds", 5.0)
         self.max_delay: float = getattr(config, "max_delay_seconds", 60.0)
         self._last_reaction_time: float = 0.0
-        self._last_reaction_time_by_chat: dict[int, float] = {}
+        self._next_reaction_time_by_chat: dict[int, float] = {}
         self._last_sent_reply_by_chat: dict[int, str] = {}
         self._recent_replies_history: dict[int, list[str]] = {}
         self._last_group_activity: dict[int, float] = {}
@@ -68,8 +68,8 @@ class ReplyManager:
         self._debounce_last_time: dict[int, float] = {}
         self._debounce_first_time: dict[int, float] = {}
         self._next_reaction_cooldown: float = random.uniform(
-            float(self.db.get_state("reaction_min_cooldown_seconds", str(getattr(config, "reaction_min_cooldown_seconds", 3.0)))),
-            float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(config, "reaction_max_cooldown_seconds", 9.0)))),
+            float(self.db.get_state("reaction_min_cooldown_seconds", str(getattr(config, "reaction_min_cooldown_seconds", 15.0)))),
+            float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(config, "reaction_max_cooldown_seconds", 60.0)))),
         )
 
         # Restore saved style if stored in DB
@@ -270,7 +270,7 @@ class ReplyManager:
                     f"into single cohesive thought: '{stitched_text[:60]}...'"
                 )
 
-            ttl_hours = float(self.db.get_state("context_ttl_hours", "2.0"))
+            ttl_hours = float(self.db.get_state("context_ttl_hours", "4.0"))
             max_age_secs = int(ttl_hours * 3600) if ttl_hours > 0 else None
             fresh_history = self.db.get_recent_chat_messages(
                 chat_id, limit=15, max_age_seconds=max_age_secs
@@ -849,7 +849,7 @@ class ReplyManager:
                 "• `/stop` - Emergency stop switch (halts all replies)\n\n"
                 "*Reactions & Cooldowns:*\n"
                 "• `/reaction on` / `/reaction off` - Enable or disable auto-reactions\n"
-                "• `/reactioncooldown <min> <max>` - Set random reaction cooldown (e.g. `3 9` seconds)\n"
+                "• `/reactioncooldown <min> <max>` - Set random reaction cooldown (e.g. `15 60` seconds)\n"
                 "• `/chatcooldown <min> <max>` - Custom per-chat reply cooldown (e.g. `5 60`)\n"
                 "• `/globalcooldown <min> <max>` - Custom global reply cooldown (e.g. `5 60`)\n"
                 "• `/ratelimit <per_min> <per_hour>` - Anti-spam rate limits (e.g. `/ratelimit 5 30`)\n"
@@ -1104,11 +1104,11 @@ class ReplyManager:
 
         if cmd in ("/contextttl", "/aging"):
             if len(cmd_parts) < 2:
-                curr = self.db.get_state("context_ttl_hours", "2.0")
+                curr = self.db.get_state("context_ttl_hours", "4.0")
                 return (
                     f"⏳ *Conversation Context Auto-Aging:* `{curr} hours`\n"
                     "After this period of inactivity, older conversation context expires so the AI starts fresh.\n"
-                    "Usage: `/contextttl <hours>` (e.g. `/contextttl 2.0`)"
+                    "Usage: `/contextttl <hours>` (e.g. `/contextttl 4.0`)"
                 )
             try:
                 val = max(0.1, float(cmd_parts[1]))
@@ -1399,8 +1399,8 @@ class ReplyManager:
             qh_start, qh_end = self.safety.quiet_hours_window
             is_quiet, _ = self.safety.is_in_quiet_hours()
             qh_desc = f"ON ({qh_start}–{qh_end}, {'Sleeping 💤' if is_quiet else 'Awake ☀️'})" if qh_enabled else "OFF"
-            min_r_sec = float(self.db.get_state("reaction_min_cooldown_seconds", str(getattr(self.config, "reaction_min_cooldown_seconds", 3.0))))
-            max_r_sec = float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(self.config, "reaction_max_cooldown_seconds", 9.0))))
+            min_r_sec = float(self.db.get_state("reaction_min_cooldown_seconds", str(getattr(self.config, "reaction_min_cooldown_seconds", 15.0))))
+            max_r_sec = float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(self.config, "reaction_max_cooldown_seconds", 60.0))))
             chat_cd_range = f"{int(self.safety.min_chat_cooldown)}s–{int(self.safety.max_chat_cooldown)}s"
             global_cd_range = f"{int(self.safety.min_global_cooldown)}s–{int(self.safety.max_global_cooldown)}s"
             recent_min = self.db.get_recent_reply_count(60.0) if hasattr(self.db, "get_recent_reply_count") else 0
@@ -1550,11 +1550,11 @@ class ReplyManager:
         if cmd in ("/reactioncooldown", "/reactcd", "/reactionlimit", "/reactioninterval"):
             min_react = float(self.db.get_state(
                 "reaction_min_cooldown_seconds",
-                str(getattr(self.config, "reaction_min_cooldown_seconds", 3.0))
+                str(getattr(self.config, "reaction_min_cooldown_seconds", 15.0))
             ))
             max_react = float(self.db.get_state(
                 "reaction_max_cooldown_seconds",
-                str(getattr(self.config, "reaction_max_cooldown_seconds", 9.0))
+                str(getattr(self.config, "reaction_max_cooldown_seconds", 60.0))
             ))
             max_r = self.db.get_state("reaction_max_per_window", str(getattr(self.config, "reaction_max_per_window", 4)))
             win_m = int(float(self.db.get_state("reaction_window_seconds", str(getattr(self.config, "reaction_window_seconds", 600.0)))) // 60)
@@ -1565,7 +1565,7 @@ class ReplyManager:
                     f"• Interval: Random `{int(min_react)}s` to `{int(max_react)}s` between reactions\n"
                     f"• Rolling Rate Limit: Max *{max_r}* reactions per *{win_m}* minutes\n\n"
                     f"*Commands:*\n"
-                    f"• `/reactioncooldown <min_sec> <max_sec>` - Set random interval (e.g. `/reactioncooldown 3 9`)\n"
+                    f"• `/reactioncooldown <min_sec> <max_sec>` - Set random interval (e.g. `/reactioncooldown 15 60`)\n"
                     f"• `/reactioncooldown limit <max_count> <window_mins>` - Set rolling limit (e.g. `/reactioncooldown limit 4 10`)"
                 )
 
@@ -1928,7 +1928,7 @@ class ReplyManager:
             prompt_preview = full_inst if len(full_inst) <= 3000 else (full_inst[:3000] + "\n...[truncated for telegram display]")
             return (
                 f"📜 *Active System Instructions ({mode_str}):*\n\n"
-                f"• *Anti-AI Guardrails:* ACTIVE 🛡️ (1-5 words, human conversation, top emojis, no names/@usernames, no code)\n"
+                f"• *Anti-AI Guardrails:* ACTIVE 🛡️ (1-5 words, human conversation, any fitting emojis with varied placement, no names/@usernames, no code)\n"
                 f"• *Custom Persona:* {custom_display}\n"
                 f"• *Active Style:* `{self.generator.style}`\n"
                 f"• *Language:* `{self.generator.language}`\n\n"
@@ -2175,20 +2175,20 @@ class ReplyManager:
         now = time.time()
         min_react_cd = float(self.db.get_state(
             "reaction_min_cooldown_seconds",
-            str(getattr(self.config, "reaction_min_cooldown_seconds", 3.0))
+            str(getattr(self.config, "reaction_min_cooldown_seconds", 15.0))
         ))
         max_react_cd = float(self.db.get_state(
             "reaction_max_cooldown_seconds",
-            str(getattr(self.config, "reaction_max_cooldown_seconds", 9.0))
+            str(getattr(self.config, "reaction_max_cooldown_seconds", 60.0))
         ))
         if (now - self._last_reaction_time) < self._next_reaction_cooldown:
             wait_rem = round(self._next_reaction_cooldown - (now - self._last_reaction_time), 1)
             logger.debug(f"[REACTION] Cooldown active ({wait_rem}s remaining before next reaction).")
             return False
 
-        # Per-chat reaction cooldown (minimum 25s between reactions in the same chat to prevent spam)
-        last_chat_react = self._last_reaction_time_by_chat.get(chat_id, 0.0)
-        if (now - last_chat_react) < 25.0:
+        # Human-style per-chat gap: randomized 2–5 minutes between reactions in the same chat
+        next_chat_react = self._next_reaction_time_by_chat.get(chat_id, 0.0)
+        if now < next_chat_react:
             logger.debug(f"[REACTION] Per-chat reaction cooldown active for {chat_id}.")
             return False
 
@@ -2219,21 +2219,28 @@ class ReplyManager:
             "🤷", "🤷‍♀️", "😡"
         ]
 
-        # Natural sentiment & tone mapping with full emoji variety (selective, thoughtful, non-spammy)
+        # Natural sentiment & tone mapping with full emoji variety (selective, thoughtful, non-spammy).
+        # shortcut: pools must stay a subset of `all_telegram_reactions` below (only valid Telegram reaction emojis)
         lower = text.lower()
         has_sentiment = True
-        if any(w in lower for w in ("haha", "lol", "lmao", "rofl", "xd", "funny", "lmfao", "joke", "dead", "ded")):
-            chosen = random.choice(["😂", "🤣", "💀", "😁"])
-        elif any(w in lower for w in ("congrats", "congratulations", "huge w", "promoted", "won", "awesome work", "let's go", "fire", "lit", "goat", "legend", "insane", "superb")):
-            chosen = random.choice(["🔥", "⚡", "💯", "🏆", "🤩", "👏"])
-        elif any(w in lower for w in ("thanks", "thank you", "tysm", "love you", "heart", "appreciate it", "grateful")):
-            chosen = random.choice(["❤️", "❤️‍🔥", "🥰", "🙏", "🤗"])
-        elif any(w in lower for w in ("deal", "sounds good", "done deal", "agreed", "let's do it", "partner", "perfect", "done", "alright")):
-            chosen = random.choice(["👍", "🤝", "🫡", "👌"])
-        elif any(w in lower for w in ("wtf", "no way", "holy shit", "damn bro", "unreal", "omg", "crazy", "wild")):
-            chosen = random.choice(["🤯", "😱", "👀"])
-        elif any(w in lower for w in ("rip", "sorry to hear", "unfortunate", "so sad", "pain")):
+        if any(w in lower for w in ("haha", "lol", "lmao", "rofl", "xd", "funny", "lmfao", "joke", "bruh", "meme", "comedy", "dead", "ded")):
+            chosen = random.choice(["😂", "🤣", "💀", "😁", "🤡"])
+        elif any(w in lower for w in ("congrats", "congratulations", "huge w", "promoted", "won", "awesome work", "let's go", "goat", "legend", "superb", "champion", "winner", "victory")):
+            chosen = random.choice(["🔥", "⚡", "💯", "🏆", "🤩", "👏", "🎉", "🦄"])
+        elif any(w in lower for w in ("thanks", "thank you", "tysm", "love you", "heart", "appreciate it", "grateful", "sweetest", "adorable")):
+            chosen = random.choice(["❤️", "❤️‍🔥", "🥰", "😍", "🙏", "🤗", "😘", "💋"])
+        elif any(w in lower for w in ("deal", "sounds good", "done deal", "agreed", "let's do it", "partner", "perfect", "done", "alright", "ok", "yep", "sure")):
+            chosen = random.choice(["👍", "🤝", "🫡", "👌", "😎"])
+        elif any(w in lower for w in ("wtf", "no way", "holy shit", "damn", "omg", "crazy", "wild", "insane", "unreal", "can't believe")):
+            chosen = random.choice(["🤯", "😱", "👀", "😨", "🤨"])
+        elif any(w in lower for w in ("rip", "sorry to hear", "unfortunate", "so sad", "pain", "hurts", "miss you", "tragic", "heartbroke")):
             chosen = random.choice(["😢", "😭", "💔"])
+        elif any(w in lower for w in ("tired", "sleepy", "exhausted", "bored", "nap")):
+            chosen = random.choice(["🥱", "😴"])
+        elif any(w in lower for w in ("whatever", "meh", "sus", "mid", "boring")):
+            chosen = random.choice(["🗿", "😐", "🥴"])
+        elif any(w in lower for w in ("party", "birthday", "bday", "cheers", "celebrate")):
+            chosen = random.choice(["🎉", "🍾"])
         else:
             has_sentiment = False
             chosen = ""
@@ -2251,7 +2258,7 @@ class ReplyManager:
             now = time.time()
             self.db.record_reaction(now)
             self._last_reaction_time = now
-            self._last_reaction_time_by_chat[chat_id] = now
+            self._next_reaction_time_by_chat[chat_id] = now + random.uniform(120.0, 300.0)
             self._next_reaction_cooldown = random.uniform(min_react_cd, max_react_cd)
             logger.info(
                 f"[REACTION] Reacted {chosen} to message {message_id} in chat {chat_id}. "

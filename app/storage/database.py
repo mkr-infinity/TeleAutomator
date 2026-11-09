@@ -425,6 +425,19 @@ class Database:
                 })
             return results
 
+    def prune_messages_older_than(self, max_age_seconds: float) -> int:
+        """Delete locally cached chat messages older than max_age_seconds (context aging purge).
+
+        Only removes local SQLite prompt-memory rows; never touches Telegram messages.
+        """
+        with self._get_connection() as conn:
+            modifier = f"-{int(max_age_seconds)} seconds"
+            cursor = conn.execute(
+                "DELETE FROM chat_messages WHERE created_at < datetime('now', ?)",
+                (modifier,),
+            )
+            return cursor.rowcount
+
     def clear_chat_context(self, chat_id: int) -> int:
         """Clear locally cached conversation context for chat_id.
         

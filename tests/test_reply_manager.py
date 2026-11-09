@@ -12,6 +12,23 @@ from app.safety_manager import SafetyManager
 from app.storage.database import Database
 
 
+def test_prune_messages_older_than(tmp_path: Path):
+    """Context purge deletes only rows older than the TTL window, keeps fresh ones."""
+    db = Database(tmp_path / "app_purge.db")
+    chat_id = 555001
+    db.record_chat_message(chat_id, 1, 111, "Bob", "old msg", is_outgoing=False)
+    # Backdate the first insert beyond the 4h window, then add a fresh one
+    with db._get_connection() as conn:
+        conn.execute("UPDATE chat_messages SET created_at = datetime('now', '-5 hours')")
+    db.record_chat_message(chat_id, 2, 222, "Bob", "new msg", is_outgoing=False)
+
+    removed = db.prune_messages_older_than(4 * 3600)
+    assert removed == 1
+    history = db.get_recent_chat_messages(chat_id)
+    assert len(history) == 1
+    assert history[0]["text"] == "new msg"
+
+
 def test_draft_only_mode(tmp_path: Path):
     async def _run():
         cfg = AppConfig(
@@ -1013,31 +1030,31 @@ def test_multi_sentiment_reactions(tmp_path: Path):
         # 1. Excitement / congrats
         mgr._next_reaction_cooldown = 0.0
         mgr._last_reaction_time = 0.0
-        mgr._last_reaction_time_by_chat.clear()
+        mgr._next_reaction_time_by_chat.clear()
         res1 = await mgr.maybe_send_reaction(1001, 1, "huge w bro congrats!")
         assert res1 is True
-        assert reactions_sent[-1] in ("🔥", "⚡", "💯", "🏆", "🤩", "👏")
+        assert reactions_sent[-1] in ("🔥", "⚡", "💯", "🏆", "🤩", "👏", "🎉", "🦄")
 
         # 2. Agreement / deal
         mgr._next_reaction_cooldown = 0.0
         mgr._last_reaction_time = 0.0
-        mgr._last_reaction_time_by_chat.clear()
+        mgr._next_reaction_time_by_chat.clear()
         res2 = await mgr.maybe_send_reaction(1002, 2, "done deal partner")
         assert res2 is True
-        assert reactions_sent[-1] in ("👍", "🤝", "🫡", "👌")
+        assert reactions_sent[-1] in ("👍", "🤝", "🫡", "👌", "😎")
 
         # 3. Surprise / shock
         mgr._next_reaction_cooldown = 0.0
         mgr._last_reaction_time = 0.0
-        mgr._last_reaction_time_by_chat.clear()
+        mgr._next_reaction_time_by_chat.clear()
         res3 = await mgr.maybe_send_reaction(1003, 3, "wtf no way unreal")
         assert res3 is True
-        assert reactions_sent[-1] in ("🤯", "😱", "👀")
+        assert reactions_sent[-1] in ("🤯", "😱", "👀", "😨", "🤨")
 
         # 4. Neutral text: returns False
         mgr._next_reaction_cooldown = 0.0
         mgr._last_reaction_time = 0.0
-        mgr._last_reaction_time_by_chat.clear()
+        mgr._next_reaction_time_by_chat.clear()
         res4 = await mgr.maybe_send_reaction(1004, 4, "the sky is blue today")
         assert res4 is False
 
