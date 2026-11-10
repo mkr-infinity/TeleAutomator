@@ -2038,6 +2038,11 @@ class ReplyManager:
             return f"✅ Identity updated! The AI will now reply as '{new_name}'."
 
         if cmd in ("/prompt", "/showprompt", "/getprompt", "/activeprompt"):
+            # '/prompt <your prompt here>' sets the persona directly (matching the bot menu usage);
+            # bare '/prompt' (or '/prompt view') shows the active instructions.
+            persona_text = text[len(cmd_parts[0]):].strip()
+            if persona_text and persona_text.lower() not in ("view", "show"):
+                return await self.handle_control_command("/setprompt " + persona_text)
             custom = self.generator.prompt_manager.custom_prompt
             mode_str = f"Custom Persona ({len(custom.split())} words)" if custom else "Default Persona"
             full_inst = self.generator.prompt_manager.system_instructions
