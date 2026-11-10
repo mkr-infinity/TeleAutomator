@@ -207,8 +207,10 @@ class TelegramService:
                 except Exception as e:
                     logger.debug(f"Context purge error: {e}")
 
-            # Every 30 minutes, refresh AI-generated rolling context recaps for active chats
-            if now - self._last_summary_check >= 1800.0:
+            # Every 15 minutes, refresh AI-generated rolling context recaps for active chats
+            # (shortened interval so busy community groups keep a fresh memory; per-chat
+            # thresholds in refresh_group_summaries skip quiet chats anyway)
+            if now - self._last_summary_check >= 900.0:
                 self._last_summary_check = now
                 try:
                     await self.reply_manager.refresh_group_summaries()

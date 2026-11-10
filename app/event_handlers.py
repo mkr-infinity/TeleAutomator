@@ -37,6 +37,11 @@ def register_handlers(
         )
         clean_text = text.strip()
         if is_saved_messages and clean_text.startswith("/"):
+            if reply_manager.bot_control is not None:
+                # Bot control channel is active: Saved Messages commands are disabled
+                # (the bot is the only control channel) — quietly ignore to keep the account output clean.
+                logger.info("Saved Messages command ignored (bot control channel is active).")
+                return
             logger.info(f"Received control command in Saved Messages: {clean_text.split()[0]}")
             response = await reply_manager.handle_control_command(clean_text)
             if response:

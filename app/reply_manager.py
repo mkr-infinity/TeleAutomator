@@ -55,6 +55,9 @@ class ReplyManager:
         self.privacy = privacy_manager
         self.generator = reply_generator
         self._client: Any = None
+        # Optional Bot API control channel (set by main.py when BOT_API_KEY is configured).
+        # When set: all alerts route to the bot's main user, Saved Messages stays as delivery fallback only.
+        self.bot_control: Any = None
         self.typing_delay: float = getattr(config, "typing_delay_seconds", 2.0)
         self.min_delay: float = getattr(config, "min_delay_seconds", 5.0)
         self.max_delay: float = getattr(config, "max_delay_seconds", 60.0)
@@ -538,7 +541,7 @@ class ReplyManager:
 
     async def check_daily_quota_warning(self) -> None:
         """Check if 24-hour token consumption exceeded user-defined threshold and alert Saved Messages."""
-        if not self._client or not self.db:
+        if (not self._client and self.bot_control is None) or not self.db:
             return
         enabled = self.db.get_state("quota_alert_enabled", "1") == "1"
         if not enabled:
@@ -560,8 +563,8 @@ class ReplyManager:
                         f"• Remaining Free Pool: *{rem:,}* tokens\n\n"
                         f"_Adjust threshold via `/quotathreshold <tokens>` or toggle via `/quotaalert off`._"
                     )
-                    await self._client.send_message("me", alert_text, parse_mode="md")
-                    logger.info(f"[QUOTA ALERT] Sent 24h threshold warning ({daily_tokens:,} tokens) to Saved Messages.")
+                    await self._send_control_alert(alert_text)
+                    logger.info(f"[QUOTA ALERT] Sent 24h threshold warning ({daily_tokens:,} tokens) via control channel.")
         except Exception as e:
             logger.debug(f"Could not execute quota warning check: {e}")
 
@@ -704,8 +707,8 @@ class ReplyManager:
         incoming_text: str,
         draft_text: str,
     ) -> None:
-        """Notify the user in their private Saved Messages control channel."""
-        if not self._client:
+        """Notify the main user via the control channel (bot, fallback Saved Messages)."""
+        if not self._client and self.bot_control is None:
             return
 
         # Suppress alerts when automation is paused, stopped, or in quiet hours
@@ -724,10 +727,29 @@ class ReplyManager:
             f"Send `/approve {approval_id}` to send, or `/reject {approval_id}` to discard."
         )
         try:
-            # 'me' in Telethon resolves to the user's private Saved Messages
-            await self._client.send_message("me", notification, parse_mode="md")
+            await self._send_control_alert(notification)
         except Exception as e:
-            logger.error(f"Failed to send approval notification to Saved Messages: {e}")
+            logger.error(f"Failed to send approval notification via control channel: {e}")
+
+    async def _send_control_alert(self, text: str, parse_markdown: bool = True) -> bool:
+        """Send a control-channel alert: to the bot's main user when the bot is active,
+        otherwise (or if bot delivery fails) to Saved Messages as fallback."""
+        if self.bot_control is not None:
+            try:
+                if await self.bot_control.send_alert(text):
+                    return True
+                logger.warning("Bot alert delivery failed; falling back to Saved Messages.")
+            except Exception as e:
+                logger.warning(f"Bot alert delivery error ({e}); falling back to Saved Messages.")
+        if not self._client:
+            return False
+        try:
+            # 'me' in Telethon resolves to the user's private Saved Messages
+            await self._client.send_message("me", text, parse_mode="md" if parse_markdown else None)
+            return True
+        except Exception as e:
+            logger.warning(f"Could not send control alert: {e}")
+            return False
 
     async def _notify_issue_to_saved_messages(
         self,
@@ -738,8 +760,8 @@ class ReplyManager:
         incoming_text: str = "",
         force: bool = False,
     ) -> None:
-        """Send internal error/issue alerts exclusively to user's private Saved Messages."""
-        if not self._client:
+        """Send internal error/issue alerts to the control channel (bot main user, fallback Saved Messages)."""
+        if not self._client and self.bot_control is None:
             return
 
         if force:
@@ -769,9 +791,9 @@ class ReplyManager:
                 f"• *Issue/Error:* `{error_msg}`{incoming_snippet}\n"
                 f"• *Safety Status:* Suppressed safely. Zero error text or fallbacks sent to recipient."
             )
-            await self._client.send_message("me", alert, parse_mode="md")
+            await self._send_control_alert(alert)
         except Exception as e:
-            logger.error(f"Failed to deliver issue alert to Saved Messages: {e}")
+            logger.error(f"Failed to deliver issue alert via control channel: {e}")
 
     def _parse_duration(self, raw: str) -> Optional[float]:
         """Parse duration strings like '2h', '30m', '1d', or '2' (hours)."""
@@ -844,7 +866,7 @@ class ReplyManager:
         return f"```\n{header_str}\n{sep_str}\n" + "\n".join(body_strs) + "\n```"
 
     async def handle_control_command(self, text: str) -> Optional[str]:
-        """Handle control commands sent to Saved Messages (e.g., /approve, /reject, /status, /pause, /setprompt)."""
+        """Handle control commands sent via the control channel (control bot or Saved Messages)."""
         cmd_parts = text.strip().split()
         if not cmd_parts:
             return None
@@ -869,6 +891,9 @@ class ReplyManager:
                 "• `/chatcooldown <min> <max>` - Custom per-chat reply cooldown (e.g. `5 60`)\n"
                 "• `/globalcooldown <min> <max>` - Custom global reply cooldown (e.g. `5 60`)\n"
                 "• `/ratelimit <per_min>` - Anti-spam base burst limit (e.g. `/ratelimit 5`)\n"
+                "• `/editfix on|off` - Self-typo-then-edit simulation (send with typo, edit clean seconds later)\n"
+                "• `/ownreact on|off` - React to your own sent messages occasionally\n"
+                "• `/typo on|off` - Natural typo + correction follow-up simulation\n"
                 "• `/followup <on|off>` - Spontaneous delayed follow-ups for short replies\n"
                 "• `/debounce <on|off|seconds>` - Incoming burst debouncer (stitches rapid messages)\n"
                 "• `/multibubble <on|off>` - Multi-bubble response splitting (rapid sequential bubbles)\n\n"
@@ -1561,6 +1586,44 @@ class ReplyManager:
                 self.db.set_state("typo_correction_enabled", "0")
                 return "🔒 Typo simulation *DISABLED*."
             return "Usage: `/typo on` or `/typo off`"
+
+        if cmd in ("/editfix", "/editself", "/selfedit"):
+            if len(cmd_parts) < 2:
+                fix_on = self.db.get_state("editfix_enabled", "1") == "1"
+                status = "ON (~10% chance)" if fix_on else "OFF"
+                return (
+                    f"✏️ *Self-Edit Fix Simulation:* *{status}*\n"
+                    f"Occasionally sends a reply with a small typo, then edits the same message clean 2-3s later (like a human re-reading and fixing).\n\n"
+                    f"• `/editfix on` - Enable self-edit simulation\n"
+                    f"• `/editfix off` - Disable self-edit simulation"
+                )
+            target = cmd_parts[1].lower().strip()
+            if target == "on":
+                self.db.set_state("editfix_enabled", "1")
+                return "✏️ Self-edit fix simulation *ENABLED* (~10% of replies)."
+            elif target == "off":
+                self.db.set_state("editfix_enabled", "0")
+                return "🔒 Self-edit fix simulation *DISABLED*."
+            return "Usage: `/editfix on` or `/editfix off`"
+
+        if cmd in ("/ownreact", "/ownreaction", "/selfreact"):
+            if len(cmd_parts) < 2:
+                own_on = self.db.get_state("ownreact_enabled", "1") == "1"
+                status = "ON (~20% chance)" if own_on else "OFF"
+                return (
+                    f"🫵 *Own-Reply Reaction:* *{status}*\n"
+                    f"Occasionally reacts to your own sent message with a fitting emoji (respecting all reaction cooldowns).\n\n"
+                    f"• `/ownreact on` - Enable own-reply reactions\n"
+                    f"• `/ownreact off` - Disable own-reply reactions"
+                )
+            target = cmd_parts[1].lower().strip()
+            if target == "on":
+                self.db.set_state("ownreact_enabled", "1")
+                return "🫵 Own-reply reactions *ENABLED* (~20% of replies)."
+            elif target == "off":
+                self.db.set_state("ownreact_enabled", "0")
+                return "🔒 Own-reply reactions *DISABLED*."
+            return "Usage: `/ownreact on` or `/ownreact off`"
 
         if cmd in ("/reactioncooldown", "/reactcd", "/reactionlimit", "/reactioninterval"):
             min_react = float(self.db.get_state(
@@ -2407,7 +2470,8 @@ class ReplyManager:
         self._last_group_activity[chat_id] = time.time()
 
     async def refresh_group_summaries(self, min_new_messages: int = 15, max_payload: int = 40) -> None:
-        """AI-generated rolling context recap per busy allowlisted group (saved for prompts)."""
+        """AI-generated rolling context recap per busy allowlisted group (saved for prompts).
+        Busy chats (>=5 msgs/2min) summarize from ~8 new messages; quiet chats keep the 15-msg bar."""
         groups: set = set()
         try:
             private_set, group_set = self.privacy.get_all_allowed_chats()
@@ -2426,7 +2490,13 @@ class ReplyManager:
             try:
                 marker = int(self.db.get_state(f"chat_summary_marker_{cid}", "0"))
                 new_count = self.db.count_chat_messages_since(cid, marker)
-                if new_count < min_new_messages:
+                # Busy community groups recap sooner: when the chat produced >=5 messages in the
+                # last 2 minutes, summarize from ~8 new messages; quieter chats need the full 15.
+                try:
+                    threshold = 8 if self.db.get_recent_message_count(120.0, chat_id=cid) >= 5 else min_new_messages
+                except Exception:
+                    threshold = min_new_messages
+                if new_count < threshold:
                     continue
                 raw = self.db.get_chat_messages_since_text(cid, marker, limit=max_payload)
                 if not raw:
@@ -2526,7 +2596,10 @@ class ReplyManager:
         typo_enabled = self.db.get_state("typo_correction_enabled", "1") == "1"
         if typo_enabled and len(msg_parts) == 1 and not is_mention:
             first_part, typo_correction = self.maybe_inject_typo_correction(first_part, probability=0.04)
-            if not typo_correction and self.current_mode == "restricted_auto" and random.random() < 0.10:
+            if (not typo_correction
+                    and self.current_mode == "restricted_auto"
+                    and self.db.get_state("editfix_enabled", "1") == "1"
+                    and random.random() < 0.10):
                 # Self-edit simulation: send with a small typo, then edit the same message clean ~seconds later
                 edited = self.maybe_inject_typo_correction(first_part, probability=1.0)[0]
                 if edited != first_part:
@@ -2644,6 +2717,7 @@ class ReplyManager:
 
             # Human touch: occasionally react to your own message just like a real person (20%)
             if (first_msg_id and self.current_mode == "restricted_auto" and not self.safety.is_emergency_stopped
+                    and self.db.get_state("ownreact_enabled", "1") == "1"
                     and random.random() < 0.20):
                 try:
                     reacted = await self.maybe_send_reaction(chat_id, first_msg_id, first_part, allow_any_emoji=True)

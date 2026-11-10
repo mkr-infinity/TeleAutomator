@@ -98,6 +98,10 @@ class AppConfig:
     chatty_probability: float = 0.15
     react_only_probability: float = 0.25
 
+    # Bot control interface (Bot API control channel, replaces Saved Messages when set)
+    bot_api_key: str = ""
+    bot_authorized_users: Set[int] = field(default_factory=set)
+
     # Quiet Hours (Sleep Schedule Simulation - default 02:00 to 08:00 IST)
     quiet_hours_enabled: bool = True
     quiet_hours_start: str = "02:00"
@@ -198,6 +202,13 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
     ai_model = (os.getenv("AI_MODEL") or os.getenv("CUSTOM_MODEL") or "").strip()
     ai_base_url = (os.getenv("AI_BASE_URL") or os.getenv("CUSTOM_BASE_URL") or "").strip()
 
+    # Bot control interface (optional): Bot API key + authorized user IDs
+    bot_api_key = (os.getenv("BOT_API_KEY") or "").strip()
+    if bot_api_key:
+        if len(bot_api_key) < 20:
+            raise ValueError("Invalid BOT_API_KEY: Telegram bot tokens look like '123456789:AA...long-string'.")
+        register_secret(bot_api_key)
+
     # Rate limits and bounds
     try:
         global_cooldown = max(0, int(os.getenv("GLOBAL_COOLDOWN_SECONDS", "30")))
@@ -248,6 +259,8 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         allowed_groups=_parse_id_set(os.getenv("ALLOWED_GROUPS")),
         blocked_chats=_parse_id_set(os.getenv("BLOCKED_CHATS")),
         ignored_users=_parse_id_set(os.getenv("IGNORED_USERS")),
+        bot_api_key=bot_api_key,
+        bot_authorized_users=_parse_id_set(os.getenv("BOT_AUTHORIZED_USERS")),
         global_cooldown_seconds=global_cooldown,
         per_chat_cooldown_seconds=per_chat_cooldown,
         max_message_length=max_length,
