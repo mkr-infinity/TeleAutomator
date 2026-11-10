@@ -85,19 +85,22 @@ class AppConfig:
     min_global_cooldown_seconds: float = 5.0
     max_global_cooldown_seconds: float = 60.0
     max_replies_per_minute: int = 5
-    max_replies_per_hour: int = 30
 
     # Language & Reactions
     default_chat_language: str = "english"
     reaction_enabled: bool = True
-    reaction_max_per_window: int = 4
-    reaction_window_seconds: int = 600
-    reaction_min_cooldown_seconds: float = 3.0
-    reaction_max_cooldown_seconds: float = 9.0
+    reaction_max_per_window: int = 6
+    reaction_window_seconds: int = 1800
+    reaction_min_cooldown_seconds: float = 15.0
+    reaction_max_cooldown_seconds: float = 60.0
 
     # Group Dynamics & Participation
     chatty_probability: float = 0.15
     react_only_probability: float = 0.25
+
+    # Bot control interface (Bot API control channel, replaces Saved Messages when set)
+    bot_api_key: str = ""
+    bot_authorized_users: Set[int] = field(default_factory=set)
 
     # Quiet Hours (Sleep Schedule Simulation - default 02:00 to 08:00 IST)
     quiet_hours_enabled: bool = True
@@ -199,6 +202,13 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
     ai_model = (os.getenv("AI_MODEL") or os.getenv("CUSTOM_MODEL") or "").strip()
     ai_base_url = (os.getenv("AI_BASE_URL") or os.getenv("CUSTOM_BASE_URL") or "").strip()
 
+    # Bot control interface (optional): Bot API key + authorized user IDs
+    bot_api_key = (os.getenv("BOT_API_KEY") or "").strip()
+    if bot_api_key:
+        if len(bot_api_key) < 20:
+            raise ValueError("Invalid BOT_API_KEY: Telegram bot tokens look like '123456789:AA...long-string'.")
+        register_secret(bot_api_key)
+
     # Rate limits and bounds
     try:
         global_cooldown = max(0, int(os.getenv("GLOBAL_COOLDOWN_SECONDS", "30")))
@@ -209,18 +219,18 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         max_delay = max(min_delay, float(os.getenv("MAX_REPLY_DELAY_SECONDS", "60.0")))
         default_chat_language = os.getenv("DEFAULT_CHAT_LANGUAGE", "english").strip().lower() or "english"
         reaction_enabled = _parse_bool(os.getenv("REACTION_ENABLED"), default=True)
-        reaction_max_per_window = max(1, int(os.getenv("REACTION_MAX_PER_WINDOW", "4")))
-        reaction_window_seconds = max(10, int(os.getenv("REACTION_WINDOW_SECONDS", "600")))
+        reaction_max_per_window = max(1, int(os.getenv("REACTION_MAX_PER_WINDOW", "6")))
+        reaction_window_seconds = max(10, int(os.getenv("REACTION_WINDOW_SECONDS", "1800")))
         chatty_probability = max(0.0, min(1.0, float(os.getenv("CHATTY_PROBABILITY", "0.15"))))
         react_only_probability = max(0.0, min(1.0, float(os.getenv("REACT_ONLY_PROBABILITY", "0.25"))))
         min_chat_cd = max(0.0, float(os.getenv("MIN_CHAT_COOLDOWN_SECONDS", "5.0")))
         max_chat_cd = max(min_chat_cd, float(os.getenv("MAX_CHAT_COOLDOWN_SECONDS", "60.0")))
         min_global_cd = max(0.0, float(os.getenv("MIN_GLOBAL_COOLDOWN_SECONDS", "5.0")))
         max_global_cd = max(min_global_cd, float(os.getenv("MAX_GLOBAL_COOLDOWN_SECONDS", "60.0")))
-        reaction_min_cd = max(0.0, float(os.getenv("REACTION_MIN_COOLDOWN_SECONDS", "3.0")))
-        reaction_max_cd = max(reaction_min_cd, float(os.getenv("REACTION_MAX_COOLDOWN_SECONDS", "9.0")))
+        reaction_min_cd = max(0.0, float(os.getenv("REACTION_MIN_COOLDOWN_SECONDS", "15.0")))
+        reaction_max_cd = max(reaction_min_cd, float(os.getenv("REACTION_MAX_COOLDOWN_SECONDS", "60.0")))
         max_replies_per_minute = max(1, int(os.getenv("MAX_REPLIES_PER_MINUTE", "5")))
-        max_replies_per_hour = max(1, int(os.getenv("MAX_REPLIES_PER_HOUR", "30")))
+        max_message_length = max(1, int(os.getenv("MAX_MESSAGE_LENGTH", "1000")))
         quiet_hours_enabled = _parse_bool(os.getenv("QUIET_HOURS_ENABLED"), default=True)
         quiet_hours_start = os.getenv("QUIET_HOURS_START", "02:00").strip() or "02:00"
         quiet_hours_end = os.getenv("QUIET_HOURS_END", "08:00").strip() or "08:00"
@@ -249,6 +259,8 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         allowed_groups=_parse_id_set(os.getenv("ALLOWED_GROUPS")),
         blocked_chats=_parse_id_set(os.getenv("BLOCKED_CHATS")),
         ignored_users=_parse_id_set(os.getenv("IGNORED_USERS")),
+        bot_api_key=bot_api_key,
+        bot_authorized_users=_parse_id_set(os.getenv("BOT_AUTHORIZED_USERS")),
         global_cooldown_seconds=global_cooldown,
         per_chat_cooldown_seconds=per_chat_cooldown,
         max_message_length=max_length,
@@ -266,7 +278,6 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         min_global_cooldown_seconds=min_global_cd,
         max_global_cooldown_seconds=max_global_cd,
         max_replies_per_minute=max_replies_per_minute,
-        max_replies_per_hour=max_replies_per_hour,
         reaction_min_cooldown_seconds=reaction_min_cd,
         reaction_max_cooldown_seconds=reaction_max_cd,
         quiet_hours_enabled=quiet_hours_enabled,

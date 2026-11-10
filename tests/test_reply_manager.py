@@ -12,6 +12,23 @@ from app.safety_manager import SafetyManager
 from app.storage.database import Database
 
 
+def test_prune_messages_older_than(tmp_path: Path):
+    """Context purge deletes only rows older than the TTL window, keeps fresh ones."""
+    db = Database(tmp_path / "app_purge.db")
+    chat_id = 555001
+    db.record_chat_message(chat_id, 1, 111, "Bob", "old msg", is_outgoing=False)
+    # Backdate the first insert beyond the 4h window, then add a fresh one
+    with db._get_connection() as conn:
+        conn.execute("UPDATE chat_messages SET created_at = datetime('now', '-5 hours')")
+    db.record_chat_message(chat_id, 2, 222, "Bob", "new msg", is_outgoing=False)
+
+    removed = db.prune_messages_older_than(4 * 3600)
+    assert removed == 1
+    history = db.get_recent_chat_messages(chat_id)
+    assert len(history) == 1
+    assert history[0]["text"] == "new msg"
+
+
 def test_draft_only_mode(tmp_path: Path):
     async def _run():
         cfg = AppConfig(
@@ -1013,31 +1030,31 @@ def test_multi_sentiment_reactions(tmp_path: Path):
         # 1. Excitement / congrats
         mgr._next_reaction_cooldown = 0.0
         mgr._last_reaction_time = 0.0
-        mgr._last_reaction_time_by_chat.clear()
+        mgr._next_reaction_time_by_chat.clear()
         res1 = await mgr.maybe_send_reaction(1001, 1, "huge w bro congrats!")
         assert res1 is True
-        assert reactions_sent[-1] in ("🔥", "⚡", "💯", "🏆", "🤩", "👏")
+        assert reactions_sent[-1] in ("🔥", "⚡", "💯", "🏆", "🤩", "👏", "🎉", "🦄")
 
         # 2. Agreement / deal
         mgr._next_reaction_cooldown = 0.0
         mgr._last_reaction_time = 0.0
-        mgr._last_reaction_time_by_chat.clear()
+        mgr._next_reaction_time_by_chat.clear()
         res2 = await mgr.maybe_send_reaction(1002, 2, "done deal partner")
         assert res2 is True
-        assert reactions_sent[-1] in ("👍", "🤝", "🫡", "👌")
+        assert reactions_sent[-1] in ("👍", "🤝", "🫡", "👌", "😎")
 
         # 3. Surprise / shock
         mgr._next_reaction_cooldown = 0.0
         mgr._last_reaction_time = 0.0
-        mgr._last_reaction_time_by_chat.clear()
+        mgr._next_reaction_time_by_chat.clear()
         res3 = await mgr.maybe_send_reaction(1003, 3, "wtf no way unreal")
         assert res3 is True
-        assert reactions_sent[-1] in ("🤯", "😱", "👀")
+        assert reactions_sent[-1] in ("🤯", "😱", "👀", "😨", "🤨")
 
         # 4. Neutral text: returns False
         mgr._next_reaction_cooldown = 0.0
         mgr._last_reaction_time = 0.0
-        mgr._last_reaction_time_by_chat.clear()
+        mgr._next_reaction_time_by_chat.clear()
         res4 = await mgr.maybe_send_reaction(1004, 4, "the sky is blue today")
         assert res4 is False
 
@@ -1766,19 +1783,143 @@ def test_ratelimit_control_command(tmp_path: Path):
         res1 = await mgr.handle_control_command("/ratelimit")
         assert "Telegram Anti-Spam Rate Limits" in res1
         assert "Burst Limit" in res1
-        assert "Hourly Limit" in res1
+        assert "dynamic" in res1.lower()
 
-        # 2. Update limits
-        res2 = await mgr.handle_control_command("/ratelimit 8 50")
-        assert "*8*" in res2 and "*50*" in res2
+        # 2. Update base limit
+        res2 = await mgr.handle_control_command("/ratelimit 8")
+        assert "*8*" in res2
         assert safety.max_replies_per_minute == 8
-        assert safety.max_replies_per_hour == 50
 
         # 3. Status includes rate limit info
         status_res = await mgr.handle_control_command("/status")
-        assert "Anti-Spam: Rate=`8/min, 50/hr`" in status_res
+        assert "8/min base (dynamic)" in status_res
 
     asyncio.run(_run())
+
+
+def test_dynamic_minute_limit_varies_and_boosts(tmp_path: Path):
+    """Verify the per-minute cap fluctuates around the base and boosts in busy chats."""
+    cfg = AppConfig(
+        api_id=123,
+        api_hash="dummy_hash",
+        data_dir=tmp_path,
+        max_replies_per_minute=5,
+    )
+    db = Database(tmp_path / "dynamic.db")
+    db.record_chat_message(-100, 1, 11, "A", "msg one", is_outgoing=False)
+    db.record_chat_message(-100, 2, 12, "B", "msg two", is_outgoing=False)
+    db.record_chat_message(-100, 3, 13, "C", "msg three", is_outgoing=False)
+    db.record_chat_message(-100, 4, 14, "D", "msg four", is_outgoing=False)
+    db.record_chat_message(-100, 5, 15, "E", "msg five", is_outgoing=False)
+    safety = SafetyManager(cfg, db)
+
+    caps = {safety._pick_dynamic_minute_limit(-100) for _ in range(30)}
+    # Busy chat (5+ recent msgs within 2 min): base 5 + jitter 0-3 + boost 4 → 9..12, multiple distinct values
+    assert min(caps) >= 9 and max(caps) <= 12
+    assert len(caps) >= 2
+
+    # Same chat but now stale messages (older than the 2-min busy window) → idle cap 5..8
+    with db._get_connection() as conn:
+        conn.execute("UPDATE chat_messages SET created_at = datetime('now', '-3 hours')")
+    idle_caps = {safety._pick_dynamic_minute_limit(-100) for _ in range(30)}
+    assert min(idle_caps) >= 5 and max(idle_caps) <= 8
+    assert max(idle_caps) < min(caps)
+
+
+def test_prompt_command_fits_telegram_limit(tmp_path: Path):
+    """/prompt output must always stay under Telegram's 4096-char limit even with a huge custom prompt."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "prompt_limit.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        long_prompt = "always sound like a sleepy college kid " * 150  # ~4500 chars
+        await mgr.handle_control_command(f"/setprompt {long_prompt}")
+        res = await mgr.handle_control_command("/prompt")
+        assert res is not None and res != ""
+        assert len(res) < 4096
+        assert "Custom Persona" in res
+        assert "truncated for Telegram display" in res
+
+    asyncio.run(_run())
+
+
+def test_custom_prompt_syncs_after_restart(tmp_path: Path):
+    """Custom prompt set via Saved Messages must survive restarts and stay synced to AI generation."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "sync.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, ReplyGenerator(cfg, database=db))
+
+        await mgr.handle_control_command("/setprompt talk like a chilled gamer")
+
+        # Simulate restart: fresh generator loaded from the same database
+        fresh_generator = ReplyGenerator(cfg, database=db)
+        assert fresh_generator.prompt_manager.custom_prompt == "talk like a chilled gamer"
+        # The compiled instructions sent to the AI carry the custom persona
+        assert "chilled gamer" in fresh_generator.prompt_manager.system_instructions
+
+        res = await mgr.handle_control_command("/prompt")
+        assert "Custom Persona" in res
+        assert "talk like a chilled gamer" in res
+
+    asyncio.run(_run())
+
+
+def test_chat_summary_storage_and_refresh(tmp_path: Path):
+    """AI rolling recap: DB helpers + refresh_group_summaries flow with a fake provider."""
+    async def _run():
+        class FakeProvider:
+            def generate_reply(self, prompt, instructions):
+                return "friends plan cricket watch party, sarah visiting soon, vibe is chaotic humor."
+
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path, allowed_groups={-999})
+        db = Database(tmp_path / "summary.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        generator.provider = FakeProvider()
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+        mgr._client = AsyncMock()
+
+        for i in range(1, 17):
+            db.record_chat_message(-999, i, 100 + i, f"User{i}", f"banter message {i}", is_outgoing=False)
+
+        await mgr.refresh_group_summaries()
+        summary = db.get_chat_summary(-999)
+        assert "cricket watch party" in summary
+        marker = int(db.get_state("chat_summary_marker_-999", "0"))
+        assert marker == db.latest_chat_message_row_id(-999)
+
+        # Fewer than threshold new messages → no refresh churn
+        db.record_chat_message(-999, 30, 200, "User1", "one more", is_outgoing=False)
+        await mgr.refresh_group_summaries()
+        assert db.get_chat_summary(-999) == summary
+        # Summary feeds into permanent context composition for prompts (verified via marker helper)
+        assert db.count_chat_messages_since(-999, marker) == 1
+
+    asyncio.run(_run())
+
+
+def test_goodnight_signoff_ai_generated_only(tmp_path: Path):
+    """Goodnight must be AI-generated; LocalRuleProvider (no AI) yields empty → nothing sent."""
+    from app.ai.provider import LocalRuleProvider
+    cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+    generator = ReplyGenerator(cfg, provider=LocalRuleProvider(), database=None)
+    assert generator.generate_goodnight_signoff() == ""
+
+    class FakeProvider:
+        def generate_reply(self, prompt, instructions):
+            assert "goodnight" in prompt.lower()
+            return "retrying sleep schedule, goodnight guys"
+    gen2 = ReplyGenerator(cfg, provider=FakeProvider(), database=None)
+    gen2.prompt_manager.owner_name = "Kaif"
+    assert gen2.generate_goodnight_signoff() == "retrying sleep schedule, goodnight guys"
 
 
 def test_floodwait_and_peerflood_handling(tmp_path: Path):
@@ -2163,6 +2304,107 @@ def test_event_handler_group_broadcast_engagement(tmp_path: Path):
 
         # Account engaged in the group with text reply
         assert mock_client.send_message.call_count >= 1
+
+    asyncio.run(_run())
+
+
+def test_self_edit_fix_simulation(tmp_path: Path):
+    """Verify self-edit typo simulation: send message with typo, then edit the same message clean seconds later."""
+    from types import SimpleNamespace
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            data_dir=tmp_path,
+            reply_mode="restricted_auto",
+        )
+        db = Database(tmp_path / "edit.db")
+        db.set_state("multibubble_enabled", "0")
+        db.set_state("reaction_enabled", "0")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        client = MagicMock()
+        client.send_message = AsyncMock(return_value=SimpleNamespace(id=734))
+        client.edit_message = AsyncMock()
+        mgr._client = client
+
+        original = "bro my phone glitched hard"
+        with patch("app.reply_manager.random.random", return_value=0.05), \
+                patch("app.reply_manager.random.uniform", return_value=0.0), \
+                patch("app.reply_manager.asyncio.sleep", new=AsyncMock(return_value=None)):
+            ok = await mgr._send_reply(chat_id=-100, reply_to_msg_id=5, text=original, adaptive_delay=False, is_mention=False)
+
+        assert ok is True
+        # Exactly one bubble was sent, and a fast same-message edit followed with the clean original text
+        sent_text = client.send_message.await_args.args[1]
+        assert sent_text != original  # typo'd version went out first
+        client.edit_message.assert_awaited_once_with(-100, 734, original)
+
+    asyncio.run(_run())
+
+
+def test_provider_failure_forces_saved_messages_alert(tmp_path: Path):
+    """AI provider/key failures must always alert Saved Messages, even in draft mode, throttled per 10 minutes."""
+    from types import SimpleNamespace
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "alert.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, ReplyGenerator(cfg, database=db))
+        mgr._client = MagicMock()
+        mgr._client.send_message = AsyncMock(return_value=SimpleNamespace(id=1))
+        mgr.set_mode("draft")  # normally suppressed mode
+
+        await mgr._notify_issue_to_saved_messages(
+            chat_id=-42, chat_title="Devs", sender_name="Raj",
+            error_msg="AI provider/model failed (provider='custom', all fallbacks exhausted): 401",
+            force=True,
+        )
+        assert mgr._client.send_message.await_count == 1
+        sent_alert = mgr._client.send_message.await_args.args[1]
+        assert "AI provider" in sent_alert
+
+        # Second alert within 10 minutes is throttled
+        await mgr._notify_issue_to_saved_messages(chat_id=-42, chat_title="Devs", sender_name="Raj", error_msg="again", force=True)
+        assert mgr._client.send_message.await_count == 1
+
+    asyncio.run(_run())
+
+
+def test_recent_replies_persist_across_restart(tmp_path: Path):
+    """Sent-reply anti-repetition history must survive a restart (persisted to SQLite)."""
+    from types import SimpleNamespace
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "persist.db")
+        db.set_state("multibubble_enabled", "0")
+        db.set_state("reaction_enabled", "0")
+        db.set_state("typo_correction_enabled", "0")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        client = MagicMock()
+        client.send_message = AsyncMock(return_value=SimpleNamespace(id=9))
+        mgr._client = client
+
+        with patch("app.reply_manager.random.random", return_value=0.99), \
+                patch("app.reply_manager.random.uniform", return_value=0.0), \
+                patch("app.reply_manager.asyncio.sleep", new=AsyncMock(return_value=None)):
+            await mgr._send_reply(chat_id=55, reply_to_msg_id=1, text="shipping todays build now on main", adaptive_delay=False, is_mention=False)
+
+        assert db.get_state("recent_replies_by_chat") != ""
+
+        # Simulate restart: new manager loads persisted history
+        mgr2 = ReplyManager(cfg, db, safety, privacy, generator)
+        assert "shipping todays build now on main" in mgr2._recent_replies_history[55]
+        # Duplicate reply is suppressed after the restart
+        assert mgr2._prevent_duplicate_reply(55, "shipping todays build now on main") == ""
 
     asyncio.run(_run())
 

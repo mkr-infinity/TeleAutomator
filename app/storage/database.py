@@ -425,6 +425,80 @@ class Database:
                 })
             return results
 
+    def get_recent_message_count(self, window_seconds: float, chat_id: Optional[int] = None) -> int:
+        """Count cached chat messages within the last window_seconds (chat busy-signal)."""
+        with self._get_connection() as conn:
+            modifier = f"-{int(window_seconds)} seconds"
+            if chat_id is None:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM chat_messages WHERE created_at >= datetime('now', ?)",
+                    (modifier,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM chat_messages WHERE chat_id = ? AND created_at >= datetime('now', ?)",
+                    (chat_id, modifier),
+                ).fetchone()
+            return int(row[0]) if row else 0
+
+    def latest_chat_message_row_id(self, chat_id: int) -> int:
+        """Highest row id of cached messages for chat_id (summary marker)."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(id), 0) FROM chat_messages WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchone()
+            return int(row[0]) if row else 0
+
+    def count_chat_messages_since(self, chat_id: int, since_row_id: int) -> int:
+        """Count cached messages for chat_id with row id greater than since_row_id."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM chat_messages WHERE chat_id = ? AND id > ?",
+                (chat_id, since_row_id),
+            ).fetchone()
+            return int(row[0]) if row else 0
+
+    def get_chat_messages_since_text(self, chat_id: int, since_row_id: int, limit: int = 40) -> str:
+        """Chronological 'Sender: text' lines for cached messages after since_row_id (summary payload)."""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT sender_name, text, is_outgoing
+                FROM chat_messages
+                WHERE chat_id = ? AND id > ? AND text != ''
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (chat_id, since_row_id, max(1, limit)),
+            ).fetchall()
+        lines = []
+        for r in reversed(rows):
+            sender = "You" if r["is_outgoing"] == 1 else (r["sender_name"] or "Contact")
+            lines.append(f"{sender}: {r['text']}")
+        return "\n".join(lines)
+
+    def get_chat_summary(self, chat_id: int) -> str:
+        """AI-generated rolling recap for chat_id (runtime_state keyed storage)."""
+        return self.get_state(f"chat_summary_{chat_id}", "")
+
+    def set_chat_summary(self, chat_id: int, summary: str) -> None:
+        """Store the AI-generated rolling recap for chat_id."""
+        self.set_state(f"chat_summary_{chat_id}", (summary or "").strip())
+
+    def prune_messages_older_than(self, max_age_seconds: float) -> int:
+        """Delete locally cached chat messages older than max_age_seconds (context aging purge).
+
+        Only removes local SQLite prompt-memory rows; never touches Telegram messages.
+        """
+        with self._get_connection() as conn:
+            modifier = f"-{int(max_age_seconds)} seconds"
+            cursor = conn.execute(
+                "DELETE FROM chat_messages WHERE created_at < datetime('now', ?)",
+                (modifier,),
+            )
+            return cursor.rowcount
+
     def clear_chat_context(self, chat_id: int) -> int:
         """Clear locally cached conversation context for chat_id.
         

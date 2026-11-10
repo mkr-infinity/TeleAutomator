@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import difflib
+import json
 import random
 import re
 import shutil
@@ -18,6 +20,17 @@ from app.safety_manager import SafetyManager
 from app.storage.database import Database
 
 logger = setup_logger(__name__)
+
+# Primary commands surfaced through /help — used to point users at the right command on typos.
+_BOT_COMMAND_NAMES = (
+    "/help", "/start", "/status", "/mode", "/style", "/styles", "/lang", "/auto", "/pause", "/resume", "/stop",
+    "/reaction", "/reactioncooldown", "/chatcooldown", "/globalcooldown", "/ratelimit", "/editfix", "/ownreact",
+    "/typo", "/followup", "/debounce", "/multibubble", "/quiethours", "/sleep", "/aiconfig", "/setai", "/apikey",
+    "/usage", "/checkmodels", "/thinking", "/temp", "/maxtokens", "/model", "/baseurl", "/provider",
+    "/quotathreshold", "/quotaalert", "/addrule", "/delrule", "/rules", "/chats", "/allowchat", "/removechat",
+    "/blockchat", "/mentiononly", "/contextttl", "/clearcontext", "/syncpins", "/setcontext", "/showcontext",
+    "/delcontext", "/backup", "/pending", "/approve", "/reject", "/name", "/prompt", "/setprompt", "/chatty",
+)
 
 try:
     from telethon.errors import FloodWaitError, PeerFloodError
@@ -54,13 +67,17 @@ class ReplyManager:
         self.privacy = privacy_manager
         self.generator = reply_generator
         self._client: Any = None
+        # Optional Bot API control channel (set by main.py when BOT_API_KEY is configured).
+        # When set: all alerts route to the bot's main user, Saved Messages stays as delivery fallback only.
+        self.bot_control: Any = None
         self.typing_delay: float = getattr(config, "typing_delay_seconds", 2.0)
         self.min_delay: float = getattr(config, "min_delay_seconds", 5.0)
         self.max_delay: float = getattr(config, "max_delay_seconds", 60.0)
         self._last_reaction_time: float = 0.0
-        self._last_reaction_time_by_chat: dict[int, float] = {}
+        self._next_reaction_time_by_chat: dict[int, float] = {}
         self._last_sent_reply_by_chat: dict[int, str] = {}
-        self._recent_replies_history: dict[int, list[str]] = {}
+        # Persisted sent-reply history: survives restarts so no phrase is ever reused even days later
+        self._recent_replies_history: dict[int, list[str]] = self._load_recent_replies_history()
         self._last_group_activity: dict[int, float] = {}
         # Suggestion 1: Incoming message burst debouncer state
         self._debounce_buffers: dict[int, list[dict[str, Any]]] = {}
@@ -68,8 +85,8 @@ class ReplyManager:
         self._debounce_last_time: dict[int, float] = {}
         self._debounce_first_time: dict[int, float] = {}
         self._next_reaction_cooldown: float = random.uniform(
-            float(self.db.get_state("reaction_min_cooldown_seconds", str(getattr(config, "reaction_min_cooldown_seconds", 3.0)))),
-            float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(config, "reaction_max_cooldown_seconds", 9.0)))),
+            float(self.db.get_state("reaction_min_cooldown_seconds", str(getattr(config, "reaction_min_cooldown_seconds", 15.0)))),
+            float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(config, "reaction_max_cooldown_seconds", 60.0)))),
         )
 
         # Restore saved style if stored in DB
@@ -270,7 +287,7 @@ class ReplyManager:
                     f"into single cohesive thought: '{stitched_text[:60]}...'"
                 )
 
-            ttl_hours = float(self.db.get_state("context_ttl_hours", "2.0"))
+            ttl_hours = float(self.db.get_state("context_ttl_hours", "4.0"))
             max_age_secs = int(ttl_hours * 3600) if ttl_hours > 0 else None
             fresh_history = self.db.get_recent_chat_messages(
                 chat_id, limit=15, max_age_seconds=max_age_secs
@@ -336,6 +353,10 @@ class ReplyManager:
                     perm_parts.append(f"📌 Pinned message / group rules:\n{pinned_text}")
                 if notes:
                     perm_parts.append(f"📝 Important chat notes & background:\n{notes}")
+                # AI-generated rolling recap of recent chat context (refreshed by background job)
+                ai_summary = self.db.get_chat_summary(chat_id)
+                if ai_summary:
+                    perm_parts.append(f"🧠 AI recap of this chat's recent conversations (so you remember older banter):\n{ai_summary}")
                 permanent_context_str = "\n\n".join(perm_parts) if perm_parts else None
 
                 # Check for per-chat style/persona override; fallback to global default
@@ -391,15 +412,16 @@ class ReplyManager:
                     draft = await _do_generate()
             except Exception as e:
                 logger.error(f"Failed to generate AI reply for chat {chat_id}: {e}")
-                # AI generation failed: NEVER reply to chat with hardcoded text.
-                # Only let AI generate replies. Safely drop and notify Saved Messages if needed.
+                # AI provider/model/API-key failure: always alert Saved Messages so the owner can fix it fast.
                 if not is_mention:
+                    provider = getattr(self.generator.config, "ai_provider", "")
                     await self._notify_issue_to_saved_messages(
                         chat_id=chat_id,
                         chat_title=chat_title,
                         sender_name=sender_name,
-                        error_msg=f"AI generation failed: {e}",
+                        error_msg=f"AI provider/model failed (provider='{provider}', all fallbacks exhausted): {e}",
                         incoming_text=clean_text,
+                        force=True,
                     )
                 return
 
@@ -531,7 +553,7 @@ class ReplyManager:
 
     async def check_daily_quota_warning(self) -> None:
         """Check if 24-hour token consumption exceeded user-defined threshold and alert Saved Messages."""
-        if not self._client or not self.db:
+        if (not self._client and self.bot_control is None) or not self.db:
             return
         enabled = self.db.get_state("quota_alert_enabled", "1") == "1"
         if not enabled:
@@ -553,8 +575,8 @@ class ReplyManager:
                         f"• Remaining Free Pool: *{rem:,}* tokens\n\n"
                         f"_Adjust threshold via `/quotathreshold <tokens>` or toggle via `/quotaalert off`._"
                     )
-                    await self._client.send_message("me", alert_text, parse_mode="md")
-                    logger.info(f"[QUOTA ALERT] Sent 24h threshold warning ({daily_tokens:,} tokens) to Saved Messages.")
+                    await self._send_control_alert(alert_text)
+                    logger.info(f"[QUOTA ALERT] Sent 24h threshold warning ({daily_tokens:,} tokens) via control channel.")
         except Exception as e:
             logger.debug(f"Could not execute quota warning check: {e}")
 
@@ -697,8 +719,8 @@ class ReplyManager:
         incoming_text: str,
         draft_text: str,
     ) -> None:
-        """Notify the user in their private Saved Messages control channel."""
-        if not self._client:
+        """Notify the main user via the control channel (bot, fallback Saved Messages)."""
+        if not self._client and self.bot_control is None:
             return
 
         # Suppress alerts when automation is paused, stopped, or in quiet hours
@@ -717,10 +739,37 @@ class ReplyManager:
             f"Send `/approve {approval_id}` to send, or `/reject {approval_id}` to discard."
         )
         try:
-            # 'me' in Telethon resolves to the user's private Saved Messages
-            await self._client.send_message("me", notification, parse_mode="md")
+            # With the control bot active, approvals arrive as one-tap ✅/❌ inline buttons
+            if self.bot_control is not None:
+                try:
+                    if await self.bot_control.send_approval_card(notification, approval_id):
+                        return
+                    logger.warning("Bot approval card failed; falling back to the control-alert path.")
+                except Exception as e:
+                    logger.warning(f"Bot approval card error ({e}); falling back to the control-alert path.")
+            await self._send_control_alert(notification)
         except Exception as e:
-            logger.error(f"Failed to send approval notification to Saved Messages: {e}")
+            logger.error(f"Failed to send approval notification via control channel: {e}")
+
+    async def _send_control_alert(self, text: str, parse_markdown: bool = True) -> bool:
+        """Send a control-channel alert: to the bot's main user when the bot is active,
+        otherwise (or if bot delivery fails) to Saved Messages as fallback."""
+        if self.bot_control is not None:
+            try:
+                if await self.bot_control.send_alert(text):
+                    return True
+                logger.warning("Bot alert delivery failed; falling back to Saved Messages.")
+            except Exception as e:
+                logger.warning(f"Bot alert delivery error ({e}); falling back to Saved Messages.")
+        if not self._client:
+            return False
+        try:
+            # 'me' in Telethon resolves to the user's private Saved Messages
+            await self._client.send_message("me", text, parse_mode="md" if parse_markdown else None)
+            return True
+        except Exception as e:
+            logger.warning(f"Could not send control alert: {e}")
+            return False
 
     async def _notify_issue_to_saved_messages(
         self,
@@ -729,19 +778,28 @@ class ReplyManager:
         sender_name: str,
         error_msg: str,
         incoming_text: str = "",
+        force: bool = False,
     ) -> None:
-        """Send internal error/issue alerts exclusively to user's private Saved Messages."""
-        if not self._client:
+        """Send internal error/issue alerts to the control channel (bot main user, fallback Saved Messages)."""
+        if not self._client and self.bot_control is None:
             return
 
-        # Suppress alerts if automation is paused, emergency stopped, in quiet hours, or in draft mode
-        if self.safety.is_emergency_stopped or self.safety.get_remaining_pause_seconds() > 0:
+        if force:
+            # AI provider/key failures must ALWAYS reach Saved Messages (throttled to one per 10 minutes)
+            now_ts = time.time()
+            last_ts = float(self.db.get_state("last_ai_failure_alert_ts", "0") or 0)
+            if (now_ts - last_ts) < 600.0:
+                return
+            self.db.set_state("last_ai_failure_alert_ts", str(now_ts))
+        # Otherwise suppress alerts if automation is paused, emergency stopped, in quiet hours, or in draft mode
+        elif self.safety.is_emergency_stopped or self.safety.get_remaining_pause_seconds() > 0:
             return
-        is_quiet, _ = self.safety.is_in_quiet_hours()
-        if is_quiet:
-            return
-        if self.current_mode == "draft":
-            return
+        else:
+            is_quiet, _ = self.safety.is_in_quiet_hours()
+            if is_quiet:
+                return
+            if self.current_mode == "draft":
+                return
 
         try:
             target_name = chat_title or f"Chat {chat_id}"
@@ -753,31 +811,51 @@ class ReplyManager:
                 f"• *Issue/Error:* `{error_msg}`{incoming_snippet}\n"
                 f"• *Safety Status:* Suppressed safely. Zero error text or fallbacks sent to recipient."
             )
-            await self._client.send_message("me", alert, parse_mode="md")
+            await self._send_control_alert(alert)
         except Exception as e:
-            logger.error(f"Failed to deliver issue alert to Saved Messages: {e}")
+            logger.error(f"Failed to deliver issue alert via control channel: {e}")
+
+    async def check_pause_expiry(self) -> None:
+        """When a timed pause (from /pause or a flood-wait nap) ends naturally, clear it and
+        notify the control channel so automation visibly resumes in the group."""
+        try:
+            until = float(self.db.get_state("pause_until", "0") or 0)
+        except ValueError:
+            until = 0.0
+        if until <= 0 or time.time() < until:
+            return
+        self.db.set_state("pause_until", "0")
+        logger.info("SAFETY: Timed pause expired. Automation resumed automatically.")
+        if not self.safety.is_emergency_stopped:
+            await self._send_control_alert(
+                "▶️ *Timed pause ended*\nAutomation is active again — replies, reactions & engagement resume in allowlisted chats."
+            )
 
     def _parse_duration(self, raw: str) -> Optional[float]:
-        """Parse duration strings like '2h', '30m', '1d', or '2' (hours)."""
+        """Parse duration strings like '2h', '30m', '90s', '30 min', '2 hours', '1d 2h'.
+        A bare number is interpreted as MINUTES (e.g. '/pause 45' = 45 minutes)."""
         s = raw.strip().lower()
         if not s:
             return None
-        try:
-            if s.endswith(("m", "min", "mins")):
-                num = re.sub(r"[^\d.]", "", s)
-                return float(num) * 60
-            elif s.endswith(("h", "hr", "hrs", "hour", "hours")):
-                num = re.sub(r"[^\d.]", "", s)
-                return float(num) * 3600
-            elif s.endswith(("d", "day", "days")):
-                num = re.sub(r"[^\d.]", "", s)
-                return float(num) * 86400
-            elif re.match(r"^\d+(?:\.\d+)?$", s):
-                # Default bare number to hours
-                return float(s) * 3600
-        except ValueError:
-            pass
-        return None
+        factors = {
+            "d": 86400.0, "day": 86400.0, "days": 86400.0,
+            "h": 3600.0, "hr": 3600.0, "hrs": 3600.0, "hour": 3600.0, "hours": 3600.0,
+            "m": 60.0, "min": 60.0, "mins": 60.0, "minute": 60.0, "minutes": 60.0,
+            "s": 1.0, "sec": 1.0, "secs": 1.0, "second": 1.0, "seconds": 1.0,
+        }
+        total = 0.0
+        seen = False
+        for num_str, unit in re.findall(r"(\d+(?:\.\d+)?)\s*([a-zA-Z]+)?", s):
+            unit = (unit or "").strip().lower()
+            if unit:
+                factor = factors.get(unit)
+                if factor is None:
+                    return None  # unknown unit word
+            else:
+                factor = 60.0  # bare number: intuitive minutes
+            total += float(num_str) * factor
+            seen = True
+        return total if seen and total > 0 else None
 
     async def get_allowed_chats_dataframe(self) -> str:
         """Format all allowlisted groups and chats as an aligned DataFrame table with numbering, name, and username/ID."""
@@ -828,7 +906,7 @@ class ReplyManager:
         return f"```\n{header_str}\n{sep_str}\n" + "\n".join(body_strs) + "\n```"
 
     async def handle_control_command(self, text: str) -> Optional[str]:
-        """Handle control commands sent to Saved Messages (e.g., /approve, /reject, /status, /pause, /setprompt)."""
+        """Handle control commands sent via the control channel (control bot or Saved Messages)."""
         cmd_parts = text.strip().split()
         if not cmd_parts:
             return None
@@ -844,15 +922,18 @@ class ReplyManager:
                 "• `/style <casual|concise|formal|humorous>` - Change AI reply style\n"
                 "• `/lang <dynamic|english|hindi|...>` - Chat language selection\n"
                 "• `/auto on` / `/auto off` - Authorize or revoke automated replies\n"
-                "• `/pause <time>` - Snooze replies (e.g. `/pause 2h`, `/pause 30m`)\n"
+                "• `/pause <time>` - Snooze replies (e.g. `/pause 2h`, `/pause 30 min`, `/pause 90s`) - auto-resumes with an alert\n"
                 "• `/resume` - Resume operations (clears pause & stop)\n"
                 "• `/stop` - Emergency stop switch (halts all replies)\n\n"
                 "*Reactions & Cooldowns:*\n"
                 "• `/reaction on` / `/reaction off` - Enable or disable auto-reactions\n"
-                "• `/reactioncooldown <min> <max>` - Set random reaction cooldown (e.g. `3 9` seconds)\n"
+                "• `/reactioncooldown <min> <max>` - Set random reaction cooldown (e.g. `15 60` seconds)\n"
                 "• `/chatcooldown <min> <max>` - Custom per-chat reply cooldown (e.g. `5 60`)\n"
                 "• `/globalcooldown <min> <max>` - Custom global reply cooldown (e.g. `5 60`)\n"
-                "• `/ratelimit <per_min> <per_hour>` - Anti-spam rate limits (e.g. `/ratelimit 5 30`)\n"
+                "• `/ratelimit <per_min>` - Anti-spam base burst limit (e.g. `/ratelimit 5`)\n"
+                "• `/editfix on|off` - Self-typo-then-edit simulation (send with typo, edit clean seconds later)\n"
+                "• `/ownreact on|off` - React to your own sent messages occasionally\n"
+                "• `/typo on|off` - Natural typo + correction follow-up simulation\n"
                 "• `/followup <on|off>` - Spontaneous delayed follow-ups for short replies\n"
                 "• `/debounce <on|off|seconds>` - Incoming burst debouncer (stitches rapid messages)\n"
                 "• `/multibubble <on|off>` - Multi-bubble response splitting (rapid sequential bubbles)\n\n"
@@ -1031,7 +1112,7 @@ class ReplyManager:
                     f"⚙️ *Current Reply Mode:* `{curr}`\n\n"
                     f"*Available Modes:*\n"
                     f"• `/mode draft` - Suggests drafts in terminal/logs; NEVER sends.\n"
-                    f"• `/mode approval` - Sends drafts to Saved Messages for `/approve <id>`.\n"
+                    f"• `/mode approval` - Sends drafts to your control channel for `/approve <id>`.\n"
                     f"• `/mode auto` - Directly replies to allowlisted chats without manual approval."
                 )
             target = cmd_parts[1].lower().strip()
@@ -1040,7 +1121,7 @@ class ReplyManager:
                 return "📝 Mode switched to *Draft Only*. Replies will be generated and logged, but never sent to recipients."
             elif target in ("approval", "pending", "review"):
                 self.set_mode("approval")
-                return "📋 Mode switched to *Approval Required*. Every draft will be sent to your Saved Messages for review."
+                return "📋 Mode switched to *Approval Required*. Every draft will be sent to your control channel (bot / Saved Messages) for review."
             elif target in ("auto", "restricted_auto", "automatic"):
                 self.set_mode("restricted_auto")
                 self.safety.set_auto_authorization(True)
@@ -1104,11 +1185,11 @@ class ReplyManager:
 
         if cmd in ("/contextttl", "/aging"):
             if len(cmd_parts) < 2:
-                curr = self.db.get_state("context_ttl_hours", "2.0")
+                curr = self.db.get_state("context_ttl_hours", "4.0")
                 return (
                     f"⏳ *Conversation Context Auto-Aging:* `{curr} hours`\n"
                     "After this period of inactivity, older conversation context expires so the AI starts fresh.\n"
-                    "Usage: `/contextttl <hours>` (e.g. `/contextttl 2.0`)"
+                    "Usage: `/contextttl <hours>` (e.g. `/contextttl 4.0`)"
                 )
             try:
                 val = max(0.1, float(cmd_parts[1]))
@@ -1399,12 +1480,11 @@ class ReplyManager:
             qh_start, qh_end = self.safety.quiet_hours_window
             is_quiet, _ = self.safety.is_in_quiet_hours()
             qh_desc = f"ON ({qh_start}–{qh_end}, {'Sleeping 💤' if is_quiet else 'Awake ☀️'})" if qh_enabled else "OFF"
-            min_r_sec = float(self.db.get_state("reaction_min_cooldown_seconds", str(getattr(self.config, "reaction_min_cooldown_seconds", 3.0))))
-            max_r_sec = float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(self.config, "reaction_max_cooldown_seconds", 9.0))))
+            min_r_sec = float(self.db.get_state("reaction_min_cooldown_seconds", str(getattr(self.config, "reaction_min_cooldown_seconds", 15.0))))
+            max_r_sec = float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(self.config, "reaction_max_cooldown_seconds", 60.0))))
             chat_cd_range = f"{int(self.safety.min_chat_cooldown)}s–{int(self.safety.max_chat_cooldown)}s"
             global_cd_range = f"{int(self.safety.min_global_cooldown)}s–{int(self.safety.max_global_cooldown)}s"
             recent_min = self.db.get_recent_reply_count(60.0) if hasattr(self.db, "get_recent_reply_count") else 0
-            recent_hr = self.db.get_recent_reply_count(3600.0) if hasattr(self.db, "get_recent_reply_count") else 0
             chats_df = await self.get_allowed_chats_dataframe()
             return (
                 f"📊 *TeleAutomator v2.0.6 Status:*\n"
@@ -1417,7 +1497,7 @@ class ReplyManager:
                 f"• Quiet Hours: *{qh_desc}* (change with `/quiethours <on|off|start end>`)\n"
                 f"• Group Banter: `{int(chatty_prob * 100)}%` (change with `/chatty <0-100>`)\n"
                 f"• Cooldowns: Chat=`{chat_cd_range}`, Global=`{global_cd_range}`\n"
-                f"• Anti-Spam: Rate=`{self.safety.max_replies_per_minute}/min, {self.safety.max_replies_per_hour}/hr` (Used: {recent_min}/{recent_hr})\n"
+                f"• Anti-Spam: Rate=`{self.safety.max_replies_per_minute}/min base (dynamic)` (Used: {recent_min})\n"
                 f"• Auto Authorized: *{auto_status}*\n"
                 f"• Emergency Stop: *{stop_status}*\n"
                 f"• Pending Approvals: `{pending_count}`\n"
@@ -1547,14 +1627,52 @@ class ReplyManager:
                 return "🔒 Typo simulation *DISABLED*."
             return "Usage: `/typo on` or `/typo off`"
 
+        if cmd in ("/editfix", "/editself", "/selfedit"):
+            if len(cmd_parts) < 2:
+                fix_on = self.db.get_state("editfix_enabled", "1") == "1"
+                status = "ON (~10% chance)" if fix_on else "OFF"
+                return (
+                    f"✏️ *Self-Edit Fix Simulation:* *{status}*\n"
+                    f"Occasionally sends a reply with a small typo, then edits the same message clean 2-3s later (like a human re-reading and fixing).\n\n"
+                    f"• `/editfix on` - Enable self-edit simulation\n"
+                    f"• `/editfix off` - Disable self-edit simulation"
+                )
+            target = cmd_parts[1].lower().strip()
+            if target == "on":
+                self.db.set_state("editfix_enabled", "1")
+                return "✏️ Self-edit fix simulation *ENABLED* (~10% of replies)."
+            elif target == "off":
+                self.db.set_state("editfix_enabled", "0")
+                return "🔒 Self-edit fix simulation *DISABLED*."
+            return "Usage: `/editfix on` or `/editfix off`"
+
+        if cmd in ("/ownreact", "/ownreaction", "/selfreact"):
+            if len(cmd_parts) < 2:
+                own_on = self.db.get_state("ownreact_enabled", "1") == "1"
+                status = "ON (~20% chance)" if own_on else "OFF"
+                return (
+                    f"🫵 *Own-Reply Reaction:* *{status}*\n"
+                    f"Occasionally reacts to your own sent message with a fitting emoji (respecting all reaction cooldowns).\n\n"
+                    f"• `/ownreact on` - Enable own-reply reactions\n"
+                    f"• `/ownreact off` - Disable own-reply reactions"
+                )
+            target = cmd_parts[1].lower().strip()
+            if target == "on":
+                self.db.set_state("ownreact_enabled", "1")
+                return "🫵 Own-reply reactions *ENABLED* (~20% of replies)."
+            elif target == "off":
+                self.db.set_state("ownreact_enabled", "0")
+                return "🔒 Own-reply reactions *DISABLED*."
+            return "Usage: `/ownreact on` or `/ownreact off`"
+
         if cmd in ("/reactioncooldown", "/reactcd", "/reactionlimit", "/reactioninterval"):
             min_react = float(self.db.get_state(
                 "reaction_min_cooldown_seconds",
-                str(getattr(self.config, "reaction_min_cooldown_seconds", 3.0))
+                str(getattr(self.config, "reaction_min_cooldown_seconds", 15.0))
             ))
             max_react = float(self.db.get_state(
                 "reaction_max_cooldown_seconds",
-                str(getattr(self.config, "reaction_max_cooldown_seconds", 9.0))
+                str(getattr(self.config, "reaction_max_cooldown_seconds", 60.0))
             ))
             max_r = self.db.get_state("reaction_max_per_window", str(getattr(self.config, "reaction_max_per_window", 4)))
             win_m = int(float(self.db.get_state("reaction_window_seconds", str(getattr(self.config, "reaction_window_seconds", 600.0)))) // 60)
@@ -1565,7 +1683,7 @@ class ReplyManager:
                     f"• Interval: Random `{int(min_react)}s` to `{int(max_react)}s` between reactions\n"
                     f"• Rolling Rate Limit: Max *{max_r}* reactions per *{win_m}* minutes\n\n"
                     f"*Commands:*\n"
-                    f"• `/reactioncooldown <min_sec> <max_sec>` - Set random interval (e.g. `/reactioncooldown 3 9`)\n"
+                    f"• `/reactioncooldown <min_sec> <max_sec>` - Set random interval (e.g. `/reactioncooldown 15 60`)\n"
                     f"• `/reactioncooldown limit <max_count> <window_mins>` - Set rolling limit (e.g. `/reactioncooldown limit 4 10`)"
                 )
 
@@ -1663,24 +1781,21 @@ class ReplyManager:
         if cmd in ("/ratelimit", "/spamlimits", "/rate", "/antispam"):
             if len(cmd_parts) < 2:
                 recent_min = self.db.get_recent_reply_count(60.0) if hasattr(self.db, "get_recent_reply_count") else 0
-                recent_hr = self.db.get_recent_reply_count(3600.0) if hasattr(self.db, "get_recent_reply_count") else 0
                 return (
                     f"🛡️ *Telegram Anti-Spam Rate Limits:*\n"
-                    f"• Burst Limit: *{self.safety.max_replies_per_minute}* replies/min (Used in last 60s: *{recent_min}*)\n"
-                    f"• Hourly Limit: *{self.safety.max_replies_per_hour}* replies/hour (Used in last 1h: *{recent_hr}*)\n"
+                    f"• Burst Limit: *{self.safety.max_replies_per_minute}* replies/min base, dynamic *(Used in last 60s: *{recent_min}*)*\n"
                     f"• Per-Chat Limit: *{self.safety.max_chat_replies_per_minute}* replies/min per chat\n"
                     f"• Chat Cooldown: *{int(self.safety.min_chat_cooldown)}s – {int(self.safety.max_chat_cooldown)}s*\n"
                     f"• Global Cooldown: *{int(self.safety.min_global_cooldown)}s – {int(self.safety.max_global_cooldown)}s*\n\n"
-                    f"Usage: `/ratelimit <per_minute> <per_hour>` (e.g. `/ratelimit 5 30`)"
+                    f"The per-minute cap randomly fluctuates around your base value and auto-boosts in busy chats (human-style).\n"
+                    f"Usage: `/ratelimit <per_minute>` (e.g. `/ratelimit 5`)"
                 )
             try:
                 per_min = max(1, int(cmd_parts[1]))
-                per_hr = max(per_min, int(cmd_parts[2])) if len(cmd_parts) >= 3 else (per_min * 6)
                 self.db.set_state("max_replies_per_minute", str(per_min))
-                self.db.set_state("max_replies_per_hour", str(per_hr))
-                return f"✅ Anti-spam rate limits updated to *{per_min}* replies/min and *{per_hr}* replies/hour."
+                return f"✅ Anti-spam base burst limit updated to *{per_min}* replies/min (dynamic range applies on top)."
             except ValueError:
-                return "Error: Rate limits must be valid positive integers (e.g. `/ratelimit 5 30`)."
+                return "Error: Rate limit must be a valid positive integer (e.g. `/ratelimit 5`)."
 
         if cmd in ("/model", "/setmodel", "/custommodel"):
             if len(cmd_parts) < 2:
@@ -1893,15 +2008,17 @@ class ReplyManager:
 
         if cmd in ("/pause", "/off"):
             if len(cmd_parts) < 2:
-                return "Usage: `/pause <duration>` (e.g. `/pause 2h`, `/pause 30m`, `/pause 45m`)"
-            seconds = self._parse_duration(cmd_parts[1])
+                return "Usage: `/pause <duration>` (e.g. `/pause 2h`, `/pause 30m`, `/pause 30 min`, `/pause 90s`)"
+            seconds = self._parse_duration(" ".join(cmd_parts[1:]))
             if not seconds:
-                return "Invalid duration format. Use e.g. `/pause 2h` or `/pause 30m`."
+                return "Invalid duration format. Use e.g. `/pause 2h`, `/pause 30m`, `/pause 30 min`, or `/pause 90s`."
             self.safety.set_timed_pause(seconds)
             mins = int(seconds // 60)
             hours = round(seconds / 3600, 1)
             display = f"{hours} hour(s)" if seconds >= 3600 else f"{mins} minute(s)"
-            return f"⏸️ Automation PAUSED for {display}. All auto-replies are paused.\nSend `/resume` anytime to reactivate early."
+            return (f"⏸️ Automation PAUSED for {display}. All auto-replies are paused.\n"
+                    f"When the window ends you'll get a *pause ended* alert here and engagement resumes automatically. "
+                    f"Or send `/resume` anytime to reactivate early.")
 
         if cmd in ("/stop", "/halt"):
             self.safety.set_emergency_stop(True)
@@ -1921,14 +2038,22 @@ class ReplyManager:
             return f"✅ Identity updated! The AI will now reply as '{new_name}'."
 
         if cmd in ("/prompt", "/showprompt", "/getprompt", "/activeprompt"):
+            # '/prompt <your prompt here>' sets the persona directly (matching the bot menu usage);
+            # bare '/prompt' (or '/prompt view') shows the active instructions.
+            persona_text = text[len(cmd_parts[0]):].strip()
+            if persona_text and persona_text.lower() not in ("view", "show"):
+                return await self.handle_control_command("/setprompt " + persona_text)
             custom = self.generator.prompt_manager.custom_prompt
             mode_str = f"Custom Persona ({len(custom.split())} words)" if custom else "Default Persona"
             full_inst = self.generator.prompt_manager.system_instructions
             custom_display = f'"{custom}"' if custom else "None (using default system_prompt.txt)"
-            prompt_preview = full_inst if len(full_inst) <= 3000 else (full_inst[:3000] + "\n...[truncated for telegram display]")
+            if len(custom_display) > 1200:
+                custom_display = custom_display[:1100].rstrip() + '...[truncated]'
+            # Keep the whole response well under Telegram's 4096-char message limit, or delivery fails silently
+            prompt_preview = full_inst if len(full_inst) <= 2400 else (full_inst[:2360].rstrip() + "\n...[truncated for Telegram display]")
             return (
                 f"📜 *Active System Instructions ({mode_str}):*\n\n"
-                f"• *Anti-AI Guardrails:* ACTIVE 🛡️ (1-5 words, human conversation, top emojis, no names/@usernames, no code)\n"
+                f"• *Anti-AI Guardrails:* ACTIVE 🛡️ (max one line, human conversation, any fitting emojis with varied placement, no names/@usernames, no code)\n"
                 f"• *Custom Persona:* {custom_display}\n"
                 f"• *Active Style:* `{self.generator.style}`\n"
                 f"• *Language:* `{self.generator.language}`\n\n"
@@ -2014,7 +2139,17 @@ class ReplyManager:
             self.db.update_approval_status(approval_id, "rejected")
             return f"🗑️ Draft #{approval_id} rejected and discarded."
 
-        return None
+        if not cmd.startswith("/"):
+            return None  # plain text (e.g. notes) — no command response needed
+
+        closest = difflib.get_close_matches(cmd, _BOT_COMMAND_NAMES, n=3, cutoff=0.6)
+        known = ", ".join(f"`{c}`" for c in _BOT_COMMAND_NAMES)
+        hint = f"\nDid you mean: {' '.join(f'`{c}`' for c in closest)}?" if closest else ""
+        return (
+            f"❓ Unknown command `{cmd}`.\n"
+            f"Common ones: {known}{hint}\n"
+            f"Send */help* for the full guide."
+        )
 
     def calculate_adaptive_delay(
         self,
@@ -2138,10 +2273,16 @@ class ReplyManager:
         w_lower = orig_word.lower()
 
         if len(w_lower) >= 4:
-            pos = random.randint(1, len(w_lower) - 2)
+            # Pick an adjacent-char swap that visually changes the word (avoids identical-char swaps producing no typo)
             chars = list(w_lower)
+            swap_candidates = [i for i in range(1, len(w_lower) - 1) if chars[i] != chars[i + 1]]
+            if not swap_candidates:
+                return text, None
+            pos = random.choice(swap_candidates)
             chars[pos], chars[pos + 1] = chars[pos + 1], chars[pos]
             typo_word = "".join(chars)
+            if typo_word == orig_word.lower():
+                return text, None
             if orig_word.istitle():
                 typo_word = typo_word.capitalize()
             elif orig_word.isupper():
@@ -2152,7 +2293,26 @@ class ReplyManager:
 
         return text, None
 
-    async def maybe_send_reaction(self, chat_id: int, message_id: int, text: str) -> bool:
+    def _load_recent_replies_history(self) -> dict[int, list[str]]:
+        """Restore the persisted per-chat sent-reply history (anti-repetition across restarts)."""
+        data = self.db.get_state("recent_replies_by_chat", "")
+        if not data:
+            return {}
+        try:
+            parsed = json.loads(data)
+            return {int(chat_id): list(texts) for chat_id, texts in parsed.items()}
+        except Exception:
+            return {}
+
+    def _save_recent_replies_history(self) -> None:
+        try:
+            self.db.set_state("recent_replies_by_chat", json.dumps(self._recent_replies_history))
+        except Exception as e:
+            logger.debug(f"Could not persist recent replies history: {e}")
+
+    async def maybe_send_reaction(
+        self, chat_id: int, message_id: int, text: str, allow_any_emoji: bool = False
+    ) -> bool:
         """Add an emoji reaction to the message if reaction features and cooldown permit."""
         if not self._client:
             return False
@@ -2175,20 +2335,20 @@ class ReplyManager:
         now = time.time()
         min_react_cd = float(self.db.get_state(
             "reaction_min_cooldown_seconds",
-            str(getattr(self.config, "reaction_min_cooldown_seconds", 3.0))
+            str(getattr(self.config, "reaction_min_cooldown_seconds", 15.0))
         ))
         max_react_cd = float(self.db.get_state(
             "reaction_max_cooldown_seconds",
-            str(getattr(self.config, "reaction_max_cooldown_seconds", 9.0))
+            str(getattr(self.config, "reaction_max_cooldown_seconds", 60.0))
         ))
         if (now - self._last_reaction_time) < self._next_reaction_cooldown:
             wait_rem = round(self._next_reaction_cooldown - (now - self._last_reaction_time), 1)
             logger.debug(f"[REACTION] Cooldown active ({wait_rem}s remaining before next reaction).")
             return False
 
-        # Per-chat reaction cooldown (minimum 25s between reactions in the same chat to prevent spam)
-        last_chat_react = self._last_reaction_time_by_chat.get(chat_id, 0.0)
-        if (now - last_chat_react) < 25.0:
+        # Human-style per-chat gap: randomized 2–5 minutes between reactions in the same chat
+        next_chat_react = self._next_reaction_time_by_chat.get(chat_id, 0.0)
+        if now < next_chat_react:
             logger.debug(f"[REACTION] Per-chat reaction cooldown active for {chat_id}.")
             return False
 
@@ -2219,26 +2379,37 @@ class ReplyManager:
             "🤷", "🤷‍♀️", "😡"
         ]
 
-        # Natural sentiment & tone mapping with full emoji variety (selective, thoughtful, non-spammy)
+        # Natural sentiment & tone mapping with full emoji variety (selective, thoughtful, non-spammy).
+        # shortcut: pools must stay a subset of `all_telegram_reactions` below (only valid Telegram reaction emojis)
         lower = text.lower()
         has_sentiment = True
-        if any(w in lower for w in ("haha", "lol", "lmao", "rofl", "xd", "funny", "lmfao", "joke", "dead", "ded")):
-            chosen = random.choice(["😂", "🤣", "💀", "😁"])
-        elif any(w in lower for w in ("congrats", "congratulations", "huge w", "promoted", "won", "awesome work", "let's go", "fire", "lit", "goat", "legend", "insane", "superb")):
-            chosen = random.choice(["🔥", "⚡", "💯", "🏆", "🤩", "👏"])
-        elif any(w in lower for w in ("thanks", "thank you", "tysm", "love you", "heart", "appreciate it", "grateful")):
-            chosen = random.choice(["❤️", "❤️‍🔥", "🥰", "🙏", "🤗"])
-        elif any(w in lower for w in ("deal", "sounds good", "done deal", "agreed", "let's do it", "partner", "perfect", "done", "alright")):
-            chosen = random.choice(["👍", "🤝", "🫡", "👌"])
-        elif any(w in lower for w in ("wtf", "no way", "holy shit", "damn bro", "unreal", "omg", "crazy", "wild")):
-            chosen = random.choice(["🤯", "😱", "👀"])
-        elif any(w in lower for w in ("rip", "sorry to hear", "unfortunate", "so sad", "pain")):
+        if any(w in lower for w in ("haha", "lol", "lmao", "rofl", "xd", "funny", "lmfao", "joke", "bruh", "meme", "comedy", "dead", "ded")):
+            chosen = random.choice(["😂", "🤣", "💀", "😁", "🤡"])
+        elif any(w in lower for w in ("congrats", "congratulations", "huge w", "promoted", "won", "awesome work", "let's go", "goat", "legend", "superb", "champion", "winner", "victory")):
+            chosen = random.choice(["🔥", "⚡", "💯", "🏆", "🤩", "👏", "🎉", "🦄"])
+        elif any(w in lower for w in ("thanks", "thank you", "tysm", "love you", "heart", "appreciate it", "grateful", "sweetest", "adorable")):
+            chosen = random.choice(["❤️", "❤️‍🔥", "🥰", "😍", "🙏", "🤗", "😘", "💋"])
+        elif any(w in lower for w in ("deal", "sounds good", "done deal", "agreed", "let's do it", "partner", "perfect", "done", "alright", "ok", "yep", "sure")):
+            chosen = random.choice(["👍", "🤝", "🫡", "👌", "😎"])
+        elif any(w in lower for w in ("wtf", "no way", "holy shit", "damn", "omg", "crazy", "wild", "insane", "unreal", "can't believe")):
+            chosen = random.choice(["🤯", "😱", "👀", "😨", "🤨"])
+        elif any(w in lower for w in ("rip", "sorry to hear", "unfortunate", "so sad", "pain", "hurts", "miss you", "tragic", "heartbroke")):
             chosen = random.choice(["😢", "😭", "💔"])
+        elif any(w in lower for w in ("tired", "sleepy", "exhausted", "bored", "nap")):
+            chosen = random.choice(["🥱", "😴"])
+        elif any(w in lower for w in ("whatever", "meh", "sus", "mid", "boring")):
+            chosen = random.choice(["🗿", "😐", "🥴"])
+        elif any(w in lower for w in ("party", "birthday", "bday", "cheers", "celebrate")):
+            chosen = random.choice(["🎉", "🍾"])
         else:
             has_sentiment = False
             chosen = ""
 
-        # Only react when there is clear, relative sentiment to the message; never react unnecessarily
+        # Only react when there is clear, relative sentiment to the message; never react unnecessarily.
+        # Own-reply reactions (allow_any_emoji=True) fall back to any fitting vibe emoji so the choice still feels natural.
+        if (not has_sentiment or not chosen) and allow_any_emoji:
+            chosen = random.choice(["👍", "🔥", "😎", "😂", "💯", "🗿", "🆒", "👀"])
+            has_sentiment = True
         if not has_sentiment or not chosen:
             return False
 
@@ -2251,7 +2422,7 @@ class ReplyManager:
             now = time.time()
             self.db.record_reaction(now)
             self._last_reaction_time = now
-            self._last_reaction_time_by_chat[chat_id] = now
+            self._next_reaction_time_by_chat[chat_id] = now + random.uniform(120.0, 300.0)
             self._next_reaction_cooldown = random.uniform(min_react_cd, max_react_cd)
             logger.info(
                 f"[REACTION] Reacted {chosen} to message {message_id} in chat {chat_id}. "
@@ -2355,6 +2526,54 @@ class ReplyManager:
         """Update last activity timestamp for group."""
         self._last_group_activity[chat_id] = time.time()
 
+    async def refresh_group_summaries(self, min_new_messages: int = 15, max_payload: int = 40) -> None:
+        """AI-generated rolling context recap per busy allowlisted group (saved for prompts).
+        Busy chats (>=5 msgs/2min) summarize from ~8 new messages; quiet chats keep the 15-msg bar."""
+        groups: set = set()
+        try:
+            private_set, group_set = self.privacy.get_all_allowed_chats()
+            groups.update(group_set)
+            groups.update(private_set)
+        except Exception:
+            pass
+        if not groups:
+            try:
+                known = self.db.get_known_chats()
+                groups = {c["chat_id"] for c in known if c.get("chat_id", 0) < 0 and self.privacy.is_chat_allowed(c["chat_id"], True)}
+            except Exception:
+                return
+        # Also private chats are summarized when active
+        for cid in list(groups):
+            try:
+                marker = int(self.db.get_state(f"chat_summary_marker_{cid}", "0"))
+                new_count = self.db.count_chat_messages_since(cid, marker)
+                # Busy community groups recap sooner: when the chat produced >=5 messages in the
+                # last 2 minutes, summarize from ~8 new messages; quieter chats need the full 15.
+                try:
+                    threshold = 8 if self.db.get_recent_message_count(120.0, chat_id=cid) >= 5 else min_new_messages
+                except Exception:
+                    threshold = min_new_messages
+                if new_count < threshold:
+                    continue
+                raw = self.db.get_chat_messages_since_text(cid, marker, limit=max_payload)
+                if not raw:
+                    continue
+                meta = self.db.get_chat_metadata(cid) or {}
+                title = meta.get("title") or ("this group" if cid < 0 else "this chat")
+                summary = await asyncio.to_thread(
+                    self.generator.summarize_chat_history,
+                    title,
+                    self.db.get_chat_summary(cid),
+                    raw,
+                )
+                if not summary:
+                    continue
+                self.db.set_chat_summary(cid, summary)
+                self.db.set_state(f"chat_summary_marker_{cid}", str(self.db.latest_chat_message_row_id(cid)))
+                logger.info(f"[AI CONTEXT SUMMARY] Updated rolling recap for chat {cid} ({new_count} new messages).")
+            except Exception as e:
+                logger.debug(f"[AI CONTEXT SUMMARY] Could not summarize chat {cid}: {e}")
+
     async def maybe_send_quiet_hours_goodnight(self, force: bool = False) -> None:
         """Before or upon entering quiet hours (2:00 AM IST), write bye/goodnight to active allowlisted groups like a human."""
         if not self._client or (not self.safety.quiet_hours_enabled and not force):
@@ -2381,20 +2600,24 @@ class ReplyManager:
         should_send = force or (diff <= 15 or (1440 - diff) <= 15)
 
         if should_send:
-            allowed_groups = list(self.privacy.allowed_groups)
+            try:
+                _, allowed_groups = self.privacy.get_all_allowed_chats()
+                allowed_groups = list(allowed_groups)
+            except Exception:
+                allowed_groups = []
             if not allowed_groups:
                 known = self.db.get_known_chats()
                 allowed_groups = [c["chat_id"] for c in known if c.get("chat_id", 0) < 0 and self.privacy.is_chat_allowed(c["chat_id"], True)]
 
             if allowed_groups:
-                phrases = [
-                    "bye guys, going to sleep rn",
-                    "aight guys heading to bed, talk tomorrow",
-                    "goodnight everyone, sleeping now",
-                    "gn guys, sleep time for me",
-                    "bye guys, off to sleep rn",
-                ]
-                text = random.choice(phrases)
+                # Goodnight text is AI-generated (never hardcoded); skip if the AI fails
+                try:
+                    text = await asyncio.to_thread(self.generator.generate_goodnight_signoff)
+                except Exception as e:
+                    logger.warning(f"[QUIET HOURS SIGN-OFF] AI sign-off generation failed, not sending canned text: {e}")
+                    text = ""
+                if not text:
+                    return
                 for gid in allowed_groups:
                     try:
                         peer = await self._client.get_input_entity(gid)
@@ -2426,9 +2649,19 @@ class ReplyManager:
 
         first_part = msg_parts[0]
         typo_correction: Optional[str] = None
+        edit_fix_original: Optional[str] = None
         typo_enabled = self.db.get_state("typo_correction_enabled", "1") == "1"
         if typo_enabled and len(msg_parts) == 1 and not is_mention:
             first_part, typo_correction = self.maybe_inject_typo_correction(first_part, probability=0.04)
+            if (not typo_correction
+                    and self.current_mode == "restricted_auto"
+                    and self.db.get_state("editfix_enabled", "1") == "1"
+                    and random.random() < 0.10):
+                # Self-edit simulation: send with a small typo, then edit the same message clean ~seconds later
+                edited = self.maybe_inject_typo_correction(first_part, probability=1.0)[0]
+                if edited != first_part:
+                    edit_fix_original = first_part
+                    first_part = edited
 
         try:
             # Calculate human-like delay adapting to group/DM environment and mentions (5-30s)
@@ -2436,6 +2669,10 @@ class ReplyManager:
                 total_delay = self.calculate_adaptive_delay(chat_id, first_part, is_mention=is_mention)
             else:
                 total_delay = self.typing_delay
+
+            if self.typing_delay > 0 or self.min_delay > 0 or self.max_delay > 0:
+                # Human floor: never reply instantly — always at least a ~3-4.5s random thinking pause
+                total_delay = max(total_delay, random.uniform(3.0, 4.5))
 
             if total_delay > 0:
                 # Realistic human simulation: pause for reading/thinking, then show typing action
@@ -2471,7 +2708,7 @@ class ReplyManager:
                     if hasattr(self._client, "action") and callable(self._client.action):
                         if typing_duration >= 3.5:
                             burst1 = round(typing_duration * 0.5, 1)
-                            pause = round(random.uniform(0.6, 1.0), 1)
+                            pause = round(random.uniform(0.8, 1.4), 1)
                             burst2 = max(0.8, round(typing_duration - burst1, 1))
 
                             act1 = self._client.action(chat_id, "typing")
@@ -2517,8 +2754,9 @@ class ReplyManager:
             if chat_id not in self._recent_replies_history:
                 self._recent_replies_history[chat_id] = []
             self._recent_replies_history[chat_id].append(first_part)
-            if len(self._recent_replies_history[chat_id]) > 8:
+            while len(self._recent_replies_history[chat_id]) > 12:
                 self._recent_replies_history[chat_id].pop(0)
+            self._save_recent_replies_history()
             if chat_id < 0:
                 self.mark_group_activity(chat_id)
             first_msg_id = getattr(first_sent, "id", 0)
@@ -2533,6 +2771,29 @@ class ReplyManager:
                 is_outgoing=True,
             )
             logger.info(f"Successfully sent reply part 1/{len(msg_parts)} to chat {chat_id}.")
+
+            # Human touch: occasionally react to your own message just like a real person (20%)
+            if (first_msg_id and self.current_mode == "restricted_auto" and not self.safety.is_emergency_stopped
+                    and self.db.get_state("ownreact_enabled", "1") == "1"
+                    and random.random() < 0.20):
+                try:
+                    reacted = await self.maybe_send_reaction(chat_id, first_msg_id, first_part, allow_any_emoji=True)
+                    if reacted:
+                        logger.info(f"[OWN-REPLY REACTION] Reacted to own message {first_msg_id} in chat {chat_id}.")
+                except Exception as e:
+                    logger.debug(f"[OWN-REPLY REACTION] Could not react to own message: {e}")
+
+            # Quick-fire typo self-edit (suggestion #2): fix the sent typo by editing the same message ~2s later
+            if edit_fix_original is not None and first_msg_id and not self.safety.is_emergency_stopped:
+                self._last_sent_reply_by_chat[chat_id] = edit_fix_original
+                if self._recent_replies_history.get(chat_id):
+                    self._recent_replies_history[chat_id][-1] = edit_fix_original
+                await asyncio.sleep(random.uniform(1.5, 3.0))
+                try:
+                    await self._client.edit_message(chat_id, first_msg_id, edit_fix_original)
+                    logger.info(f"[SELF EDIT] Edited own message {first_msg_id} in chat {chat_id} to fix the typo.")
+                except Exception as e:
+                    logger.debug(f"[SELF EDIT] Could not edit message {first_msg_id}: {e}")
 
             # If typo simulation was triggered, send quick correction follow-up (e.g. *sounds)
             if typo_correction and not self.safety.is_emergency_stopped:

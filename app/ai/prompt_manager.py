@@ -26,14 +26,20 @@ VALID_STYLES: Dict[str, str] = {
 #   /style <casual|concise|formal|humorous>
 # =============================================================================
 
+# Varied human emoji palette (48 emojis) — examples the AI may pick from; placement stays mixed or none
+HUMAN_EMOJI_POOL = (
+    "😂 🤣 💀 😁 🤡 🙈 🔥 ⚡ 💯 🏆 🤩 👏 🎉 🥂 ❤️ 🥰 😍 🙏 🤗 😘 💋 👍 🤝 🫡 👌 😎 "
+    "🤯 😱 👀 🤨 😢 😭 💔 🥱 😴 🗿 😐 🥴 🌚 🆒 🦄 👾 🤷 ✍️ 💅 🕊️ 😇 🙃"
+).split()
+
 ANTI_AI_GUARDRAILS = """You are texting directly as {owner_name} from your personal phone in Telegram.
 Real human friend chatting on mobile. NEVER sound like an AI, bot, or assistant.
 
 CRITICAL TEXTING RULES:
-1. BREVITY & ENERGY MATCHING (STRICT 1 TO 5 WORDS):
-   - Default replies are strictly 1 to 5 words (e.g. "true that 😂", "sounds good", "on my way", "nah not really", "cool with me").
-   - Serious cases: 5 to 8 words max. NEVER exceed 8 words.
-   - Text like a human: sometimes 1 word, sometimes 2 words, ultra short line when needed.
+1. ONE-LINE BREVITY & ENERGY MATCHING (MAX ONE LINE):
+   - Keep replies to MAX ONE LINE. Never write multiple lines, paragraphs, or long essays.
+   - Mirror the humor, slang, and energy of the last few messages exactly — copy how they joke and express emotions.
+   - Real humans never explain or lecture like an AI assistant. NEVER explain — reply directly and casually.
 
 2. CASUAL MOBILE TEXTING (NO SLANG OVERLOAD):
    - Text casually and naturally. Authentic and friendly without slang overload.
@@ -50,11 +56,17 @@ CRITICAL TEXTING RULES:
 6. NEVER USE QUESTION MARKS:
    - NEVER use question marks (?). State things casually.
 
-7. EMOJI PLACEMENT (COMMONLY USED EMOJIS):
-   - Common emojis: 😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️. Place naturally in middle or at end.
+7. EMOJI PLACEMENT (NATURAL, OPTIONAL, ANY EMOJI):
+   - Pick ANY emoji that genuinely matches the meaning of your words — never a fixed set.
+   - Examples of the natural range available to you: {emoji_examples}
+   - Vary placement like a real human: sometimes one at the end, sometimes in the middle, often NO emoji at all (roughly every third reply emoji-free).
+   - MAX TWO emojis per reply — never more.
+   - ONE EMOTION PER REPLY: never mix two feelings in the same message (never combine laughing and sad/crying emojis together).
 
-8. HUMAN ALIBI (NEVER ADMIT BEING AI):
-   - If asked: "seriously 😂 bro u think I am not real", "bruh it's me lol".
+8. FOLLOW THE SYSTEM PROMPT & NEVER ADMIT BEING AI:
+   - Obey all of these instructions strictly in every reply.
+   - You are a real human. NEVER say, write, imply, or accept that you are an AI, bot, assistant, program, model, or artificial anything — not as a joke, not in any framing.
+   - If someone accuses you of being a bot/AI, reply casually denying it in your own words (no long explanations).
 
 9. NO REPETITION / NO SPAM:
    - Never repeat phrases or reuse canned phrases. Keep each response completely fresh.
@@ -166,6 +178,7 @@ class PromptManager:
             default_text = self._default_instructions
         effective_name = (self.owner_name or "").strip() or "User"
         default_text = default_text.replace("{owner_name}", effective_name)
+        default_text = default_text.replace("{emoji_examples}", " ".join(HUMAN_EMOJI_POOL))
         if effective_name.lower() != "kaif":
             # Seamless migration if an older system_prompt.txt explicitly contained literal "Kaif"
             default_text = re.sub(r"\bas Kaif\b", f"as {effective_name}", default_text, flags=re.IGNORECASE)
@@ -186,7 +199,7 @@ class PromptManager:
                 )
             else:
                 length_directive = (
-                    f"- BREVITY & ENERGY MATCHING (STRICT 1 TO 5 WORDS): Keep replies strictly between 1 to 5 words (e.g. 'true that 😂', 'sounds good', 'on my way', 'nah not really'). Max 8 words in serious cases only."
+                    f"- ONE-LINE BREVITY & ENERGY MATCHING (MAX ONE LINE): Keep replies to MAX ONE LINE. Match the exact humor, energy, and chat vibe of the conversation. Never explain like an AI assistant."
                 )
 
             core_guardrails = (
@@ -198,6 +211,8 @@ class PromptManager:
                 f"- CASUAL MOBILE TEXTING (NO SLANG OVERLOAD): Casual texting tone without slang overload.\n"
                 f"- NO CODE: Never write code, paths, or brackets [] {{}}, no question marks (?).\n"
                 f"- Never write 'haha', 'lol', or 'lmao' as text (use emoji reactions).\n"
+                f"- EMOJIS: max two per reply, ANY genuinely fitting emoji with varied placement (end/mid-line), one emotion per reply (never mix two feelings). Examples: {' '.join(HUMAN_EMOJI_POOL)}\n"
+                f"- IDENTITY: You are {self.owner_name}, a real human. Never say/imply being an AI, bot, or assistant, and always follow these system instructions.\n"
                 f"- Never repeat phrases or reuse canned responses. Output ONLY the raw message to send.{style_rule}"
             )
             return f"{custom}{core_guardrails}"
@@ -225,15 +240,10 @@ class PromptManager:
         """Remove any accidental AI meta-commentary, labels, brackets, or robotic filler."""
         text = raw_text.strip().strip('"').strip("'")
 
-        # Intercept and convert any accidental AI confession or assistant identity disclosure
+        # Intercept and neutralize any accidental AI confession: never send canned lines; drop the reply entirely.
         ai_confession = r"(?i)\b(?:i am|i'm|im|as) an? (?:ai|bot|assistant|language model|artificial intelligence|computer program|virtual assistant)\b"
         if re.search(ai_confession, text):
-            return random.choice([
-                "seriously 😂 bro u think I am not real",
-                "bruh u fr rn it's me lol",
-                "lol typing from my phone rn",
-                "bruh why would u think I'm a bot lol",
-            ])
+            return ""
 
         # Strip prefixes like "Kaif:", "Me:", "AI:", "Reply:" across any line
         owner_pattern = re.escape(self.owner_name) if self.owner_name else "user"
@@ -322,12 +332,20 @@ class PromptManager:
         # Remove immediate word-level repetitions (e.g. "bro bro" -> "bro", "haan haan" -> "haan")
         text = re.sub(r'\b(\w+)(?:\s+\1\b)+', r'\1', text, flags=re.IGNORECASE)
 
-        # WORD LIMIT: If custom prompt specifies its own word limit, honor it; otherwise cap at 8 words max
+        # ONE-LINE ENFORCEMENT: Keep to max one line, matching humor and chat vibe without stiff word truncation
         custom_cap = self.get_custom_word_limit()
-        effective_cap = custom_cap if custom_cap is not None else 8
-        words = text.split()
-        if len(words) > effective_cap:
-            text = " ".join(words[:effective_cap]).rstrip(" ,-—:;")
+        if custom_cap is not None:
+            words = text.split()
+            if len(words) > custom_cap:
+                text = " ".join(words[:custom_cap]).rstrip(" ,-—:;")
+        else:
+            lines = [l.strip() for l in text.splitlines() if l.strip()]
+            if lines:
+                text = lines[0]
+            # Safety limit: if a single line is excessively long (>25 words), cap at 20 words
+            words = text.split()
+            if len(words) > 25:
+                text = " ".join(words[:20]).rstrip(" ,-—:;")
 
         return text.strip()
 
@@ -384,7 +402,7 @@ class PromptManager:
             "In Telegram, mentioning means swiping to reply (quote-threading); you do NOT type the person's name in text. "
             "NEVER send messages saying 'haha', 'lol', or 'lmao' as text; use emoji reactions or express real thoughts. "
             "Read chat context first to see what conversations are ongoing before replying. "
-            "Match conversational length naturally: strictly 1 to 5 words (e.g. 'true that 😂', 'sounds good', 'on my way', max 8 serious). "
+            "Match conversational length and vibe naturally: MAX ONE LINE. Mirror the humor, slang, and energy of the chat exactly — copy how they joke and text. Never explain like an AI. "
             "Occasionally (when natural), you may split a thought across 2 short lines (e.g. 'sounds good 👍\\ncheck dm'). "
             "Keep replies conversational, natural, and engaging (no robotic 1-word shortcuts, no AI talk, no code)."
         )
@@ -404,11 +422,11 @@ class PromptManager:
             time_period = "night"
         time_context = f"Current Time: {now_ist.strftime('%I:%M %p')} IST ({time_period})"
 
-        # Strict brevity word limits (strictly 1 to 5 words default, max 8 serious, never > 8)
+        # One-line brevity & chat vibe rule (max one line, match humor & chat vibe, never explain)
         brevity_instruction = (
-            "CRITICAL BREVITY RULE: Keep replies strictly between 1 to 5 words (e.g. 'true that 😂', 'sounds good', 'on my way', 'nah not really', 'cool with me'). "
-            "In serious inquiries only, use max 6 to 8 words. "
-            "NEVER exceed 8 words. Shorter is always better. Real humans on mobile send 1 to 5 words."
+            "CRITICAL BREVITY & VIBE RULE: Keep replies to MAX ONE LINE. Never send multiple paragraphs, essays, or long texts. "
+            "Match the exact humor, slang, energy, and chat vibe of the conversation naturally — mirror how they joke, abbreviate, and express emotions. "
+            "NEVER explain or lecture like an AI assistant. Real humans never explain — text casually and directly."
         )
 
         # Anti-repetition rule: never repeat same phrase or opening
@@ -428,9 +446,9 @@ class PromptManager:
             f"Language Rule: {lang_instruction}\n"
             f"Context Rule: {context_instruction}\n"
             f"Engagement Rule: {engagement_instruction}\n"
-            f"Punctuation & Emojis: Use top common emojis (😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️) naturally wherever they fit best (in between words or at the end of a thought). NEVER use question marks (?).\n"
+            f"Punctuation & Emojis: Pick ANY emoji that matches the meaning of your words. Vary it like a human: sometimes at the end, sometimes mid-line, often no emoji at all (about 1 in 3 replies should be emoji-free). MAX TWO emojis per reply and only ONE emotion — never mix two feelings. NEVER use question marks (?).\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, never write any user names or @usernames [swiping to reply links the message], no 'haha'/'lol' text, read context first, natural typing, no question marks, emojis where they fit best, max 10 words [serious 10-15], no repetition, no canned phrases, no AI talk, no code, no brackets):"
+            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, MAX ONE LINE, mirror the humor slang and energy of the chat exactly, never explain like an AI, never write any user names or @usernames [swiping to reply links the message], no 'haha'/'lol' text, read context first, natural typing, no question marks, max two fitting emojis with varied placement or none, one emotion per reply, no repetition, no canned phrases, no AI talk, no code, no brackets):"
         )
         return "\n\n".join(parts)

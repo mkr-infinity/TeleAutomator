@@ -46,6 +46,8 @@ class SafetyManager:
         self._next_chat_cooldown: Dict[int, float] = {}
         self._consecutive_errors: int = 0
         self._error_pause_until: float = 0.0
+        self._minute_cap: int = self.max_replies_per_minute
+        self._minute_cap_ts: float = 0.0
 
     @property
     def is_emergency_stopped(self) -> bool:
@@ -227,7 +229,7 @@ class SafetyManager:
 
     @property
     def max_replies_per_minute(self) -> int:
-        """Maximum automated replies allowed per rolling 60-second window across all chats."""
+        """Base maximum automated replies allowed per rolling 60-second window across all chats."""
         db_val = self.db.get_state("max_replies_per_minute")
         if db_val:
             try:
@@ -236,16 +238,16 @@ class SafetyManager:
                 pass
         return getattr(self.config, "max_replies_per_minute", 5)
 
-    @property
-    def max_replies_per_hour(self) -> int:
-        """Maximum automated replies allowed per rolling 3600-second window across all chats."""
-        db_val = self.db.get_state("max_replies_per_hour")
-        if db_val:
-            try:
-                return max(1, int(db_val))
-            except ValueError:
-                pass
-        return getattr(self.config, "max_replies_per_hour", 30)
+    def _pick_dynamic_minute_limit(self, chat_id: int) -> int:
+        """Human-like fluctuating burst cap: re-rolled around the base each minute,
+        auto-boosted when the chat is busy (many incoming messages recently)."""
+        base = self.max_replies_per_minute
+        busy = False
+        if self.db and hasattr(self.db, "get_recent_message_count"):
+            busy = self.db.get_recent_message_count(120.0, chat_id=chat_id) >= 5
+        jitter = random.randint(0, 3)
+        boost = 4 if busy else 0
+        return base + jitter + boost
 
     @property
     def max_chat_replies_per_minute(self) -> int:
@@ -340,17 +342,15 @@ class SafetyManager:
         if len(text) > self.config.max_message_length:
             return False, f"Message length ({len(text)}) exceeds maximum allowed ({self.config.max_message_length})"
 
-        # Telegram Anti-Spam Guidelines: Rolling minute & hourly rate limits
+        # Telegram Anti-Spam Guidelines: dynamically fluctuating rolling-minute burst limit
         if self.config.global_cooldown_seconds > 0 and self.db and hasattr(self.db, "get_recent_reply_count"):
             if self.max_replies_per_minute > 0:
+                if now - self._minute_cap_ts >= 60.0:
+                    self._minute_cap_ts = now
+                    self._minute_cap = self._pick_dynamic_minute_limit(chat_id)
                 recent_min_count = self.db.get_recent_reply_count(60.0)
-                if recent_min_count >= self.max_replies_per_minute:
-                    return False, f"Anti-spam burst limit reached ({recent_min_count}/{self.max_replies_per_minute} replies in last 60s)"
-
-            if self.max_replies_per_hour > 0:
-                recent_hour_count = self.db.get_recent_reply_count(3600.0)
-                if recent_hour_count >= self.max_replies_per_hour:
-                    return False, f"Anti-spam hourly limit reached ({recent_hour_count}/{self.max_replies_per_hour} replies in last hour)"
+                if recent_min_count >= self._minute_cap:
+                    return False, f"Anti-spam burst limit reached ({recent_min_count}/{self._minute_cap} replies in last 60s)"
 
             if self.max_chat_replies_per_minute > 0:
                 recent_chat_min = self.db.get_recent_reply_count(60.0, chat_id=chat_id)

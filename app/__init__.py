@@ -1,3 +1,3 @@
 """Personal Telegram MTProto Client."""
 
-__version__ = "2.0.6"
+__version__ = "2.4.0"

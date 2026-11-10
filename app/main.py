@@ -56,7 +56,7 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
         safety.set_auto_authorization(True)
 
     privacy = PrivacyManager(config, database=db)
-    generator = ReplyGenerator(config)
+    generator = ReplyGenerator(config, database=db)
     if style_override:
         generator.set_style(style_override)
         db.set_state("reply_style", style_override)
@@ -64,6 +64,27 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
 
     reply_mgr = ReplyManager(config, db, safety, privacy, generator)
     health = HealthMonitor(config.data_dir)
+
+    # Bot control channel: replaces Saved Messages as the command + alert surface when configured
+    bot_task: Optional[asyncio.Task] = None
+    if config.bot_api_key:
+        if not config.bot_authorized_users:
+            logger.warning("BOT_API_KEY is set but BOT_AUTHORIZED_USERS is empty; "
+                           "add your Telegram user ID to BOT_AUTHORIZED_USERS to control the project.")
+        try:
+            from app.bot_control import BotControl
+            bot_control = BotControl(
+                api_key=config.bot_api_key,
+                db=db,
+                reply_manager=reply_mgr,
+                seed_user_ids=config.bot_authorized_users,
+                health_file=config.data_dir / "health.json",
+            )
+            reply_mgr.bot_control = bot_control
+            logger.info("Bot control channel enabled (Saved Messages commands disabled; alerts route to bot).")
+        except Exception as e:
+            logger.warning(f"Could not initialize bot control channel: {e}")
+            reply_mgr.bot_control = None
 
     service = TelegramService(
         config=config,
@@ -89,6 +110,10 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
 
     # Run service as a background task and wait for stop_event
     run_task = asyncio.create_task(service.run())
+
+    # Start the bot control long-poll loop alongside the main service
+    if reply_mgr.bot_control is not None:
+        bot_task = asyncio.create_task(reply_mgr.bot_control.run())
 
     # Optional HTTP health server for cloud platforms like Render.com / Railway
     port_env = os.getenv("PORT")
@@ -168,6 +193,12 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
             http_server.close()
             await http_server.wait_closed()
         await service.stop()
+        if bot_task is not None and not bot_task.done():
+            bot_task.cancel()
+            try:
+                await bot_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 def main() -> None:

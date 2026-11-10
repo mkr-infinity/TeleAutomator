@@ -1,7 +1,7 @@
 """Tests for PromptManager and ReplyGenerator."""
 
 from pathlib import Path
-from app.ai.prompt_manager import PromptManager, VALID_STYLES
+from app.ai.prompt_manager import PromptManager, VALID_STYLES, HUMAN_EMOJI_POOL
 from app.ai.reply_generator import ReplyGenerator
 from app.ai.provider import LocalRuleProvider
 from app.config import AppConfig
@@ -62,6 +62,16 @@ def test_prompt_clean_reply_and_anti_robotic():
     # Strips name prefixes
     assert pm.clean_reply("Kaif: haan bhai") == "haan bhai"
     assert pm.clean_reply("AI: I am on it") == "I am on it"
+
+
+def test_emoji_rule_varied_placement():
+    """Emoji rules instruct varied placement (end/mid/none), any emoji, no fixed set."""
+    assert len(HUMAN_EMOJI_POOL) >= 30
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+    prompt = pm.build_user_prompt(sender_name="Alice", incoming_text="where should we meet")
+    assert "emoji-free" in prompt
+    # The old fixed 8-emoji list must be gone
+    assert "😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️" not in prompt
 
 
 def test_reply_generator_with_history(tmp_path: Path):
@@ -229,44 +239,44 @@ def test_custom_prompt_wrapping_and_anti_ai_guardrails():
 
 
 def test_custom_prompt_word_rule_priority():
-    """Verify that if custom prompt mentions a word limit, it takes priority over the default 8-word cap."""
+    """Verify that if custom prompt mentions a word limit, it takes priority over default single-line behavior."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
 
-    # 1. Without custom word rule: capped to 8 words
-    ten_words = "one two three four five six seven eight nine ten"
-    assert len(pm.clean_reply(ten_words).split()) == 8
+    # 1. Without custom word rule: natural one-line preserved, multi-lines kept to first line
+    multiline = "sounds good to me\nwill check later"
+    assert pm.clean_reply(multiline) == "sounds good to me"
 
-    # 2. With custom word rule specified (e.g. 15 words)
-    pm.custom_prompt = "You are a tech advisor. Always reply in up to 15 words."
-    assert pm.get_custom_word_limit() == 15
-    assert len(pm.clean_reply(ten_words).split()) == 10  # 10 words preserved!
-    fourteen_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
-    assert len(pm.clean_reply(fourteen_words).split()) == 14
+    # 2. With custom word rule specified (e.g. 5 words)
+    pm.custom_prompt = "Always reply in up to 5 words."
+    assert pm.get_custom_word_limit() == 5
+    ten_words = "one two three four five six seven eight nine ten"
+    assert len(pm.clean_reply(ten_words).split()) == 5
 
     # 3. With custom detailed/paragraphs directive
     pm.custom_prompt = "You are an author who provides detailed explanations."
     assert pm.get_custom_word_limit() == 100
+    fourteen_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
     assert len(pm.clean_reply(fourteen_words).split()) == 14
 
-    # 4. Reset custom prompt: returns to default 8 words cap
+    # 4. Reset custom prompt: returns to default max one line
     pm.reset_custom_prompt()
     assert pm.get_custom_word_limit() is None
-    assert len(pm.clean_reply(ten_words).split()) == 8
+    assert pm.clean_reply("line one\nline two") == "line one"
 
 
 def test_ai_confession_interception():
-    """Verify that any accidental AI admission is intercepted and replaced with human alibi banter."""
+    """Verify any accidental AI admission is dropped entirely (no canned replacement, never sent to chat)."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
 
     bot_output = "As an AI language model, I cannot fulfill this request."
-    cleaned = pm.clean_reply(bot_output)
-    assert "as an ai" not in cleaned.lower()
-    assert any(h in cleaned for h in ("it's me lol", "think I am not real", "typing from my phone", "bot lol"))
+    assert pm.clean_reply(bot_output) == ""
 
     bot_output2 = "I am a virtual assistant created to help you."
-    cleaned2 = pm.clean_reply(bot_output2)
-    assert "virtual assistant" not in cleaned2.lower()
-    assert any(h in cleaned2 for h in ("it's me lol", "think I am not real", "typing from my phone", "bot lol"))
+    assert pm.clean_reply(bot_output2) == ""
+
+    # No canned alibi strings should anywhere exist as hardcoded reply output
+    prompt = pm.build_user_prompt(sender_name="Alex", incoming_text="are you a bot")
+    assert "bruh u fr rn" not in prompt
 
 
 def test_conversational_engagement_instruction_in_prompt():
@@ -405,15 +415,17 @@ def test_clean_reply_suppresses_none_and_word_repetition():
     assert pm.clean_reply("cool cool cool") == "cool"
 
 
-def test_top_common_emojis_and_active_group_engagement():
-    """Verify minimum 5 commonly used emojis and active group engagement instructions are in prompt."""
+def test_natural_emoji_rule_and_active_group_engagement():
+    """Verify the varied any-emoji rule and active group engagement instructions are in prompt."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
     prompt = pm.build_user_prompt(sender_name="Alex", incoming_text="anyone working on the bot", is_group=True)
 
-    # Minimum 5 commonly used emojis present
-    top_emojis = ["😂", "👍", "🔥", "👀", "🤝", "💀", "💯", "❤️"]
-    found_emojis = [em for em in top_emojis if em in prompt]
-    assert len(found_emojis) >= 5
+    assert "emoji-free" in prompt
+    assert "any emoji" in prompt.lower()
+    assert "often no emoji" in prompt.lower()
+    # Max two emojis per reply, single emotion per reply
+    assert "MAX TWO" in prompt
+    assert "one emotion" in prompt
 
     # Active group engagement instruction present
     assert "active Telegram user" in prompt
@@ -432,20 +444,21 @@ def test_strict_word_limits_and_hard_cap():
     five_words = "sounds good to me bro"
     assert pm.clean_reply(five_words) == five_words
 
-    # 8-word message stays intact
-    eight_words = "one two three four five six seven eight"
-    assert pm.clean_reply(eight_words) == eight_words
+    # Natural 12-word human sentence stays intact without stiff word truncation
+    twelve_words = "hahaha bro you actually did that what a legend will see you tomorrow"
+    assert pm.clean_reply(twelve_words) == twelve_words
 
-    # >8-word message is cleanly capped to 8 words
-    twenty_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty"
-    cleaned = pm.clean_reply(twenty_words)
-    words = cleaned.split()
-    assert len(words) == 8
-    assert words[-1] == "eight"
+    # Multi-line responses are kept to MAX ONE LINE
+    multiline = "sounds good bro 👍\ncheck this other thing out"
+    assert pm.clean_reply(multiline) == "sounds good bro 👍"
+
+    # Excessively long run-on messages (>25 words) are capped for safety
+    thirty_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty"
+    assert len(pm.clean_reply(thirty_words).split()) == 20
 
 
 def test_ist_time_awareness_and_brevity_instructions_in_prompt():
-    """Verify prompt includes IST time-of-day awareness and strict brevity rule."""
+    """Verify prompt includes IST time-of-day awareness, MAX ONE LINE rule, and vibe matching."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
     prompt = pm.build_user_prompt(sender_name="Alex", incoming_text="good morning")
 
@@ -454,9 +467,10 @@ def test_ist_time_awareness_and_brevity_instructions_in_prompt():
     assert any(period in prompt for period in ("morning", "afternoon", "evening", "night"))
 
     assert "Brevity Rule:" in prompt
-    assert "strictly between 1 to 5 words" in prompt
-    assert "max 6 to 8 words" in prompt
-    assert "NEVER exceed 8 words" in prompt
+    assert "MAX ONE LINE" in prompt
+    assert "humor" in prompt
+    assert "vibe" in prompt
+    assert "NEVER explain" in prompt
 
 
 def test_dynamic_owner_name_without_hardcoding(tmp_path: Path):
