@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import difflib
 import json
 import random
 import re
@@ -19,6 +20,17 @@ from app.safety_manager import SafetyManager
 from app.storage.database import Database
 
 logger = setup_logger(__name__)
+
+# Primary commands surfaced through /help — used to point users at the right command on typos.
+_BOT_COMMAND_NAMES = (
+    "/help", "/start", "/status", "/mode", "/style", "/styles", "/lang", "/auto", "/pause", "/resume", "/stop",
+    "/reaction", "/reactioncooldown", "/chatcooldown", "/globalcooldown", "/ratelimit", "/editfix", "/ownreact",
+    "/typo", "/followup", "/debounce", "/multibubble", "/quiethours", "/sleep", "/aiconfig", "/setai", "/apikey",
+    "/usage", "/checkmodels", "/thinking", "/temp", "/maxtokens", "/model", "/baseurl", "/provider",
+    "/quotathreshold", "/quotaalert", "/addrule", "/delrule", "/rules", "/chats", "/allowchat", "/removechat",
+    "/blockchat", "/mentiononly", "/contextttl", "/clearcontext", "/syncpins", "/setcontext", "/showcontext",
+    "/delcontext", "/backup", "/pending", "/approve", "/reject", "/name", "/prompt", "/setprompt", "/chatty",
+)
 
 try:
     from telethon.errors import FloodWaitError, PeerFloodError
@@ -727,6 +739,14 @@ class ReplyManager:
             f"Send `/approve {approval_id}` to send, or `/reject {approval_id}` to discard."
         )
         try:
+            # With the control bot active, approvals arrive as one-tap ✅/❌ inline buttons
+            if self.bot_control is not None:
+                try:
+                    if await self.bot_control.send_approval_card(notification, approval_id):
+                        return
+                    logger.warning("Bot approval card failed; falling back to the control-alert path.")
+                except Exception as e:
+                    logger.warning(f"Bot approval card error ({e}); falling back to the control-alert path.")
             await self._send_control_alert(notification)
         except Exception as e:
             logger.error(f"Failed to send approval notification via control channel: {e}")
@@ -795,27 +815,47 @@ class ReplyManager:
         except Exception as e:
             logger.error(f"Failed to deliver issue alert via control channel: {e}")
 
+    async def check_pause_expiry(self) -> None:
+        """When a timed pause (from /pause or a flood-wait nap) ends naturally, clear it and
+        notify the control channel so automation visibly resumes in the group."""
+        try:
+            until = float(self.db.get_state("pause_until", "0") or 0)
+        except ValueError:
+            until = 0.0
+        if until <= 0 or time.time() < until:
+            return
+        self.db.set_state("pause_until", "0")
+        logger.info("SAFETY: Timed pause expired. Automation resumed automatically.")
+        if not self.safety.is_emergency_stopped:
+            await self._send_control_alert(
+                "▶️ *Timed pause ended*\nAutomation is active again — replies, reactions & engagement resume in allowlisted chats."
+            )
+
     def _parse_duration(self, raw: str) -> Optional[float]:
-        """Parse duration strings like '2h', '30m', '1d', or '2' (hours)."""
+        """Parse duration strings like '2h', '30m', '90s', '30 min', '2 hours', '1d 2h'.
+        A bare number is interpreted as MINUTES (e.g. '/pause 45' = 45 minutes)."""
         s = raw.strip().lower()
         if not s:
             return None
-        try:
-            if s.endswith(("m", "min", "mins")):
-                num = re.sub(r"[^\d.]", "", s)
-                return float(num) * 60
-            elif s.endswith(("h", "hr", "hrs", "hour", "hours")):
-                num = re.sub(r"[^\d.]", "", s)
-                return float(num) * 3600
-            elif s.endswith(("d", "day", "days")):
-                num = re.sub(r"[^\d.]", "", s)
-                return float(num) * 86400
-            elif re.match(r"^\d+(?:\.\d+)?$", s):
-                # Default bare number to hours
-                return float(s) * 3600
-        except ValueError:
-            pass
-        return None
+        factors = {
+            "d": 86400.0, "day": 86400.0, "days": 86400.0,
+            "h": 3600.0, "hr": 3600.0, "hrs": 3600.0, "hour": 3600.0, "hours": 3600.0,
+            "m": 60.0, "min": 60.0, "mins": 60.0, "minute": 60.0, "minutes": 60.0,
+            "s": 1.0, "sec": 1.0, "secs": 1.0, "second": 1.0, "seconds": 1.0,
+        }
+        total = 0.0
+        seen = False
+        for num_str, unit in re.findall(r"(\d+(?:\.\d+)?)\s*([a-zA-Z]+)?", s):
+            unit = (unit or "").strip().lower()
+            if unit:
+                factor = factors.get(unit)
+                if factor is None:
+                    return None  # unknown unit word
+            else:
+                factor = 60.0  # bare number: intuitive minutes
+            total += float(num_str) * factor
+            seen = True
+        return total if seen and total > 0 else None
 
     async def get_allowed_chats_dataframe(self) -> str:
         """Format all allowlisted groups and chats as an aligned DataFrame table with numbering, name, and username/ID."""
@@ -882,7 +922,7 @@ class ReplyManager:
                 "• `/style <casual|concise|formal|humorous>` - Change AI reply style\n"
                 "• `/lang <dynamic|english|hindi|...>` - Chat language selection\n"
                 "• `/auto on` / `/auto off` - Authorize or revoke automated replies\n"
-                "• `/pause <time>` - Snooze replies (e.g. `/pause 2h`, `/pause 30m`)\n"
+                "• `/pause <time>` - Snooze replies (e.g. `/pause 2h`, `/pause 30 min`, `/pause 90s`) - auto-resumes with an alert\n"
                 "• `/resume` - Resume operations (clears pause & stop)\n"
                 "• `/stop` - Emergency stop switch (halts all replies)\n\n"
                 "*Reactions & Cooldowns:*\n"
@@ -1072,7 +1112,7 @@ class ReplyManager:
                     f"⚙️ *Current Reply Mode:* `{curr}`\n\n"
                     f"*Available Modes:*\n"
                     f"• `/mode draft` - Suggests drafts in terminal/logs; NEVER sends.\n"
-                    f"• `/mode approval` - Sends drafts to Saved Messages for `/approve <id>`.\n"
+                    f"• `/mode approval` - Sends drafts to your control channel for `/approve <id>`.\n"
                     f"• `/mode auto` - Directly replies to allowlisted chats without manual approval."
                 )
             target = cmd_parts[1].lower().strip()
@@ -1081,7 +1121,7 @@ class ReplyManager:
                 return "📝 Mode switched to *Draft Only*. Replies will be generated and logged, but never sent to recipients."
             elif target in ("approval", "pending", "review"):
                 self.set_mode("approval")
-                return "📋 Mode switched to *Approval Required*. Every draft will be sent to your Saved Messages for review."
+                return "📋 Mode switched to *Approval Required*. Every draft will be sent to your control channel (bot / Saved Messages) for review."
             elif target in ("auto", "restricted_auto", "automatic"):
                 self.set_mode("restricted_auto")
                 self.safety.set_auto_authorization(True)
@@ -1968,15 +2008,17 @@ class ReplyManager:
 
         if cmd in ("/pause", "/off"):
             if len(cmd_parts) < 2:
-                return "Usage: `/pause <duration>` (e.g. `/pause 2h`, `/pause 30m`, `/pause 45m`)"
-            seconds = self._parse_duration(cmd_parts[1])
+                return "Usage: `/pause <duration>` (e.g. `/pause 2h`, `/pause 30m`, `/pause 30 min`, `/pause 90s`)"
+            seconds = self._parse_duration(" ".join(cmd_parts[1:]))
             if not seconds:
-                return "Invalid duration format. Use e.g. `/pause 2h` or `/pause 30m`."
+                return "Invalid duration format. Use e.g. `/pause 2h`, `/pause 30m`, `/pause 30 min`, or `/pause 90s`."
             self.safety.set_timed_pause(seconds)
             mins = int(seconds // 60)
             hours = round(seconds / 3600, 1)
             display = f"{hours} hour(s)" if seconds >= 3600 else f"{mins} minute(s)"
-            return f"⏸️ Automation PAUSED for {display}. All auto-replies are paused.\nSend `/resume` anytime to reactivate early."
+            return (f"⏸️ Automation PAUSED for {display}. All auto-replies are paused.\n"
+                    f"When the window ends you'll get a *pause ended* alert here and engagement resumes automatically. "
+                    f"Or send `/resume` anytime to reactivate early.")
 
         if cmd in ("/stop", "/halt"):
             self.safety.set_emergency_stop(True)
@@ -2092,7 +2134,17 @@ class ReplyManager:
             self.db.update_approval_status(approval_id, "rejected")
             return f"🗑️ Draft #{approval_id} rejected and discarded."
 
-        return None
+        if not cmd.startswith("/"):
+            return None  # plain text (e.g. notes) — no command response needed
+
+        closest = difflib.get_close_matches(cmd, _BOT_COMMAND_NAMES, n=3, cutoff=0.6)
+        known = ", ".join(f"`{c}`" for c in _BOT_COMMAND_NAMES)
+        hint = f"\nDid you mean: {' '.join(f'`{c}`' for c in closest)}?" if closest else ""
+        return (
+            f"❓ Unknown command `{cmd}`.\n"
+            f"Common ones: {known}{hint}\n"
+            f"Send */help* for the full guide."
+        )
 
     def calculate_adaptive_delay(
         self,

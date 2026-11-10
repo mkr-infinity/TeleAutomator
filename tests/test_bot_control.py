@@ -34,6 +34,7 @@ def _make_bot(tmp_path: Path, seed: str = "111,222") -> tuple[BotControl, ReplyM
     db = Database(tmp_path / "bot.db")
     mgr = ReplyManager(cfg, db, SafetyManager(cfg, db), PrivacyManager(cfg, database=db), ReplyGenerator(cfg, database=db))
     bot = BotControl(cfg.bot_api_key, db, mgr, seed_user_ids=cfg.bot_authorized_users)
+    mgr.bot_control = bot
     return bot, mgr, db
 
 
@@ -203,3 +204,210 @@ def test_bot_send_message_markdown_fallback(tmp_path: Path) -> None:
     assert ok is True
     modes = [c.get("parse_mode") for c in calls if c["method"] == "sendMessage"]
     assert modes == ["Markdown", None]  # Markdown first, then safe plain-text retry
+
+
+def _stub_bot_calls(bot: BotControl, sent: list[tuple[int, str]]) -> None:
+    async def fake_call(method: str, payload: dict) -> dict:
+        if method == "sendMessage":
+            sent.append((payload["chat_id"], payload["text"]))
+            return {"ok": True}
+        return {"ok": True, "result": {}}
+    return AsyncMock(side_effect=fake_call)
+
+
+def test_pause_durations_multitoken_and_bare_minutes(tmp_path: Path) -> None:
+    _bot, mgr, _db = _make_bot(tmp_path)
+
+    assert mgr._parse_duration("30 min") == 1800.0
+    assert mgr._parse_duration("2 hours") == 7200.0
+    assert mgr._parse_duration("90s") == 90.0
+    assert mgr._parse_duration("1d 2h") == 93600.0
+    assert mgr._parse_duration("45") == 2700.0  # bare number = minutes (was hours before)
+    assert mgr._parse_duration("2 xyz") is None
+
+    safety = mgr.safety
+    msg = asyncio.run(mgr.handle_control_command("/pause 30 min"))
+    assert "PAUSED" in msg and 1700 < safety.get_remaining_pause_seconds() <= 1800
+    asyncio.run(mgr.handle_control_command("/resume"))
+    assert safety.get_remaining_pause_seconds() == 0.0
+
+    msg = asyncio.run(mgr.handle_control_command("/pause 90s"))
+    assert "PAUSED" in msg and 80 < safety.get_remaining_pause_seconds() <= 90
+
+
+def test_pause_expiry_auto_resumes_and_alerts_control_channel(tmp_path: Path) -> None:
+    import time as _time
+
+    bot, mgr, db = _make_bot(tmp_path, seed="111")
+    alerts: list[tuple[int, str]] = []
+
+    async def fake_call(method: str, payload: dict) -> dict:
+        if method == "sendMessage":
+            alerts.append((payload["chat_id"], payload["text"]))
+            return {"ok": True}
+        return {"ok": True, "result": {}}
+
+    with patch.object(BotControl, "_call", new=AsyncMock(side_effect=fake_call)):
+        # Pause for 2 seconds, wait it out, heartbeat watcher resumes + alerts
+        asyncio.run(mgr.handle_control_command("/pause 2s"))
+        assert mgr.safety.get_remaining_pause_seconds() > 0
+        _time.sleep(2.1)
+        asyncio.run(mgr.check_pause_expiry())
+        assert mgr.safety.get_remaining_pause_seconds() == 0.0
+        assert alerts and alerts[-1][0] == 111  # routed to main owner
+        assert "Timed pause ended" in alerts[-1][1]
+
+        # Calling again must not duplicate the alert (pause already cleared)
+        alerts.clear()
+        asyncio.run(mgr.check_pause_expiry())
+        assert not alerts
+
+
+def test_command_permissions_grant_revoke_enforcement(tmp_path: Path) -> None:
+    bot, _mgr, db = _make_bot(tmp_path)  # authorized: 111 (main), 222 (secondary)
+
+    sent: list[tuple[int, str]] = []
+    routed: list[str] = []
+
+    async def fake_call(method: str, payload: dict) -> dict:
+        if method == "sendMessage":
+            sent.append((payload["chat_id"], payload["text"]))
+            return {"ok": True}
+        return {"ok": True, "result": {}}
+
+    manager = bot.reply_manager
+    async def fake_route(cmd: str):
+        routed.append(cmd)
+        return f"ran {cmd}"
+
+    with patch.object(BotControl, "_call", new=AsyncMock(side_effect=fake_call)):
+        with patch.object(manager, "handle_control_command", new=fake_route):
+            # Restrict 222 to /status only
+            asyncio.run(bot._process_update({
+                "update_id": 1,
+                "message": {"text": "/grantperm 222 /status", "chat": {"id": 111}, "from": {"id": 111, "is_bot": False}},
+            }))
+            assert db.get_state("bot_granted_cmds_222") == "/status"
+
+            # Allowed command still routes
+            asyncio.run(bot._process_update({
+                "update_id": 2,
+                "message": {"text": "/status", "chat": {"id": 222}, "from": {"id": 222, "is_bot": False}},
+            }))
+            assert "/status" in routed
+
+            # Non-granted command is blocked before reaching the engine
+            asyncio.run(bot._process_update({
+                "update_id": 3,
+                "message": {"text": "/pause 2h", "chat": {"id": 222}, "from": {"id": 222, "is_bot": False}},
+            }))
+            assert not any(c.startswith("/pause") for c in routed)
+            assert any(uid == 222 and "not permitted" in text for uid, text in sent)
+
+            # Command aliases with @botname suffix still match
+            asyncio.run(bot._process_update({
+                "update_id": 4,
+                "message": {"text": "/status@My.ControlBot", "chat": {"id": 222}, "from": {"id": 222, "is_bot": False}},
+            }))
+            assert any(c.startswith("/status@") or c == "/status" for c in routed)
+
+            # revokeperm restores full access
+            asyncio.run(bot._process_update({
+                "update_id": 5,
+                "message": {"text": "/revokeperm 222", "chat": {"id": 111}, "from": {"id": 111, "is_bot": False}},
+            }))
+            assert db.get_state("bot_granted_cmds_222", "all") == "all"
+
+
+def test_approval_inline_buttons_flow(tmp_path: Path) -> None:
+    bot, mgr, _db = _make_bot(tmp_path, seed="111")
+
+    calls: list[dict] = []
+    routed: list[str] = []
+
+    async def fake_call(method: str, payload: dict) -> dict:
+        calls.append({"method": method, **payload})
+        if method == "getChat":
+            return {"ok": True, "result": {"first_name": "Kaif"}}
+        return {"ok": True, "result": {}}
+
+    manager = mgr
+    async def fake_route(cmd: str):
+        routed.append(cmd)
+        return "✅ Draft sent to chat."
+
+    with patch.object(BotControl, "_call", new=AsyncMock(side_effect=fake_call)):
+        # Card carries an inline keyboard
+        asyncio.run(bot.send_approval_card("*Draft #12 pending*", 12))
+        send = [c for c in calls if c["method"] == "sendMessage"][-1]
+        assert "✅ Approve #12" in send["reply_markup"] and "❌ Reject #12" in send["reply_markup"]
+
+        # Tapping reject routes to the shared engine & answers the callback
+        calls.clear()
+        with patch.object(manager, "handle_control_command", new=fake_route):
+            asyncio.run(bot._process_update({
+                "update_id": 1,
+                "callback_query": {
+                    "id": "cbq1", "data": "reject:12",
+                    "from": {"id": 111, "is_bot": False},
+                    "message": {"chat": {"id": 111}, "message_id": 900},
+                },
+            }))
+        assert "/reject 12" in routed
+        assert any(c["method"] == "answerCallbackQuery" and "Draft sent" in c["text"] for c in calls)
+
+
+def test_watchdog_stale_heartbeat_alerts_once(tmp_path: Path) -> None:
+    import os as _os
+
+    bot, mgr, db = _make_bot(tmp_path, seed="111")
+    health = tmp_path / "health.json"
+    health.write_text('{"status":"healthy"}')
+    bot.health_file = health
+    alerts: list[str] = []
+
+    async def fake_call(method: str, payload: dict) -> dict:
+        if method == "sendMessage":
+            alerts.append(payload["text"])
+            return {"ok": True}
+        return {"ok": True, "result": {}}
+
+    with patch.object(BotControl, "_call", new=AsyncMock(side_effect=fake_call)):
+        # Fresh heartbeat: no alert
+        asyncio.run(bot._watchdog_check())
+        assert not alerts
+
+        # Simulate 10 minutes of silence (threshold default 5 min)
+        stale_ts = __import__("time").time() - 600
+        _os.utime(health, (stale_ts, stale_ts))
+        asyncio.run(bot._watchdog_check())
+        assert alerts and "Watchdog Alert" in alerts[0]
+
+        # Alert throttled within 30 min
+        alerts.clear()
+        asyncio.run(bot._watchdog_check())
+        assert not alerts
+
+
+def test_welcome_card_sent_on_startup(tmp_path: Path) -> None:
+    bot, _mgr, _db = _make_bot(tmp_path, seed="111")
+    from unittest.mock import AsyncMock
+
+    sent: list[tuple[int, str]] = []
+
+    async def fake_call(method: str, payload: dict) -> dict:
+        if method == "sendMessage":
+            sent.append((payload["chat_id"], payload["text"]))
+            return {"ok": True}
+        if method == "getMe":
+            return {"ok": True, "result": {"username": "MyCtrlBot"}}
+        return {"ok": True, "result": {"ok_count": len(sent)}}
+
+    with patch.object(BotControl, "_call", new=AsyncMock(side_effect=fake_call)):
+        asyncio.run(bot.send_welcome_card("MyCtrlBot"))
+
+    assert sent and sent[-1][0] == 111
+    card = sent[-1][1]
+    assert "TeleAutomator is live" in card
+    assert "@MyCtrlBot" in card
+    assert "111" in card

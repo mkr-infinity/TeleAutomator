@@ -78,6 +78,7 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
                 db=db,
                 reply_manager=reply_mgr,
                 seed_user_ids=config.bot_authorized_users,
+                health_file=config.data_dir / "health.json",
             )
             reply_mgr.bot_control = bot_control
             logger.info("Bot control channel enabled (Saved Messages commands disabled; alerts route to bot).")

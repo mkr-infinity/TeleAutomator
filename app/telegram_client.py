@@ -194,6 +194,12 @@ class TelegramService:
             except Exception as e:
                 logger.debug(f"Quiet hours goodnight check error: {e}")
 
+            # Timed-pause auto-resume: emit the 'pause ended' control alert when the window expires
+            try:
+                await self.reply_manager.check_pause_expiry()
+            except Exception as e:
+                logger.debug(f"Pause expiry check error: {e}")
+
             # Every 4 hours, hard-delete cached chat messages older than the context TTL window
             now = time.monotonic()
             if now - self._last_context_purge >= 14400.0:
