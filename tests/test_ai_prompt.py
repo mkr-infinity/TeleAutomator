@@ -230,7 +230,7 @@ def test_custom_prompt_wrapping_and_anti_ai_guardrails():
     # Custom persona is present
     assert "crypto trader and gamer" in instructions
     # Core anti-AI guardrails are strictly preserved
-    assert "BREVITY & ENERGY MATCHING" in instructions
+    assert "NATURAL MESSAGE LENGTH" in instructions
     assert "HUMAN ALIBI" in instructions
     assert "SLANG" in instructions
     assert "NO CODE" in instructions
@@ -239,16 +239,23 @@ def test_custom_prompt_wrapping_and_anti_ai_guardrails():
     pm.reset_custom_prompt()
     assert pm.custom_prompt == ""
     assert "crypto trader" not in pm.system_instructions
-    assert "BREVITY & ENERGY MATCHING" in pm.system_instructions
+    assert "NATURAL MESSAGE LENGTH" in pm.system_instructions
 
 
 def test_custom_prompt_word_rule_priority():
-    """Verify that if custom prompt mentions a word limit, it takes priority over default single-line behavior."""
+    """Verify that if custom prompt mentions a word limit, it takes priority over default natural-length behavior."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
 
-    # 1. Without custom word rule: natural one-line preserved, multi-lines kept to first line
+    # 1. Without custom word rule: natural human 2-line splits are kept intact
     multiline = "sounds good to me\nwill check later"
-    assert pm.clean_reply(multiline) == "sounds good to me"
+    assert pm.clean_reply(multiline) == multiline
+
+    # 1b. Long 2-line output (>20 words total) falls back to the first line
+    long_two_lines = (
+        "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron\n"
+        "pi rho sigma tau upsilon phi chi psi omega one two"
+    )
+    assert pm.clean_reply(long_two_lines) == "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron"
 
     # 2. With custom word rule specified (e.g. 5 words)
     pm.custom_prompt = "Always reply in up to 5 words."
@@ -262,10 +269,10 @@ def test_custom_prompt_word_rule_priority():
     fourteen_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
     assert len(pm.clean_reply(fourteen_words).split()) == 14
 
-    # 4. Reset custom prompt: returns to default max one line
+    # 4. Reset custom prompt: returns to default natural-length behavior
     pm.reset_custom_prompt()
     assert pm.get_custom_word_limit() is None
-    assert pm.clean_reply("line one\nline two") == "line one"
+    assert pm.clean_reply("line one\nline two") == "line one\nline two"
 
 
 def test_ai_confession_interception():
@@ -289,7 +296,7 @@ def test_conversational_engagement_instruction_in_prompt():
     prompt = pm.build_user_prompt(sender_name="Alex", incoming_text="hii")
     assert "Engagement Rule" in prompt
     assert "conversational, natural, and engaging" in prompt
-    assert "no robotic 1-word shortcuts" in prompt
+    assert "never robotic same-length replies" in prompt
 
 
 def test_fallback_reply_mechanism():
@@ -457,9 +464,9 @@ def test_strict_word_limits_and_hard_cap():
     twelve_words = "hahaha bro you actually did that what a legend will see you tomorrow"
     assert pm.clean_reply(twelve_words) == twelve_words
 
-    # Multi-line responses are kept to MAX ONE LINE
+    # Natural human 2-line splits are kept intact (occasional split thoughts stay human)
     multiline = "sounds good bro 👍\ncheck this other thing out"
-    assert pm.clean_reply(multiline) == "sounds good bro 👍"
+    assert pm.clean_reply(multiline) == multiline
 
     # Excessively long run-on messages (>25 words) are capped for safety
     thirty_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty"
@@ -467,7 +474,7 @@ def test_strict_word_limits_and_hard_cap():
 
 
 def test_ist_time_awareness_and_brevity_instructions_in_prompt():
-    """Verify prompt includes IST time-of-day awareness, MAX ONE LINE rule, and vibe matching."""
+    """Verify prompt includes IST time-of-day awareness, natural-length rule, and vibe matching."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
     prompt = pm.build_user_prompt(sender_name="Alex", incoming_text="good morning")
 
@@ -476,7 +483,10 @@ def test_ist_time_awareness_and_brevity_instructions_in_prompt():
     assert any(period in prompt for period in ("morning", "afternoon", "evening", "night"))
 
     assert "Brevity Rule:" in prompt
-    assert "MAX ONE LINE" in prompt
+    # Natural human length: vary one word → few words → one short line; no useless conversation
+    assert "sometimes ONE word" in prompt
+    assert "2–3 words" in prompt
+    assert "NO USELESS CONVERSATION" in prompt
     assert "humor" in prompt
     assert "vibe" in prompt
     assert "NEVER explain" in prompt

@@ -1517,7 +1517,12 @@ class ReplyManager:
             qh_enabled = self.safety.quiet_hours_enabled
             qh_start, qh_end = self.safety.quiet_hours_window
             is_quiet, _ = self.safety.is_in_quiet_hours()
-            qh_desc = f"ON ({qh_start}–{qh_end}, {'Sleeping 💤' if is_quiet else 'Awake ☀️'})" if qh_enabled else "OFF"
+            _ist = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+            _ist_now = datetime.datetime.now(_ist).strftime("%H:%M")
+            qh_desc = (
+                f"ON ({qh_start}–{qh_end} IST · {'Sleeping 💤' if is_quiet else 'Awake ☀️'} · now {_ist_now} IST)"
+                if qh_enabled else "OFF"
+            )
             min_r_sec = float(self.db.get_state("reaction_min_cooldown_seconds", str(getattr(self.config, "reaction_min_cooldown_seconds", 15.0))))
             max_r_sec = float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(self.config, "reaction_max_cooldown_seconds", 60.0))))
             chat_cd_range = f"{int(self.safety.min_chat_cooldown)}s–{int(self.safety.max_chat_cooldown)}s"
@@ -1612,18 +1617,19 @@ class ReplyManager:
                 qh_enabled = self.safety.quiet_hours_enabled
                 qh_start, qh_end = self.safety.quiet_hours_window
                 is_quiet, _ = self.safety.is_in_quiet_hours()
-                now_str = datetime.datetime.now().strftime("%H:%M")
-                status_title = "ON" if qh_enabled else "OFF (Default)"
+                _ist = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+                now_str = datetime.datetime.now(_ist).strftime("%H:%M")
+                status_title = "ON" if qh_enabled else "OFF"
                 sleep_state = "Sleeping 💤 (Auto-replies & reactions paused)" if is_quiet else "Awake ☀️ (Active)"
                 return (
                     f"🌙 *Quiet Hours (Sleep Schedule):* *{status_title}*\n"
-                    f"• Schedule: `{qh_start}` to `{qh_end}`\n"
-                    f"• Current Local Time: `{now_str}`\n"
-                    f"• Current State: *{sleep_state}*\n\n"
+                    f"　• Schedule: `{qh_start}` → `{qh_end}` *IST* (UTC+5:30)\n"
+                    f"　• Current time: `{now_str} IST`\n"
+                    f"　• State: *{sleep_state}*\n\n"
                     f"*Commands:*\n"
-                    f"• `/quiethours on [start] [end]` - Turn ON (e.g. `/quiethours on 23:00 07:00`)\n"
-                    f"• `/quiethours off` - Turn OFF sleep schedule\n"
-                    f"• `/quiethours <start> <end>` - Update schedule & enable (e.g. `/quiethours 01:00 08:00`)"
+                    f"　• `/quiethours on [start] [end]` — turn ON (e.g. `/quiethours on 23:00 07:00`)\n"
+                    f"　• `/quiethours off` — turn OFF sleep schedule\n"
+                    f"　• `/quiethours <start> <end>` — update schedule & enable (e.g. `/quiethours 01:00 08:00`)"
                 )
 
             sub = cmd_parts[1].lower().strip()
@@ -2128,7 +2134,7 @@ class ReplyManager:
                 f"　• Source: *{mode_str}*\n"
                 f"　• Custom text: {custom_display}\n\n"
                 f"🛡️ *Guardrails*\n"
-                f"　• Anti-AI guardrails: *ACTIVE* — max one line, human conversation, "
+                f"　• Anti-AI guardrails: *ACTIVE* — natural human length (one word to one short line), "
                 f"any Telegram emoji placed naturally, no names/@usernames, no code\n"
                 f"　• Style: `{self.generator.style}` · Language: `{self.generator.language}`\n\n"
                 f"🧠 *Compiled Prompt (sent to AI)*\n"
