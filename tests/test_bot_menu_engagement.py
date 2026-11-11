@@ -166,3 +166,41 @@ def test_allow_and_ban_aliases_route(tmp_path: Path):
     assert "/allowchat" in res  # same usage hint as the real command
     res2 = asyncio.run(mgr.handle_control_command("/ban"))
     assert "/blockchat" in res2
+
+
+# -------------------------------------------------- command engine robustness
+
+
+def test_bare_syncpins_does_not_crash(tmp_path: Path):
+    """Regression: bare /syncpins used to hit a non-existent privacy.allowed_groups
+    attribute and crash (silent no-reply in the bot). It must return a usage hint."""
+    mgr = _make_manager(tmp_path)
+    import asyncio
+
+    res = asyncio.run(mgr.handle_control_command("/syncpins"))
+    assert isinstance(res, str) and res  # answers, never crashes
+    assert "syncpins" in res.lower()
+
+
+def test_every_engine_command_answers_without_args(tmp_path: Path):
+    """Robustness sweep: every command the engine owns must answer (string) even
+    with no arguments — silent None or crashes mean users get ignored in the bot."""
+    import asyncio
+
+    from app.reply_manager import _BOT_COMMAND_NAMES
+
+    mgr = _make_manager(tmp_path)
+    bot_only = {"authlist", "addauth", "removeauth", "grantperm", "revokeperm", "watchdog"}
+    no_answer = []
+    for name in _BOT_COMMAND_NAMES:
+        cmd = name.lstrip("/")
+        if cmd in bot_only:
+            continue  # handled in bot_control, not the shared engine
+        try:
+            res = asyncio.run(mgr.handle_control_command(f"/{cmd}"))
+        except Exception as e:  # noqa: BLE001 - sweep must surface any crash
+            no_answer.append(f"/{cmd} CRASHED: {type(e).__name__}")
+            continue
+        if res is None:
+            no_answer.append(f"/{cmd} returned None")
+    assert not no_answer, f"Commands that failed the no-arg sweep: {no_answer}"

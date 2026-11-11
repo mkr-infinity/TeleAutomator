@@ -1267,7 +1267,7 @@ class ReplyManager:
                     return f"ℹ️ No pinned messages found or accessible for chat `{target_cid}`."
                 except ValueError:
                     return "Error: Chat ID must be an integer."
-            groups = list(self.privacy.allowed_groups)
+            groups = list(self.privacy.get_all_allowed_chats()[1])
             if not groups:
                 return "No allowlisted groups found. Usage: `/syncpins <chat_id>`"
             synced_count = 0
