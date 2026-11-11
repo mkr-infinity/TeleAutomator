@@ -67,6 +67,45 @@ def test_engagement_never_drops_below_floor():
     assert adjust_engagement_for_room_heat(0.01, 0) == 0.02
 
 
+# --------------------------------------------------------- conversation endings
+
+
+def test_thread_ender_detection():
+    from app.event_handlers import is_thread_ender
+
+    # closers: farewells, acknowledgments, laughter, emoji-only
+    assert is_thread_ender("gn")
+    assert is_thread_ender("gn bro")
+    assert is_thread_ender("ok cool")
+    assert is_thread_ender("thanks bro")
+    assert is_thread_ender("hahaha")
+    assert is_thread_ender("🤣")
+    assert is_thread_ender("nice 👍")
+    assert is_thread_ender("yep")
+    assert is_thread_ender("fr fr")
+
+    # real conversation: questions, statements, greetings — never thread enders
+    assert not is_thread_ender("you coming tonight?")
+    assert not is_thread_ender("good morning everyone")
+    assert not is_thread_ender("what are you working on")
+    assert not is_thread_ender("nice one bro")  # 'one' makes it a real statement
+    assert not is_thread_ender("can you check the deploy when you wake up")
+    assert not is_thread_ender("")
+
+
+def test_thread_end_policy_thresholds():
+    from app.event_handlers import decide_thread_end_action
+
+    # groups: small reaction chance, otherwise the thread dies
+    assert decide_thread_end_action(is_group=True, roll=0.10) == "reaction"
+    assert decide_thread_end_action(is_group=True, roll=0.50) == "silent"
+
+    # DMs: tiny ack sometimes, reaction sometimes, often left on read
+    assert decide_thread_end_action(is_group=False, roll=0.20) == "reply"
+    assert decide_thread_end_action(is_group=False, roll=0.50) == "reaction"
+    assert decide_thread_end_action(is_group=False, roll=0.80) == "silent"
+
+
 # ---------------------------------------------------------------- context always
 
 

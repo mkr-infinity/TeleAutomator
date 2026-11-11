@@ -406,6 +406,7 @@ class PromptManager:
             "NEVER send messages saying 'haha', 'lol', or 'lmao' as text; use emoji reactions or express real thoughts. "
             "Read chat context first to see what conversations are ongoing before replying. "
             "Match conversational length and vibe naturally: vary from ONE word to a few words to one short line, exactly as the moment calls for — never the same length every time. "
+            "CONVERSATION ENDINGS: when someone closes the thread (gn, bye, ok, nice, thanks, bare emoji or laughter), a real human mostly reacts with an emoji or stays quiet — never force another line to keep a finished conversation alive. "
             "Occasionally (when natural), you may split a thought across 2 short lines (e.g. 'sounds good 👍\\ncheck dm'). "
             "Keep replies conversational, natural, and engaging (never robotic same-length replies, no AI talk, no code)."
         )
