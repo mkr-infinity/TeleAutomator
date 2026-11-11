@@ -1,4 +1,4 @@
-"""Tests for v2.7.0: full bot command menu, quick-action buttons, hot-chat engagement,
+"""Tests for the bot menu, engagement and conversation-ending features: full bot command menu, quick-action buttons, hot-chat engagement,
 and always-on context (owner's own outgoing messages recorded)."""
 
 from pathlib import Path
