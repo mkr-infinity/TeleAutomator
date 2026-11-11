@@ -5,9 +5,11 @@ from __future__ import annotations
 import re
 import sys
 
-BANNER_TEXT = """
+from app import __version__
+
+_BANNER_TEMPLATE = """
 \033[1;36m========================================================================================\033[0m
-\033[1;32m  TeleAutomator - Telegram Chat Automation v2.0.6\033[0m
+\033[1;32m  TeleAutomator - Telegram Chat Automation v{version}\033[0m
 \033[1;30m  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\033[0m
   \033[1;35m"Your Telegram account, powered by AI. 🤖"\033[0m
 
@@ -31,10 +33,11 @@ BANNER_TEXT = """
 
 
 def print_banner() -> None:
-    """Print the professional startup banner to stdout."""
+    """Print the professional startup banner to stdout (version always from app.__version__)."""
+    text = _BANNER_TEMPLATE.format(version=__version__)
     if hasattr(sys.stdout, "isatty") and sys.stdout.isatty():
-        sys.stdout.write(BANNER_TEXT + "\n")
+        sys.stdout.write(text + "\n")
     else:
-        clean = re.sub(r"\033\[[0-9;]*m", "", BANNER_TEXT)
+        clean = re.sub(r"\033\[[0-9;]*m", "", text)
         sys.stdout.write(clean + "\n")
     sys.stdout.flush()

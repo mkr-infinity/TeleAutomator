@@ -30,6 +30,7 @@ _BOT_COMMAND_NAMES = (
     "/quotathreshold", "/quotaalert", "/addrule", "/delrule", "/rules", "/chats", "/allowchat", "/removechat",
     "/blockchat", "/mentiononly", "/contextttl", "/clearcontext", "/syncpins", "/setcontext", "/showcontext",
     "/delcontext", "/backup", "/pending", "/approve", "/reject", "/name", "/prompt", "/setprompt", "/chatty",
+    "/safemode",
 )
 
 try:
@@ -1073,7 +1074,7 @@ class ReplyManager:
                 f"_Use `/allowchat <id>` to add, or `/removechat <id>` to remove._"
             )
 
-        if cmd == "/allowchat":
+        if cmd in ("/allowchat", "/allow"):
             if len(cmd_parts) < 2:
                 return "Usage: `/allowchat <chat_id>` (e.g. `/allowchat 123456789` or `/allowchat -1001234567890`)"
             try:
@@ -1123,7 +1124,7 @@ class ReplyManager:
             except ValueError:
                 return "Error: Chat ID must be an integer."
 
-        if cmd == "/blockchat":
+        if cmd in ("/blockchat", "/ban"):
             if len(cmd_parts) < 2:
                 return "Usage: `/blockchat <chat_id>`"
             try:

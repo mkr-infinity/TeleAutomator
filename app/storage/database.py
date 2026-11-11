@@ -314,7 +314,8 @@ class Database:
                 """,
                 (chat_id, message_id, sender_id, sender_name, truncated_text, 1 if is_outgoing else 0),
             )
-            # Lightweight automatic pruning: cap at 20 messages per chat
+            # Lightweight automatic pruning: keep a deep-enough history per chat for
+            # the 40-message group prompt window (with room to spare), cap the rest
             conn.execute(
                 """
                 DELETE FROM chat_messages
@@ -322,11 +323,23 @@ class Database:
                     SELECT id FROM chat_messages
                     WHERE chat_id = ?
                     ORDER BY id DESC
-                    LIMIT 20
+                    LIMIT 60
                 )
                 """,
                 (chat_id, chat_id),
             )
+
+    def has_chat_message(self, chat_id: int, message_id: Optional[int]) -> bool:
+        """Whether a message (chat_id, message_id) is already cached — used to avoid
+        overwriting automation-recorded outgoing messages with generic event data."""
+        if not message_id:
+            return False
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM chat_messages WHERE chat_id = ? AND message_id = ? LIMIT 1",
+                (chat_id, message_id),
+            ).fetchone()
+        return bool(row)
 
     def record_token_usage(
         self, provider: str, model: str, prompt_tokens: int, completion_tokens: int, total_tokens: int

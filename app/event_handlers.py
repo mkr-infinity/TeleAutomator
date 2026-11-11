@@ -15,6 +15,45 @@ from app.reply_manager import ReplyManager
 logger = setup_logger(__name__)
 
 
+def adjust_engagement_for_room_heat(base_prob: float, recent_messages: int) -> float:
+    """Scale group chime-in probability by how active the room is (5-minute window).
+
+    A present human talks more when the room is buzzing and stays quiet when it is
+    dead — engaging without ever becoming spammy:
+    - busy room (>=3 recent messages): boost by 1.4x, capped at 0.55
+    - dead room (<=1 recent message): dampen to 0.6x (floor 0.02)
+    """
+    if recent_messages >= 3:
+        return min(0.55, base_prob * 1.4)
+    if recent_messages <= 1:
+        return max(0.02, base_prob * 0.6)
+    return base_prob
+
+
+def record_own_outgoing_message(reply_manager: ReplyManager, event: Any, my_user_id: int) -> None:
+    """Record the owner's own manually-typed messages into chat history so the AI always
+    knows what they personally said. The automation's own replies are already recorded by
+    ReplyManager with proper attribution — those are skipped via the (chat_id, message_id)
+    existence check so the event handler never overwrites them with generic data."""
+    chat_id = getattr(event, "chat_id", None)
+    text = (getattr(event, "raw_text", "") or "").strip()
+    if chat_id is None or not text:
+        return
+    if reply_manager.db.has_chat_message(chat_id, getattr(event, "id", None)):
+        return
+    try:
+        reply_manager.db.record_chat_message(
+            chat_id=chat_id,
+            message_id=getattr(event, "id", None) or 0,
+            sender_id=my_user_id,
+            sender_name="You",
+            text=text,
+            is_outgoing=True,
+        )
+    except Exception:
+        pass
+
+
 def register_handlers(
     client: Any,
     my_user_id: int,
@@ -54,6 +93,11 @@ def register_handlers(
                     except Exception as e2:
                         logger.error(f"Failed to deliver command response to Saved Messages: {e2}")
             return
+
+        # Context continuity: always record the owner's own manually-typed outgoing messages
+        # so the AI remembers what the account itself said (not just what it received).
+        if getattr(event, "out", False) and not is_saved_messages:
+            record_own_outgoing_message(reply_manager, event, my_user_id)
 
         # Regular incoming message handling
         is_eligible, reason = message_filter.evaluate(event)
@@ -197,6 +241,16 @@ def register_handlers(
                 is_relevant = reply_manager.is_group_message_relevant(chat_id, text, chat_title)
                 # If message is relevant to group topic or discussion, boost engagement
                 effective_prob = max(chatty_prob, 0.40) if is_relevant else chatty_prob
+
+                # Hot-chat adaptive engagement: talk more when the room is buzzing,
+                # stay quiet when it is dead — active but never spammy.
+                try:
+                    recent_active = len(reply_manager.db.get_recent_chat_messages(
+                        chat_id, limit=6, max_age_seconds=300
+                    ))
+                except Exception:
+                    recent_active = 0
+                effective_prob = adjust_engagement_for_room_heat(effective_prob, recent_active)
 
                 # If replying to another member specifically, slightly moderate chime-in rate unless relevant
                 if is_reply_to_other and not is_relevant:
