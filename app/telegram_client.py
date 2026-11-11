@@ -15,6 +15,7 @@ from telethon.errors import (
 )
 
 from app.config import AppConfig
+from app import __version__
 from app.event_handlers import register_handlers
 from app.health import HealthMonitor
 from app.logger import setup_logger
@@ -146,7 +147,7 @@ class TelegramService:
                 mod = self.db.get_state("ai_model", self.config.ai_model or "default")
 
                 welcome_msg = (
-                    f"👋 *Welcome to TeleAutomator v2.0.6*\n"
+                    f"👋 *Welcome to TeleAutomator v{__version__}*\n"
                     f"_Personal AI Assistant for {owner_name}_\n\n"
                     f"━━━━━━━━━━━━━━━━━━━━━\n"
                     f"📱 *Account Connection*\n"
@@ -199,6 +200,12 @@ class TelegramService:
                 await self.reply_manager.check_pause_expiry()
             except Exception as e:
                 logger.debug(f"Pause expiry check error: {e}")
+
+            # Safe-mode boot guard: restore the real mode once the process proves stable
+            try:
+                await self.reply_manager.maybe_recover_safe_mode()
+            except Exception as e:
+                logger.debug(f"Safe-mode recovery check error: {e}")
 
             # Every 4 hours, hard-delete cached chat messages older than the context TTL window
             now = time.monotonic()

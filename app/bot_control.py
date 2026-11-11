@@ -69,6 +69,114 @@ REMOVED_NOTICE = (
     "Contact the project owner if you believe this is a mistake."
 )
 
+# Complete command menu published via setMyCommands — every command the bot understands,
+# beautifully described. Telegram allows up to 100; we register all of them so typing '/'
+# always shows the full structured toolbox.
+BOT_COMMAND_MENU: list[dict] = [
+    # -- Overview & control --
+    {"command": "start", "description": "🚀 Guided tour — help menu + live status"},
+    {"command": "help", "description": "📖 Full command reference, grouped by section"},
+    {"command": "status", "description": "📊 Live status — mode, AI engine, chat rules, safe-mode"},
+    {"command": "mode", "description": "🔁 Reply mode — /mode draft|approval|restricted_auto"},
+    {"command": "pause", "description": "⏸️ Pause automation — /pause <minutes|30m|2h|90s>"},
+    {"command": "resume", "description": "▶️ Resume automation after a pause"},
+    {"command": "stop", "description": "🛑 Emergency stop — halts all replies instantly"},
+    {"command": "auto", "description": "⚡ Restricted-auto authorization — /auto on|off"},
+    {"command": "safemode", "description": "🛡️ Crash-loop guard status — draft-mode protection info"},
+    {"command": "watchdog", "description": "🐕 Crash-alert threshold — /watchdog <minutes> (default 5)"},
+    # -- Persona & language --
+    {"command": "prompt", "description": "🎭 AI persona — /prompt <text> to set · bare /prompt to view"},
+    {"command": "setprompt", "description": "🎭 Set persona directly — /setprompt <text> · `/setprompt default` resets"},
+    {"command": "name", "description": "👤 Owner identity name the AI texts as — /name <name>"},
+    {"command": "style", "description": "🎨 AI style — /style casual|concise|formal|humorous"},
+    {"command": "styles", "description": "🗂️ List per-chat style overrides"},
+    {"command": "lang", "description": "🌐 Reply language — /lang dynamic|english|hindi|..."},
+    {"command": "chatty", "description": "💬 Group banter rate 0-100 — /chatty <percent>"},
+    # -- AI engine --
+    {"command": "aiconfig", "description": "🤖 AI engine dashboard — provider, model, temperature"},
+    {"command": "setai", "description": "⚙️ 1-step AI setup — /setai <provider> <key>"},
+    {"command": "apikey", "description": "🔑 Set AI API key — /apikey <key>"},
+    {"command": "provider", "description": "🔌 Switch AI engine — /provider custom|gemini|openai|nvidia|local"},
+    {"command": "model", "description": "🧠 Set model or fallback chain — /model <name[,name2]>"},
+    {"command": "baseurl", "description": "🔗 Custom API endpoint — /baseurl <url>"},
+    {"command": "checkmodels", "description": "📡 Ping candidate models live & pick working ones"},
+    {"command": "thinking", "description": "🧩 Reasoning effort — /thinking default|low|medium|high|off"},
+    {"command": "temp", "description": "🌡️ AI creativity — /temp <0.0-1.0>"},
+    {"command": "maxtokens", "description": "📏 Max output tokens — /maxtokens <tokens>"},
+    {"command": "usage", "description": "📈 Token tracker — daily use & free-quota remaining"},
+    {"command": "quotathreshold", "description": "⚠️ Daily token warning limit — /quotathreshold <tokens>"},
+    {"command": "quotaalert", "description": "🔔 Daily quota warnings — /quotaalert on|off"},
+    # -- Human behavior sim --
+    {"command": "reaction", "description": "❤️ Auto-reactions — /reaction on|off"},
+    {"command": "reactioncooldown", "description": "⏱️ Reaction cooldown — /reactioncooldown <min> <max> seconds"},
+    {"command": "ownreact", "description": "💬 Reactions to own replies — /ownreact on|off"},
+    {"command": "chatcooldown", "description": "⏳ Per-chat reply cooldown — /chatcooldown <min> <max> seconds"},
+    {"command": "globalcooldown", "description": "🌐 Global reply cooldown — /globalcooldown <min> <max> seconds"},
+    {"command": "ratelimit", "description": "🚦 Anti-spam burst limit — /ratelimit <replies/min>"},
+    {"command": "editfix", "description": "✏️ Typo-then-edit simulation — /editfix on|off"},
+    {"command": "typo", "description": "🔤 Natural typo + correction follow-up — /typo on|off"},
+    {"command": "followup", "description": "➕ Spontaneous delayed follow-ups — /followup on|off"},
+    {"command": "debounce", "description": "🧵 Stitch rapid incoming bursts — /debounce on|off|<seconds>"},
+    {"command": "multibubble", "description": "🫧 Multi-bubble reply splitting — /multibubble on|off"},
+    {"command": "quiethours", "description": "🌙 Sleep schedule (IST) — /quiethours on|off HH:MM HH:MM"},
+    {"command": "sleep", "description": "😴 Good-night shortcut — pauses automation till morning — /sleep [hours]"},
+    # -- Chats & context --
+    {"command": "chats", "description": "📋 Allowlisted contacts & groups table"},
+    {"command": "allowchat", "description": "➕ Allowlist a chat — /allowchat <chat_id>"},
+    {"command": "allow", "description": "➕ Alias of /allowchat — /allow <chat_id>"},
+    {"command": "removechat", "description": "➖ Remove chat from allowlist — /removechat <chat_id>"},
+    {"command": "blockchat", "description": "🚫 Block a chat ID — /blockchat <chat_id>"},
+    {"command": "ban", "description": "🚫 Alias of /blockchat — /ban <chat_id>"},
+    {"command": "mentiononly", "description": "🎯 Group safety — reply only when mentioned — /mentiononly on|off"},
+    {"command": "contextttl", "description": "⏳ Context aging window — /contextttl <hours>"},
+    {"command": "clearcontext", "description": "🧹 Reset cached AI context — /clearcontext <chat_id>"},
+    {"command": "syncpins", "description": "📌 Sync pinned messages into permanent context — /syncpins [chat_id]"},
+    {"command": "setcontext", "description": "📝 Save permanent notes for a group — /setcontext <chat_id> <notes>"},
+    {"command": "showcontext", "description": "👁️ View permanent context — /showcontext <chat_id>"},
+    {"command": "delcontext", "description": "🗑️ Delete permanent context — /delcontext <chat_id>"},
+    # -- Custom keyword rules --
+    {"command": "addrule", "description": "📜 Keyword auto-reply — /addrule <word> => <reply>"},
+    {"command": "delrule", "description": "🗑️ Delete keyword rule — /delrule <word>"},
+    {"command": "rules", "description": "📚 List active keyword rules"},
+    # -- Approvals --
+    {"command": "pending", "description": "📝 List drafts waiting for approval"},
+    {"command": "approve", "description": "✅ Approve a pending draft — /approve <id>"},
+    {"command": "reject", "description": "❌ Reject a pending draft — /reject <id>"},
+    # -- Data & maintenance --
+    {"command": "backup", "description": "💾 Backup database & settings — /backup <directory>"},
+    # -- Access management (main owner) --
+    {"command": "authlist", "description": "👥 Authorized users & their permissions"},
+    {"command": "addauth", "description": "👤 Add authorized user — /addauth <user_id>"},
+    {"command": "removeauth", "description": "👋 Remove authorized user — /removeauth <user_id>"},
+    {"command": "grantperm", "description": "🔑 Restrict user to commands — /grantperm <user_id> all|/status,/prompt"},
+    {"command": "revokeperm", "description": "🔓 Remove user command restrictions — /revokeperm <user_id>"},
+]
+
+
+def quick_menu_markup() -> dict:
+    """Inline quick-action keyboard attached to key cards (welcome, /start, /status, /help).
+    Callbacks arrive as 'cmd:<command>' and are routed through the normal command engine."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "📊 Status", "callback_data": "cmd:/status"},
+                {"text": "📝 Pending", "callback_data": "cmd:/pending"},
+            ],
+            [
+                {"text": "⏸ Pause 30m", "callback_data": "cmd:/pause 30"},
+                {"text": "▶️ Resume", "callback_data": "cmd:/resume"},
+            ],
+            [
+                {"text": "🛡 Safe-mode", "callback_data": "cmd:/safemode"},
+                {"text": "🤖 AI Config", "callback_data": "cmd:/aiconfig"},
+            ],
+            [
+                {"text": "📋 Chats", "callback_data": "cmd:/chats"},
+                {"text": "📖 Help", "callback_data": "cmd:/help"},
+            ],
+        ]
+    }
+
 
 class BotControl:
     """Async Telegram Bot API client with long-poll command routing."""
@@ -153,11 +261,14 @@ class BotControl:
                 logger.warning(f"Bot getMe failed: {e}")
         return self._me_cache or {}
 
-    async def send_message(self, chat_id: int, text: str, parse_markdown: bool = True) -> bool:
-        """Send a message via the Bot API (primary parse mode Markdown, HTML fallback)."""
+    async def send_message(self, chat_id: int, text: str, parse_markdown: bool = True, reply_markup: Optional[dict] = None) -> bool:
+        """Send a message via the Bot API (primary parse mode Markdown, HTML fallback).
+        `reply_markup` optionally attaches an inline keyboard (quick-action buttons)."""
         payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
         if parse_markdown:
             payload["parse_mode"] = "Markdown"
+        if reply_markup is not None:
+            payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
         try:
             result = await self._call("sendMessage", payload)
             if result.get("ok"):
@@ -166,7 +277,7 @@ class BotControl:
             logger.debug(f"Bot sendMessage failed for {chat_id}: {e}")
         # Fallback: retry as plain text (unparseable markdown entities are the usual cause)
         if parse_markdown:
-            return await self.send_message(chat_id, text, parse_markdown=False)
+            return await self.send_message(chat_id, text, parse_markdown=False, reply_markup=reply_markup)
         try:
             await self._call("sendMessage", {"chat_id": chat_id, "text": text, "parse_mode": "HTML"})
             return True
@@ -175,32 +286,10 @@ class BotControl:
             return False
 
     async def register_commands(self) -> None:
-        """Publish the command menu (type '/' in the bot to get descriptions + usage)."""
-        commands = [
-            {"command": "status", "description": "Show current automation status, mode and settings"},
-            {"command": "mode", "description": "Set reply mode — usage /mode draft|approval|restricted_auto"},
-            {"command": "pause", "description": "Pause auto-replies — usage /pause <minutes>"},
-            {"command": "resume", "description": "Resume auto-replies after a pause"},
-            {"command": "prompt", "description": "Set custom AI persona — usage /prompt <your prompt here>"},
-            {"command": "style", "description": "Set AI style — usage /style casual|concise|formal|humorous"},
-            {"command": "quiet", "description": "Quiet hours — usage /quiet on|off HH:MM HH:MM"},
-            {"command": "cooldown", "description": "Global reply cooldown — usage /cooldown <seconds>"},
-            {"command": "editfix", "description": "Toggle self-typo-then-edit fix — usage /editfix on|off"},
-            {"command": "ownreact", "description": "Toggle reactions on own replies — usage /ownreact on|off"},
-            {"command": "approve", "description": "Approve pending draft — usage /approve <id>"},
-            {"command": "reject", "description": "Reject pending draft — usage /reject <id>"},
-            {"command": "allow", "description": "Allowlist a chat — usage /allow <chat_id>"},
-            {"command": "ban", "description": "Remove chat — usage /ban <chat_id>"},
-            {"command": "authlist", "description": "List users authorized for this control bot (names + permissions)"},
-            {"command": "addauth", "description": "Add an authorized user (main owner only) — usage /addauth <user_id>"},
-            {"command": "removeauth", "description": "Remove an authorized user (main owner only) — usage /removeauth <user_id>"},
-            {"command": "grantperm", "description": "Limit a user to specific commands — usage /grantperm <user_id> all|/status,/prompt"},
-            {"command": "revokeperm", "description": "Remove user command restrictions — usage /revokeperm <user_id>"},
-            {"command": "watchdog", "description": "Set crash-alert threshold — usage /watchdog <minutes> (default 5)"},
-        ]
+        """Publish the FULL command menu (type '/' in the bot to get every command + description)."""
         result = await self._call(
             "setMyCommands",
-            {"commands": json.dumps(commands, ensure_ascii=False)},
+            {"commands": json.dumps(BOT_COMMAND_MENU, ensure_ascii=False)},
         )
         if not result.get("ok"):
             logger.warning(f"Bot setMyCommands failed: {result}")
@@ -276,7 +365,7 @@ class BotControl:
             "⌨️ Type */* for the command menu, or */start* for a guided tour\n\n"
             "_Your personal account stays clean — this bot is your control room._"
         )
-        await self.send_alert(card)
+        await self.send_alert(card, reply_markup=quick_menu_markup())
 
     async def _watchdog_check(self) -> None:
         """Alert the main owner when the main process heartbeat goes stale (silent crash /
@@ -356,11 +445,11 @@ class BotControl:
         parts = text.split()
         lowered = text.lower()
         if lowered.startswith("/start"):
-            await self.send_message(chat_id, BOT_COMMAND_HELP)
+            await self.send_message(chat_id, BOT_COMMAND_HELP, reply_markup=quick_menu_markup())
             try:
                 response = await self.reply_manager.handle_control_command("/status")
                 if response:
-                    await self.send_message(chat_id, response)
+                    await self.send_message(chat_id, response, reply_markup=quick_menu_markup())
             except Exception as e:
                 logger.debug(f"Could not send status on /start: {e}")
             return
@@ -482,7 +571,10 @@ class BotControl:
         if response:
             if len(response) > 4000:
                 response = response[:4000] + "\n…"
-            await self.send_message(chat_id, response)
+            # Key overview commands get the inline quick-action keyboard
+            root_cmd = text.strip().split()[0].lower().split("@")[0]
+            markup = quick_menu_markup() if root_cmd in ("/status", "/help") else None
+            await self.send_message(chat_id, response, reply_markup=markup)
 
     def _user_can(self, user_id: int, raw_command: str) -> bool:
         """Check this user's granted command list ('all' or trailing-specific commands like /prompt)."""
@@ -507,13 +599,53 @@ class BotControl:
         await self.send_message(chat_id, "👥 *Authorized users:*\n" + "\n".join(lines))
 
     async def _handle_callback(self, cb: dict) -> None:
-        """Approval inline buttons: ✅ approve / ❌ reject a pending draft."""
+        """Inline button callbacks: ✅/❌ approval cards + cmd:<command> quick-menu buttons."""
         user_id = int((cb.get("from") or {}).get("id") or 0)
         data = cb.get("data") or ""
         cb_id = cb.get("id")
         if not self.is_authorized(user_id):
             await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "Not authorized 🔒"})
             return
+
+        # Quick-menu buttons: route the embedded command through the normal engine,
+        # then refresh the card in place so the chat stays clean.
+        if data.startswith("cmd:"):
+            command = data[4:].strip()
+            message = cb.get("message") or {}
+            chat_id = message.get("chat", {}).get("id")
+            msg_id = message.get("message_id")
+            if not command.startswith("/") or not chat_id:
+                await self._call("answerCallbackQuery", {"callback_query_id": cb_id})
+                return
+            if not (self.is_main_user(user_id) or self._user_can(user_id, command)):
+                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "⛔ Not permitted for your account."})
+                return
+            response = await self.reply_manager.handle_control_command(command) or "Done."
+            await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": response[:180], "show_alert": False})
+            new_text = f"⚡ *{command.split()[0]}* →\n\n{response[:3500]}"
+            edited = await self._call(
+                "editMessageText",
+                {
+                    "chat_id": chat_id,
+                    "message_id": msg_id,
+                    "text": new_text,
+                    "parse_mode": "Markdown",
+                    "reply_markup": json.dumps(quick_menu_markup(), ensure_ascii=False),
+                },
+            )
+            if not edited.get("ok"):
+                # Markdown entity failure fallback: edit as plain text
+                await self._call(
+                    "editMessageText",
+                    {
+                        "chat_id": chat_id,
+                        "message_id": msg_id,
+                        "text": new_text,
+                        "reply_markup": json.dumps(quick_menu_markup(), ensure_ascii=False),
+                    },
+                )
+            return
+
         if data not in ("approve", "reject") and ":" not in data:
             await self._call("answerCallbackQuery", {"callback_query_id": cb_id})
             return
@@ -563,13 +695,13 @@ class BotControl:
                 logger.info(f"Bot: ignoring unauthorized user {user_id} (spammer) until authorized.")
             self.db.set_state(key, str(strikes))
 
-    async def send_alert(self, text: str) -> bool:
+    async def send_alert(self, text: str, reply_markup: Optional[dict] = None) -> bool:
         """Route project alerts to the main account owner."""
         main_id = self.main_user_id
         if not main_id:
             logger.warning("Bot send_alert: no main user configured; alert dropped.")
             return False
-        return await self.send_message(main_id, text)
+        return await self.send_message(main_id, text, reply_markup=reply_markup)
 
     async def send_approval_card(self, text: str, approval_id: int) -> bool:
         """Send an approval notification with ✅/❌ inline buttons (suggestion #2)."""
