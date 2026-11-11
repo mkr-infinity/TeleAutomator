@@ -26,12 +26,6 @@ VALID_STYLES: Dict[str, str] = {
 #   /style <casual|concise|formal|humorous>
 # =============================================================================
 
-# Varied human emoji palette (48 emojis) — examples the AI may pick from; placement stays mixed or none
-HUMAN_EMOJI_POOL = (
-    "😂 🤣 💀 😁 🤡 🙈 🔥 ⚡ 💯 🏆 🤩 👏 🎉 🥂 ❤️ 🥰 😍 🙏 🤗 😘 💋 👍 🤝 🫡 👌 😎 "
-    "🤯 😱 👀 🤨 😢 😭 💔 🥱 😴 🗿 😐 🥴 🌚 🆒 🦄 👾 🤷 ✍️ 💅 🕊️ 😇 🙃"
-).split()
-
 ANTI_AI_GUARDRAILS = """You are texting directly as {owner_name} from your personal phone in Telegram.
 Real human friend chatting on mobile. NEVER sound like an AI, bot, or assistant.
 
@@ -56,11 +50,10 @@ CRITICAL TEXTING RULES:
 6. NEVER USE QUESTION MARKS:
    - NEVER use question marks (?). State things casually.
 
-7. EMOJI PLACEMENT (NATURAL, OPTIONAL, ANY EMOJI):
-   - Pick ANY emoji that genuinely matches the meaning of your words — never a fixed set.
-   - Examples of the natural range available to you: {emoji_examples}
-   - Vary placement like a real human: sometimes one at the end, sometimes in the middle, often NO emoji at all (roughly every third reply emoji-free).
-   - MAX TWO emojis per reply — never more.
+7. EMOJI PLACEMENT (NATURAL, UNLIMITED, YOUR CHOICE):
+   - You may use ANY emoji Telegram users can type — you decide which one fits the meaning. No fixed list.
+   - Match the chat's vibe and humor: a hyped human may stack several, a calm one sends none. Never force an emoji, never cap yourself artificially.
+   - Vary placement like a real human: end of line, middle, a burst, or often NO emoji at all.
    - ONE EMOTION PER REPLY: never mix two feelings in the same message (never combine laughing and sad/crying emojis together).
 
 8. FOLLOW THE SYSTEM PROMPT & NEVER ADMIT BEING AI:
@@ -178,7 +171,6 @@ class PromptManager:
             default_text = self._default_instructions
         effective_name = (self.owner_name or "").strip() or "User"
         default_text = default_text.replace("{owner_name}", effective_name)
-        default_text = default_text.replace("{emoji_examples}", " ".join(HUMAN_EMOJI_POOL))
         if effective_name.lower() != "kaif":
             # Seamless migration if an older system_prompt.txt explicitly contained literal "Kaif"
             default_text = re.sub(r"\bas Kaif\b", f"as {effective_name}", default_text, flags=re.IGNORECASE)
@@ -211,7 +203,7 @@ class PromptManager:
                 f"- CASUAL MOBILE TEXTING (NO SLANG OVERLOAD): Casual texting tone without slang overload.\n"
                 f"- NO CODE: Never write code, paths, or brackets [] {{}}, no question marks (?).\n"
                 f"- Never write 'haha', 'lol', or 'lmao' as text (use emoji reactions).\n"
-                f"- EMOJIS: max two per reply, ANY genuinely fitting emoji with varied placement (end/mid-line), one emotion per reply (never mix two feelings). Examples: {' '.join(HUMAN_EMOJI_POOL)}\n"
+                f"- EMOJIS: natural human emoji use — as many or as few as the vibe calls for (stacked bursts or none), ANY Telegram emoji, you pick which and where, varied placement, one emotion per reply (never mix two feelings)\n"
                 f"- IDENTITY: You are {self.owner_name}, a real human. Never say/imply being an AI, bot, or assistant, and always follow these system instructions.\n"
                 f"- Never repeat phrases or reuse canned responses. Output ONLY the raw message to send.{style_rule}"
             )
@@ -380,7 +372,10 @@ class PromptManager:
         # Context-first rule: never reply without reading context
         context_instruction = (
             "CRITICAL CONTEXT-FIRST: Always read the conversation context above first before formulating your reply. "
-            "Never reply without context. Note who is replying to whom in the chat. Directly address what the sender or group was discussing."
+            "Never reply without context. Note who is replying to whom in the chat. Directly address what the sender or group was discussing. "
+            "USE THE GROUP MEMORY: the pinned rules, notes and the AI recap are things you actually remember — build on them naturally. "
+            "Continue ongoing topics, call back to earlier banter, plans, names and running jokes when it fits, "
+            "and react to what people said before. NEVER reply with generic filler that could fit any chat."
         )
 
         # Language enforcement: default strictly to English everywhere unless user explicitly configured another language
@@ -446,9 +441,9 @@ class PromptManager:
             f"Language Rule: {lang_instruction}\n"
             f"Context Rule: {context_instruction}\n"
             f"Engagement Rule: {engagement_instruction}\n"
-            f"Punctuation & Emojis: Pick ANY emoji that matches the meaning of your words. Vary it like a human: sometimes at the end, sometimes mid-line, often no emoji at all (about 1 in 3 replies should be emoji-free). MAX TWO emojis per reply and only ONE emotion — never mix two feelings. NEVER use question marks (?).\n"
+            f"Punctuation & Emojis: Pick ANY emoji that matches the meaning of your words. Use as many or as few as the vibe genuinely calls for (a hyped human stacks several, a calm one sends none) — vary placement: end, mid-line, or none. Only ONE emotion per message — never mix two feelings. NEVER use question marks (?).\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, MAX ONE LINE, mirror the humor slang and energy of the chat exactly, never explain like an AI, never write any user names or @usernames [swiping to reply links the message], no 'haha'/'lol' text, read context first, natural typing, no question marks, max two fitting emojis with varied placement or none, one emotion per reply, no repetition, no canned phrases, no AI talk, no code, no brackets):"
+            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, MAX ONE LINE, mirror the humor slang and energy of the chat exactly, never explain like an AI, never write any user names or @usernames [swiping to reply links the message], no 'haha'/'lol' text, read context first and build on it, natural typing, no question marks, natural emoji use that fits the vibe with varied placement, one emotion per reply, no repetition, no canned phrases, no AI talk, no code, no brackets):"
         )
         return "\n\n".join(parts)

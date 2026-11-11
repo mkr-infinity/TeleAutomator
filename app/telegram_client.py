@@ -200,6 +200,12 @@ class TelegramService:
             except Exception as e:
                 logger.debug(f"Pause expiry check error: {e}")
 
+            # Safe-mode boot guard: restore the real mode once the process proves stable
+            try:
+                await self.reply_manager.maybe_recover_safe_mode()
+            except Exception as e:
+                logger.debug(f"Safe-mode recovery check error: {e}")
+
             # Every 4 hours, hard-delete cached chat messages older than the context TTL window
             now = time.monotonic()
             if now - self._last_context_purge >= 14400.0:

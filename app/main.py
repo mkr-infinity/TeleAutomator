@@ -45,6 +45,15 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
     # Initialize storage & managers
     db = Database(config.data_dir / "app.db")
 
+    # Safe-mode boot guard: hold automation in draft if the process is crash-looping
+    try:
+        from app.boot_guard import record_boot_and_maybe_safe_mode
+        boot_status = record_boot_and_maybe_safe_mode(db, config)
+        if boot_status == "safe-mode":
+            logger.warning("Safe mode engaged: starting in draft mode until the process proves stable.")
+    except Exception as e:
+        logger.warning(f"Boot guard error (continuing normally): {e}")
+
     # Apply runtime CLI overrides if provided
     if mode_override:
         config.reply_mode = mode_override

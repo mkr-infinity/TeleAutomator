@@ -1,7 +1,7 @@
 """Tests for PromptManager and ReplyGenerator."""
 
 from pathlib import Path
-from app.ai.prompt_manager import PromptManager, VALID_STYLES, HUMAN_EMOJI_POOL
+from app.ai.prompt_manager import PromptManager, VALID_STYLES
 from app.ai.reply_generator import ReplyGenerator
 from app.ai.provider import LocalRuleProvider
 from app.config import AppConfig
@@ -65,11 +65,15 @@ def test_prompt_clean_reply_and_anti_robotic():
 
 
 def test_emoji_rule_varied_placement():
-    """Emoji rules instruct varied placement (end/mid/none), any emoji, no fixed set."""
-    assert len(HUMAN_EMOJI_POOL) >= 30
+    """Emoji rules instruct varied placement (end/mid/none), ANY Telegram emoji, no fixed set."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
     prompt = pm.build_user_prompt(sender_name="Alice", incoming_text="where should we meet")
-    assert "emoji-free" in prompt
+    sys_inst = pm.system_instructions
+    assert "as many or as few" in prompt.lower()
+    assert "ANY emoji Telegram users can type" in sys_inst
+    # No fixed emoji list may be injected into the prompt anymore
+    assert "😂 🤣 💀" not in prompt
+    assert "😂 🤣 💀" not in sys_inst
     # The old fixed 8-emoji list must be gone
     assert "😂, 👍, 🔥, 👀, 🤝, 💀, 💯, ❤️" not in prompt
 
@@ -416,16 +420,21 @@ def test_clean_reply_suppresses_none_and_word_repetition():
 
 
 def test_natural_emoji_rule_and_active_group_engagement():
-    """Verify the varied any-emoji rule and active group engagement instructions are in prompt."""
+    """Verify the unlimited natural emoji rule and active group engagement instructions are in prompt."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
     prompt = pm.build_user_prompt(sender_name="Alex", incoming_text="anyone working on the bot", is_group=True)
+    sys_inst = pm.system_instructions
 
-    assert "emoji-free" in prompt
+    assert "as many or as few" in prompt.lower()
     assert "any emoji" in prompt.lower()
-    assert "often no emoji" in prompt.lower()
-    # Max two emojis per reply, single emotion per reply
-    assert "MAX TWO" in prompt
-    assert "one emotion" in prompt
+    assert "often NO emoji at all" in sys_inst
+    # Emoji use is no longer capped — the old MAX TWO rule must be gone
+    assert "MAX TWO" not in prompt
+    assert "MAX TWO" not in sys_inst
+    assert "one emotion" in prompt.lower()
+    # Context continuity: the reply must build on saved group memory, never generic filler
+    assert "USE THE GROUP MEMORY" in prompt
+    assert "generic filler" in prompt
 
     # Active group engagement instruction present
     assert "active Telegram user" in prompt

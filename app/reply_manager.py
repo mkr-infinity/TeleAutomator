@@ -569,11 +569,12 @@ class ReplyManager:
                     self.db.set_state("last_quota_alert_timestamp", str(now))
                     rem = max(0, 100_000_000 - daily_tokens)
                     alert_text = (
-                        f"⚠️ *Daily Token Quota Threshold Alert:*\n\n"
-                        f"• 24h Consumed: *{daily_tokens:,}* tokens\n"
-                        f"• Warning Threshold: `{threshold:,}` tokens\n"
-                        f"• Remaining Free Pool: *{rem:,}* tokens\n\n"
-                        f"_Adjust threshold via `/quotathreshold <tokens>` or toggle via `/quotaalert off`._"
+                        f"⚠️ *Daily Token Quota Threshold Alert*\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"　• 24h consumed: *{daily_tokens:,}* tokens\n"
+                        f"　• Warning threshold: `{threshold:,}` tokens\n"
+                        f"　• Remaining free pool: *{rem:,}* tokens\n\n"
+                        f"_💡 Adjust: `/quotathreshold <tokens>` · toggle: `/quotaalert off`_"
                     )
                     await self._send_control_alert(alert_text)
                     logger.info(f"[QUOTA ALERT] Sent 24h threshold warning ({daily_tokens:,} tokens) via control channel.")
@@ -806,10 +807,11 @@ class ReplyManager:
             sender = f" from *{sender_name}*" if sender_name else ""
             incoming_snippet = f"\n• *Incoming:* \"{incoming_text[:120]}\"" if incoming_text else ""
             alert = (
-                f"⚠️ *TeleAutomator Alert (Never Sent to Chat)*\n"
+                f"⚠️ *TeleAutomator Alert* — _never sent to chat_\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"• *Destination:* {target_name} (`{chat_id}`){sender}\n"
-                f"• *Issue/Error:* `{error_msg}`{incoming_snippet}\n"
-                f"• *Safety Status:* Suppressed safely. Zero error text or fallbacks sent to recipient."
+                f"• *Issue:* `{error_msg}`{incoming_snippet}\n"
+                f"• *Safety:* Suppressed safely — zero error text or fallbacks reached the recipient."
             )
             await self._send_control_alert(alert)
         except Exception as e:
@@ -830,6 +832,27 @@ class ReplyManager:
             await self._send_control_alert(
                 "▶️ *Timed pause ended*\nAutomation is active again — replies, reactions & engagement resume in allowlisted chats."
             )
+
+    async def maybe_recover_safe_mode(self) -> None:
+        """Auto-recover from safe-mode boot guard: after calm uptime, restore the real mode."""
+        if self.db.get_state("safe_mode_active", "0") != "1":
+            return
+        try:
+            since = float(self.db.get_state("safe_mode_since", "0"))
+            recover_min = max(1, int(self.db.get_state("safe_mode_recover_minutes", "15")))
+        except ValueError:
+            return
+        if time.time() - since < recover_min * 60:
+            return
+        prev = self.db.get_state("safe_mode_prev_mode", "restricted_auto")
+        self.db.set_state("reply_mode", prev)
+        self.db.set_state("safe_mode_active", "0")
+        if prev == "restricted_auto" and getattr(self.config, "auto_authorize", False):
+            self.safety.set_auto_authorization(True)
+        logger.info(f"SAFE MODE recovered after {recover_min} min of stable uptime. Mode restored to '{prev}'.")
+        await self._send_control_alert(
+            f"🛡️ *Safe mode recovered*\nThe process stayed stable for {recover_min} min — automation restored to *{prev}* automatically."
+        )
 
     def _parse_duration(self, raw: str) -> Optional[float]:
         """Parse duration strings like '2h', '30m', '90s', '30 min', '2 hours', '1d 2h'.
@@ -904,6 +927,22 @@ class ReplyManager:
             for row in rows
         ]
         return f"```\n{header_str}\n{sep_str}\n" + "\n".join(body_strs) + "\n```"
+
+    def _safe_mode_status_inline(self) -> str:
+        """One-line safe-mode guard status for the /status card."""
+        try:
+            threshold = self.db.get_state("safe_mode_restarts", "3")
+            recover = self.db.get_state("safe_mode_recover_minutes", "15")
+        except ValueError:
+            threshold, recover = "3", "15"
+        if self.db.get_state("safe_mode_active", "0") == "1":
+            try:
+                since = float(self.db.get_state("safe_mode_since", "0"))
+                waited = max(0, int((time.time() - since) / 60))
+            except ValueError:
+                waited = 0
+            return f"🛡️ *ACTIVE* — draft mode, stable {waited}/{recover} min"
+        return f"ready ✅ (trips at {threshold} rapid restarts / 10 min)"
 
     async def handle_control_command(self, text: str) -> Optional[str]:
         """Handle control commands sent via the control channel (control bot or Saved Messages)."""
@@ -1452,7 +1491,6 @@ class ReplyManager:
             return "\n".join(lines)
 
         if cmd == "/status":
-            auto_status = "AUTHORIZED" if self.safety.is_auto_authorized else "DISABLED"
             stop_status = "ACTIVE" if self.safety.is_emergency_stopped else "NORMAL"
             remaining = self.safety.get_remaining_pause_seconds()
             pause_str = f"PAUSED ({int(remaining // 60)}m left)" if remaining > 0 else "ACTIVE"
@@ -1486,23 +1524,33 @@ class ReplyManager:
             global_cd_range = f"{int(self.safety.min_global_cooldown)}s–{int(self.safety.max_global_cooldown)}s"
             recent_min = self.db.get_recent_reply_count(60.0) if hasattr(self.db, "get_recent_reply_count") else 0
             chats_df = await self.get_allowed_chats_dataframe()
+            stop_icon = "🔴" if self.safety.is_emergency_stopped else "🟢"
+            pause_icon = "⏸️" if remaining > 0 else "▶️"
+            from app import __version__ as app_version
             return (
-                f"📊 *TeleAutomator v2.0.6 Status:*\n"
-                f"• Identity Name: `{owner}`\n"
-                f"• Automation: *{pause_str}*\n"
-                f"• Reply Mode: `{mode_display}` (change with `/mode <draft|approval|auto>`)\n"
-                f"• AI Style: `{style_display}` (change with `/style <casual|concise|formal|humorous>`)\n"
-                f"• Language: `{lang_display}` (change with `/lang <dynamic|english|hindi|...>`)\n"
-                f"• Reactions: *{react_status}* ({int(min_r_sec)}s–{int(max_r_sec)}s interval, max {max_r} in {win_m}m)\n"
-                f"• Quiet Hours: *{qh_desc}* (change with `/quiethours <on|off|start end>`)\n"
-                f"• Group Banter: `{int(chatty_prob * 100)}%` (change with `/chatty <0-100>`)\n"
-                f"• Cooldowns: Chat=`{chat_cd_range}`, Global=`{global_cd_range}`\n"
-                f"• Anti-Spam: Rate=`{self.safety.max_replies_per_minute}/min base (dynamic)` (Used: {recent_min})\n"
-                f"• Auto Authorized: *{auto_status}*\n"
-                f"• Emergency Stop: *{stop_status}*\n"
-                f"• Pending Approvals: `{pending_count}`\n"
-                f"• AI Provider: `{active_prov.upper()}` (model=`{active_mod}`{url_str})\n\n"
-                f"📋 *Target Chats & Groups (DataFrame):*\n{chats_df}"
+                f"📊 *TeleAutomator — Live Status*  `v{app_version}`\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"👤 *Identity*\n"
+                f"　• Name: *{owner}*\n\n"
+                f"⚡ *Automation*\n"
+                f"　• State: {pause_icon} *{pause_str}*\n"
+                f"　• Mode: `{mode_display}`\n"
+                f"　• Auto-authorize: {'✅ authorized' if self.safety.is_auto_authorized else '🔒 disabled'}\n"
+                f"　• Emergency stop: {stop_icon} *{stop_status}*\n"
+                f"　• Pending approvals: `{pending_count}`\n"
+                f"　• Safe-mode guard: {self._safe_mode_status_inline()}\n\n"
+                f"🤖 *AI Engine*\n"
+                f"　• Provider: `{active_prov.upper()}`\n"
+                f"　• Model: `{active_mod}`{url_str}\n"
+                f"　• Style: `{style_display}` · Language: `{lang_display}`\n"
+                f"　• Group banter: `{int(chatty_prob * 100)}%`\n\n"
+                f"💬 *Chat Rules*\n"
+                f"　• Reactions: *{react_status}* · every `{int(min_r_sec)}–{int(max_r_sec)}s` · max `{max_r}` per `{win_m}m`\n"
+                f"　• Cooldowns: chat `{chat_cd_range}` · global `{global_cd_range}`\n"
+                f"　• Anti-spam: *{self.safety.max_replies_per_minute}/min base (dynamic)* · used last 60s: `{recent_min}`\n"
+                f"　• Quiet hours: *{qh_desc}*\n\n"
+                f"_💡 Quick controls: `/mode` · `/style` · `/lang` · `/quiethours` · `/chatty`_\n\n"
+                f"📋 *Target Chats & Groups:*\n{chats_df}"
             )
 
         if cmd in ("/lang", "/language", "/setlang"):
@@ -2028,6 +2076,27 @@ class ReplyManager:
             self.safety.clear_pause()
             return "▶️ Automation RESUMED. Emergency stop and timed pauses cleared."
 
+        if cmd == "/safemode":
+            active = self.db.get_state("safe_mode_active", "0") == "1"
+            try:
+                threshold = self.db.get_state("safe_mode_restarts", "3")
+                recover = self.db.get_state("safe_mode_recover_minutes", "15")
+            except ValueError:
+                threshold, recover = "3", "15"
+            if active:
+                try:
+                    since = float(self.db.get_state("safe_mode_since", "0"))
+                    waited = max(0, int((time.time() - since) / 60))
+                except ValueError:
+                    waited = 0
+                return (f"🛡️ *Safe mode ACTIVE* — automation held in *draft* (nothing sent to chats).\n"
+                        f"• Stable for: *{waited}/{recover} min* (auto-recovers to the previous mode)\n"
+                        f"• Trigger: {threshold} rapid restarts within 10 minutes")
+            return (f"🛡️ *Safe-mode guard:* READY\n"
+                    f"• Triggers at {threshold} rapid restarts in 10 min (crash-loop protection)\n"
+                    f"• Auto-recovers after {recover} min of stable uptime\n"
+                    f"• Crash protection is automatic — no action needed.")
+
         if cmd == "/name":
             if len(cmd_parts) < 2 or cmd_parts[1].lower() in ("sync", "fetch", "auto"):
                 synced = await self.sync_owner_name_from_telegram()
@@ -2046,20 +2115,27 @@ class ReplyManager:
             custom = self.generator.prompt_manager.custom_prompt
             mode_str = f"Custom Persona ({len(custom.split())} words)" if custom else "Default Persona"
             full_inst = self.generator.prompt_manager.system_instructions
-            custom_display = f'"{custom}"' if custom else "None (using default system_prompt.txt)"
+            custom_display = f'"{custom}"' if custom else "None — using default system_prompt.txt"
             if len(custom_display) > 1200:
                 custom_display = custom_display[:1100].rstrip() + '...[truncated]'
             # Keep the whole response well under Telegram's 4096-char message limit, or delivery fails silently
             prompt_preview = full_inst if len(full_inst) <= 2400 else (full_inst[:2360].rstrip() + "\n...[truncated for Telegram display]")
+            from app import __version__ as app_version
             return (
-                f"📜 *Active System Instructions ({mode_str}):*\n\n"
-                f"• *Anti-AI Guardrails:* ACTIVE 🛡️ (max one line, human conversation, any fitting emojis with varied placement, no names/@usernames, no code)\n"
-                f"• *Custom Persona:* {custom_display}\n"
-                f"• *Active Style:* `{self.generator.style}`\n"
-                f"• *Language:* `{self.generator.language}`\n\n"
-                f"*Compiled Prompt (sent to AI):*\n\n"
+                f"📜 *Active System Instructions*  `v{app_version}`\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"🧬 *Persona*\n"
+                f"　• Source: *{mode_str}*\n"
+                f"　• Custom text: {custom_display}\n\n"
+                f"🛡️ *Guardrails*\n"
+                f"　• Anti-AI guardrails: *ACTIVE* — max one line, human conversation, "
+                f"any Telegram emoji placed naturally, no names/@usernames, no code\n"
+                f"　• Style: `{self.generator.style}` · Language: `{self.generator.language}`\n\n"
+                f"🧠 *Compiled Prompt (sent to AI)*\n"
+                f"　• Length: `{len(full_inst)} chars`\n\n"
                 f"{prompt_preview}\n\n"
-                f"_Use `/setprompt <text>` to customize persona, or `/setprompt default` to reset._"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"_💡 `/setprompt <text>` customize · `/setprompt default` reset_"
             )
 
         if cmd == "/setprompt":
@@ -2406,9 +2482,10 @@ class ReplyManager:
             chosen = ""
 
         # Only react when there is clear, relative sentiment to the message; never react unnecessarily.
-        # Own-reply reactions (allow_any_emoji=True) fall back to any fitting vibe emoji so the choice still feels natural.
+        # Own-reply reactions (allow_any_emoji=True) fall back to a vibe-appropriate choice drawn ONLY from
+        # the valid Telegram reaction catalogue above (non-catalogue emojis are rejected by Telegram).
         if (not has_sentiment or not chosen) and allow_any_emoji:
-            chosen = random.choice(["👍", "🔥", "😎", "😂", "💯", "🗿", "🆒", "👀"])
+            chosen = random.choice(["👍", "🔥", "😂", "🤣", "💯", "🎉", "❤️", "😍", "😎", "🤩", "⚡", "👏", "👀", "🗿", "🆒", "❤️‍🔥", "😈", "💅", "👻", "🤪"])
             has_sentiment = True
         if not has_sentiment or not chosen:
             return False

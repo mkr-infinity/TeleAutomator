@@ -232,7 +232,7 @@ def register_handlers(
         # Groups get a wider window (30 msgs) so constant chatter keeps full context.
         ttl_hours = float(reply_manager.db.get_state("context_ttl_hours", "4.0"))
         max_age_secs = int(ttl_hours * 3600) if ttl_hours > 0 else None
-        history_limit = 30 if getattr(event, "is_group", False) else 15
+        history_limit = 40 if getattr(event, "is_group", False) else 15
         conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=history_limit, max_age_seconds=max_age_secs)
         if len(conversation_history) <= 2:
             try:

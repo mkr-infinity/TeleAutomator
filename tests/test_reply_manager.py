@@ -678,7 +678,7 @@ def test_status_and_chats_dataframe_display(tmp_path: Path):
 
         # 1. /status command contains DataFrame with columns and rows
         status_res = await mgr.handle_control_command("/status")
-        assert "DataFrame" in status_res
+        assert "Target Chats & Groups" in status_res
         assert "Alice Walker" in status_res
         assert "@alicew" in status_res
         assert "Crypto Alpha" in status_res
@@ -804,7 +804,8 @@ def test_telegram_setprompt_and_prompt_commands(tmp_path: Path):
 
         # 1. Initially default
         p_res = await mgr.handle_control_command("/prompt")
-        assert "*Anti-AI Guardrails:* ACTIVE" in p_res
+        assert "Guardrails" in p_res
+        assert "ACTIVE" in p_res
         assert "Default Persona" in p_res
 
         # 2. Update prompt via /setprompt
@@ -816,7 +817,7 @@ def test_telegram_setprompt_and_prompt_commands(tmp_path: Path):
         p_res2 = await mgr.handle_control_command("/prompt")
         assert "game developer" in p_res2
         assert "Custom Persona" in p_res2
-        assert "*Anti-AI Guardrails:* ACTIVE" in p_res2
+        assert "Guardrails" in p_res2
 
         # 4. Reset prompt via /setprompt default
         reset_res = await mgr.handle_control_command("/setprompt default")
@@ -1100,7 +1101,9 @@ def test_context_aging_and_clearcontext_safety(tmp_path: Path):
 
 
 def test_version_and_typing_speed_modulation(tmp_path: Path):
-    """Verify v2.0.6 branding in status and smart typing speed modulation."""
+    """Verify version branding in status and smart typing speed modulation."""
+    from app import __version__ as app_version
+
     async def _run():
         cfg = AppConfig(
             api_id=123,
@@ -1115,9 +1118,11 @@ def test_version_and_typing_speed_modulation(tmp_path: Path):
         generator = ReplyGenerator(cfg, database=db)
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
-        # 1. Version v2.0.6 in /status
+        # 1. Structured /status card with dynamic version
         st = await mgr.handle_control_command("/status")
-        assert "TeleAutomator v2.0.6 Status:" in st
+        assert "TeleAutomator — Live Status" in st
+        assert f"v{app_version}" in st
+        assert "Safe-mode guard" in st
 
         # 2. Smart typing delay modulation
         # Banter reply ("haha lol cool") vs thoughtful question ("why do you think this happens?")
@@ -1550,7 +1555,7 @@ def test_prompt_command_and_aliases_display_active_prompt(tmp_path: Path):
             res = await mgr.handle_control_command(alias)
             assert "Active System Instructions" in res
             assert "Compiled Prompt" in res
-            assert "Anti-AI Guardrails" in res
+            assert "Guardrails" in res
 
     asyncio.run(_run())
 
