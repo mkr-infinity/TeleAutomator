@@ -143,32 +143,36 @@ class ReplyGenerator:
             is_mention=is_mention,
         )
         instructions = self.prompt_manager.get_system_instructions(
-            style_override=style_override, persona_override=persona_override
+            style_override=style_override,
+            persona_override=persona_override,
+            is_group=is_group,
         )
         try:
             draft = self.provider.generate_reply(prompt, instructions)
-            return self.prompt_manager.clean_reply(draft, sender_name=sender_name)
+            custom_limit = self.prompt_manager.get_custom_word_limit(persona_override)
+            return self.prompt_manager.clean_reply(draft, sender_name=sender_name, custom_limit=custom_limit)
         except Exception as e:
             logger.error(f"Failed to generate draft reply: {e}")
             # Never return fallbacks to groups or peer chats; raise so caller alerts Saved Messages exclusively
             raise RuntimeError(f"AI generation failed: {e}") from e
 
-    def summarize_chat_history(self, chat_title: str, existing_summary: str, raw_text: str) -> str:
-        """Condense recent group chat messages into a short rolling recap using AI (no hardcoded text)."""
+    def summarize_chat_history(self, chat_title: str, existing_summary: str, raw_text: str, is_group: bool = True) -> str:
+        """Condense recent chat messages into a short rolling recap using AI (no hardcoded text)."""
         if not raw_text or not raw_text.strip():
             return ""
         from app.ai.provider import LocalRuleProvider
         if isinstance(self.provider, LocalRuleProvider):
             return ""
+        chat_type_label = "Telegram group chat" if is_group else "Telegram private chat"
         prompt = (
-            f"You are building permanent memory for a Telegram group chat '{chat_title}'.\n\n"
+            f"You are building permanent memory for a {chat_type_label} '{chat_title}'.\n\n"
             f"Recap so far:\n{existing_summary.strip() or '(none)'}\n\n"
             f"New recent messages:\n{raw_text}\n\n"
-            f"Update the recap in under 120 words. Always carry over important facts verbatim: pinned rules, "
-            f"announcements, events, dates/plans, names & nicknames people use for each other, commitments, staff/mods, "
-            f"recurring topics and running jokes. Describe the group's mood/vibe. "
-            f"Never lose previously learned important facts. "
-            f"Output ONLY the updated recap text, no preamble."
+            f"Update the recap in under 150 words. Focus strictly on retaining important permanent facts: "
+            f"commitments, decisions, preferences, names/nicknames, dates/plans, personal facts mentioned, "
+            f"rules, running jokes, and ongoing topics. "
+            f"Describe the mood/energy. Never lose previously learned important facts. "
+            f"Output ONLY the updated permanent memory text, no preamble."
         )
         try:
             draft = self.provider.generate_reply(prompt, "You are a concise chat-memory system. Output only the updated recap.")

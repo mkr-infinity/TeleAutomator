@@ -352,6 +352,8 @@ class ReplyManager(CommandRouterMixin):
             title=chat_title,
             chat_type="Group" if chat_id < 0 else "Private",
         )
+        if hasattr(self.db, "sync_chat_context_file"):
+            self.db.sync_chat_context_file(chat_id)
 
         # Check for custom keyword trigger rule before calling AI
         matched_rule = self.db.match_keyword_rule(clean_text)
@@ -391,7 +393,7 @@ class ReplyManager(CommandRouterMixin):
 
                 # Check for per-chat style/persona overrides; fallback to global defaults
                 chat_style = self.db.get_state(f"chat_style_{chat_id}")
-                chat_persona = self.db.get_state(f"chat_prompt_{chat_id}")
+                chat_persona = self.db.get_chat_prompt(chat_id)
 
                 async def _do_generate():
                     return await asyncio.to_thread(
@@ -583,14 +585,14 @@ class ReplyManager(CommandRouterMixin):
             if sent:
                 asyncio.create_task(self.refresh_single_chat_summary(chat_id))
 
-    async def refresh_single_chat_summary(self, chat_id: int, min_new_messages: int = 4) -> None:
+    async def refresh_single_chat_summary(self, chat_id: int, min_new_messages: int = 4, force: bool = False) -> None:
         """Dynamically update AI context memory for a single chat after recent messages."""
         try:
             marker = int(self.db.get_state(f"chat_summary_marker_{chat_id}", "0"))
             new_count = self.db.count_chat_messages_since(chat_id, marker)
-            if new_count < min_new_messages:
+            if not force and new_count < min_new_messages:
                 return
-            raw = self.db.get_chat_messages_since_text(chat_id, marker, limit=40)
+            raw = self.db.get_chat_messages_since_text(chat_id, 0 if force else marker, limit=40)
             if not raw:
                 return
             meta = self.db.get_chat_metadata(chat_id) or {}
@@ -600,6 +602,7 @@ class ReplyManager(CommandRouterMixin):
                 title,
                 self.db.get_chat_summary(chat_id),
                 raw,
+                is_group=(chat_id < 0),
             )
             if summary:
                 self.db.set_chat_summary(chat_id, summary)
@@ -607,6 +610,80 @@ class ReplyManager(CommandRouterMixin):
                 logger.info(f"[AI CHAT MEMORY] Auto-updated rolling context memory for chat {chat_id} ({new_count} new messages).")
         except Exception as e:
             logger.debug(f"[AI CHAT MEMORY] Could not update memory for chat {chat_id}: {e}")
+
+    async def init_chat_context(self, chat_id: int) -> None:
+        """Immediately initialize, fetch, and build the isolated context file for a newly added chat or group.
+        Ensures AI has full context (pins, recent messages, voice profile, recap) before sending any message.
+        """
+        try:
+            title = ""
+            username = ""
+            chat_type = "Group" if chat_id < 0 else "Private contact"
+            if self._client:
+                try:
+                    entity = await self._client.get_entity(chat_id)
+                    if hasattr(entity, "title") and entity.title:
+                        title = entity.title
+                    elif hasattr(entity, "first_name") and entity.first_name:
+                        title = f"{entity.first_name} {getattr(entity, 'last_name', '') or ''}".strip()
+                    if hasattr(entity, "username") and entity.username:
+                        username = entity.username.lstrip("@")
+                except Exception as e:
+                    logger.debug(f"[INIT CONTEXT] Could not fetch entity for {chat_id}: {e}")
+
+            if not title and self.db:
+                meta = self.db.get_chat_metadata(chat_id) or {}
+                title = meta.get("title") or (f"Group {chat_id}" if chat_id < 0 else f"Chat {chat_id}")
+                username = username or meta.get("username", "")
+
+            if self.db:
+                self.db.record_chat_metadata(chat_id, title=title, username=username, chat_type=chat_type)
+
+            # For groups: fetch pinned announcements from Telegram and distill into permanent context
+            if chat_id < 0 and self._client:
+                try:
+                    await self.sync_pinned_context_from_telegram(chat_id)
+                except Exception as e:
+                    logger.debug(f"[INIT CONTEXT] Sync pinned context failed for {chat_id}: {e}")
+
+            # Fetch recent history from Telegram into local SQLite database if empty
+            if self.db and self._client and hasattr(self._client, "get_messages"):
+                existing_count = self.db.count_chat_messages(chat_id)
+                if existing_count < 5:
+                    try:
+                        recent_msgs = await self._client.get_messages(chat_id, limit=20)
+                        for m in reversed(recent_msgs):
+                            m_text = getattr(m, "message", None) or getattr(m, "text", None) or ""
+                            if not m_text.strip():
+                                continue
+                            sender_name = "Contact"
+                            try:
+                                s = await m.get_sender()
+                                if s:
+                                    sender_name = getattr(s, "first_name", "") or getattr(s, "title", "") or "Contact"
+                            except Exception:
+                                pass
+                            self.db.record_chat_message(
+                                chat_id=chat_id,
+                                message_id=m.id,
+                                sender_name=sender_name,
+                                text=m_text,
+                                is_outgoing=bool(getattr(m, "out", False)),
+                                reply_to_msg_id=getattr(m, "reply_to_msg_id", None),
+                            )
+                    except Exception as e:
+                        logger.debug(f"[INIT CONTEXT] Backfilling recent messages for {chat_id}: {e}")
+
+            # Generate AI voice profile and initial recap from the loaded history
+            if chat_id < 0:
+                await self.generate_chat_voice_profile(chat_id)
+            await self.refresh_single_chat_summary(chat_id, min_new_messages=1, force=True)
+
+            if self.db:
+                self.db.sync_chat_context_file(chat_id)
+            logger.info(f"[INIT CONTEXT] Successfully initialized permanent context for chat {chat_id} ({title}).")
+        except Exception as e:
+            logger.warning(f"[INIT CONTEXT] Error initializing context for chat {chat_id}: {e}")
 
     async def check_daily_quota_warning(self) -> None:
         """Daily quota threshold alerts have been disabled and removed."""

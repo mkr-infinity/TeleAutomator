@@ -520,6 +520,32 @@ class Database:
                 pass
         return ""
 
+    def get_chat_prompt(self, chat_id: int) -> str:
+        """Get per-chat custom AI persona (from runtime_state with disk context file fallback)."""
+        prompt = self.get_state(f"chat_prompt_{chat_id}", "")
+        if prompt:
+            return prompt
+        file_path = self._get_context_file_path(chat_id)
+        if file_path.exists():
+            try:
+                data = json.loads(file_path.read_text(encoding="utf-8"))
+                p = data.get("prompt") or ""
+                if p:
+                    self.set_state(f"chat_prompt_{chat_id}", p)
+                    return p
+            except Exception:
+                pass
+        return ""
+
+    def count_chat_messages(self, chat_id: int) -> int:
+        """Total cached messages for chat_id."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM chat_messages WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchone()
+            return int(row[0]) if row else 0
+
     def set_chat_summary(self, chat_id: int, summary: str) -> None:
         """Store the AI-generated rolling recap for chat_id and sync to isolated context file."""
         self.set_state(f"chat_summary_{chat_id}", (summary or "").strip())
@@ -613,6 +639,7 @@ class Database:
             data = {
                 "chat_id": chat_id,
                 "title": meta.get("title") or f"Chat {chat_id}",
+                "chat_type": meta.get("chat_type") or ("Group" if chat_id < 0 else "Private contact"),
                 "notes": notes or "",
                 "pinned_text": pinned_text or "",
                 "ai_memory": self.get_state(f"chat_summary_{chat_id}") or "",

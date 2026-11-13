@@ -281,3 +281,52 @@ def test_isolated_per_group_context_files_on_disk(tmp_path: Path):
     assert "typography" in mgr.db.get_chat_summary(grp_b)
 
 
+def test_per_group_custom_prompt_isolation_and_default_fallback():
+    """Verify group prompts never mix, unconfigured groups use default, and unmentioned rules fallback to defaults."""
+    pm = PromptManager(owner_name="Kaif")
+    pm.custom_prompt = "GLOBAL_FALLBACK_PERSONA"
+
+    grp_crypto = -100123
+    grp_unconfigured = -100456
+
+    # 1. Group A has a custom prompt: "You are a Solana DeFi analyst. Talk about liquidity pools."
+    crypto_prompt = "You are a Solana DeFi analyst. Talk about liquidity pools."
+    inst_a = pm.get_system_instructions(persona_override=crypto_prompt, is_group=True)
+
+    # Group A follows its custom prompt
+    assert "Solana DeFi analyst" in inst_a
+    assert "liquidity pools" in inst_a
+
+    # Group A inherits default rules for things NOT mentioned in custom prompt
+    assert "DEFAULT LANGUAGE (ENGLISH)" in inst_a  # language was not mentioned -> default English
+    assert "NATURAL MESSAGE LENGTH" in inst_a      # word limit was not mentioned -> default length
+    assert "STRICT ON-TOPIC MANDATE" in inst_a     # on-topic rule retained
+    assert "HUMAN ALIBI" in inst_a                 # anti-AI alibi retained
+    assert "NO CODE" in inst_a                     # no code retained
+
+    # 2. Group B has NO custom prompt set (persona_override is None/empty)
+    inst_b = pm.get_system_instructions(persona_override=None, is_group=True)
+
+    # Group B strictly uses default instructions — NEVER inherits Group A or global custom prompt
+    assert "Solana" not in inst_b
+    assert "GLOBAL_FALLBACK_PERSONA" not in inst_b
+    assert "Real human friend chatting on mobile" in inst_b
+
+
+def test_init_chat_context_creates_disk_file_and_memory(tmp_path: Path):
+    """Verify init_chat_context immediately creates disk file and initializes permanent context for a new chat."""
+    mgr = _make_manager(tmp_path)
+    new_grp = -100777888
+
+    # Initialize context for new chat
+    asyncio.run(mgr.init_chat_context(new_grp))
+
+    # Disk file created immediately
+    disk_file = tmp_path / "contexts" / f"{new_grp}.json"
+    assert disk_file.exists(), f"Context file {disk_file} should exist"
+    data = json.loads(disk_file.read_text(encoding="utf-8"))
+    assert data["chat_id"] == new_grp
+    assert data["chat_type"] == "Group"
+
+
+

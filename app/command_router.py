@@ -527,10 +527,16 @@ class CommandRouterMixin:
                 info_str = f" {' '.join(info_parts)}" if info_parts else ""
 
                 result = f"✅ {target}{info_str} [ID: `{cid}`] has been added to the allowlist!"
-                if cid < 0 and self._client:
-                    # Auto-build this group's AI voice profile from its recent messages (background task)
+                # Immediately initialize isolated context file, pins, and history for this chat/group
+                if hasattr(self, "init_chat_context"):
+                    asyncio.create_task(self.init_chat_context(cid))
+                elif cid < 0 and self._client:
                     asyncio.create_task(self.generate_chat_voice_profile(cid))
-                    result += "\n\n🧠 _AI is now reading recent messages to learn how this group talks (voice profile). Use `/gencontext %d` to rebuild it later._" % cid
+
+                if cid < 0:
+                    result += "\n\n🧠 _AI is initializing context, reading pinned announcements, and learning how this group talks. Isolated context saved to disk._"
+                else:
+                    result += "\n\n🧠 _AI initialized permanent context for this private chat._"
                 return result
             except ValueError:
                 return (
@@ -767,18 +773,27 @@ class CommandRouterMixin:
                 meta = self.db.get_chat_metadata(target_cid) or {}
                 name = meta.get("title") or f"Chat {target_cid}"
                 username = f" ({'@' + meta['username']})" if meta.get("username") else ""
+                persona = self.db.get_chat_prompt(target_cid) if hasattr(self.db, "get_chat_prompt") else self.db.get_state(f"chat_prompt_{target_cid}")
+                persona_str = persona if persona else "(Default global instructions)"
+                memory = self.db.get_chat_summary(target_cid) if hasattr(self.db, "get_chat_summary") else ""
+                memory_str = memory if memory else "(No AI rolling recap yet)"
                 return (
                     "📌 *Permanent Context*\n"
                     "━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🗣 *Chat:* {name}{username} · `{target_cid}`\n\n"
+                    f"🗣 *Chat:* {name}{username} · `{target_cid}`\n"
+                    f"📁 *Context file:* `data/contexts/{target_cid}.json`\n\n"
+                    "🗣 *Custom Persona / Prompt:*\n"
+                    f"{persona_str}\n\n"
                     "📌 *Pinned info / rules:*\n"
                     f"{pinned}\n\n"
                     "📝 *Custom notes:*\n"
                     f"{notes}\n\n"
-                    "🧠 *AI voice profile:*\n"
+                    "🧠 *AI memory recap:*\n"
+                    f"{memory_str}\n\n"
+                    "🎭 *AI voice profile:*\n"
                     f"{voice_str}\n"
                     "━━━━━━━━━━━━━━━━━━━━\n"
-                    f"_Update notes: `/setcontext {target_cid} <notes>` · Refresh pins: `/syncpins {target_cid}`_"
+                    f"_Update notes: `/setcontext {target_cid} <notes>` · Prompt: `/chatprompt {target_cid} <text>` · Refresh pins: `/syncpins {target_cid}`_"
                 )
             except ValueError:
                 return (

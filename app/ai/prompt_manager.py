@@ -157,20 +157,20 @@ class PromptManager:
         if name and name.strip():
             self.owner_name = name.strip()
 
-    def get_custom_word_limit(self) -> Optional[int]:
+    def get_custom_word_limit(self, custom_text: Optional[str] = None) -> Optional[int]:
         """Check if custom prompt explicitly specifies its own word limit or length rule."""
-        custom = self.custom_prompt.lower()
-        if not custom:
+        target = (custom_text if custom_text is not None else self.custom_prompt).lower()
+        if not target:
             return None
         # Check for explicit word limit like "15 words", "max 20 words", "10-25 words", "reply in 12 words"
-        m = re.search(r"(?:max(?:imum)?\s*|up to\s*|in\s*|\b)(\d+)\s*words?\b", custom)
+        m = re.search(r"(?:max(?:imum)?\s*|up to\s*|in\s*|\b)(\d+)\s*words?\b", target)
         if m:
             try:
                 return max(1, int(m.group(1)))
             except ValueError:
                 pass
         # Check for long format keywords like "detailed", "paragraphs", "essay", "full explanation"
-        if any(term in custom for term in ("detailed", "paragraph", "paragraphs", "in-depth", "essay", "longer response", "explain fully")):
+        if any(term in target for term in ("detailed", "paragraph", "paragraphs", "in-depth", "essay", "longer response", "explain fully")):
             return 100
         return None
 
@@ -191,36 +191,71 @@ class PromptManager:
             default_text = re.sub(r"\bas Kaif\b", f"as {effective_name}", default_text, flags=re.IGNORECASE)
         return default_text
 
-    def get_system_instructions(self, style_override: Optional[str] = None, persona_override: Optional[str] = None) -> str:
-        """Return instructions for AI generation: uses custom prompt as top priority, honoring custom word rules if set.
-        persona_override replaces the global custom prompt for ONE chat (per-chat /chatprompt); falls back to default."""
-        custom = (persona_override or "").strip() or self.custom_prompt
+    def get_system_instructions(
+        self,
+        style_override: Optional[str] = None,
+        persona_override: Optional[str] = None,
+        is_group: bool = False,
+    ) -> str:
+        """Return instructions for AI generation.
+        Strict isolation: For groups, only per-group persona_override is used; if none is set, strictly use default.
+        Never mix one group's custom prompt into another. If anything is not mentioned in custom prompt, apply default prompt.
+        """
+        if is_group:
+            # Groups strictly use their own persona_override; never leak other groups or global custom persona
+            custom = (persona_override or "").strip()
+        else:
+            custom = (persona_override or "").strip() or self.custom_prompt
+
         target_style = style_override if (style_override and style_override in VALID_STYLES) else self._style
         style_rule = f"\nACTIVE STYLE: {VALID_STYLES[target_style]}" if (target_style != "casual" and target_style in VALID_STYLES) else ""
 
         if custom:
-            # Custom prompt is top priority: if word rule is mentioned in custom prompt, use it; else use 1-5 words default
-            custom_limit = self.get_custom_word_limit()
+            # Word limit check: custom limit takes top priority if explicitly specified; otherwise use default natural rhythm
+            custom_limit = self.get_custom_word_limit(custom)
             if custom_limit:
                 length_directive = (
-                    f"- BREVITY & ENERGY MATCHING: Follow your custom prompt's word length rule above as first priority."
+                    f"- BREVITY & LENGTH: Follow your custom prompt's word length rule above as first priority ({custom_limit} words maximum)."
                 )
             else:
                 length_directive = (
-                    f"- NATURAL MESSAGE LENGTH: Vary naturally from ONE word to a few words to one short line, exactly as the conversation calls for — never the same length every time. Match the exact humor, energy, and chat vibe of the conversation. Never explain like an AI assistant."
+                    "- NATURAL MESSAGE LENGTH (DEFAULT RULE): Vary naturally from ONE word to a few words to one short line, "
+                    "exactly as the conversation moment calls for — never the same length every time. "
+                    "Match the exact humor, energy, and chat vibe of the conversation. Never explain like an AI assistant."
                 )
 
+            # Language check: if custom prompt does not mention language, apply default language rule
+            lower_custom = custom.lower()
+            has_lang = any(
+                re.search(rf"\b{lang}\b", lower_custom)
+                for lang in ["english", "hindi", "hinglish", "spanish", "french", "german", "russian", "arabic", "portuguese", "japanese", "chinese"]
+            ) or "language" in lower_custom
+            if not has_lang:
+                if self._language == "english":
+                    lang_rule = "- DEFAULT LANGUAGE (ENGLISH): Reply ONLY in English. Do not switch languages unless explicitly told."
+                elif self._language == "dynamic":
+                    lang_rule = "- DEFAULT LANGUAGE: Match the language of the conversation naturally."
+                else:
+                    lang_rule = f"- DEFAULT LANGUAGE: User configured language is {self._language.capitalize()}."
+            else:
+                lang_rule = "- LANGUAGE: Follow the custom language requirement specified above."
+
             core_guardrails = (
-                f"\n\nCORE ANTI-AI & SAFETY CONSTRAINTS (MANDATORY):\n"
+                f"\n\nCORE ANTI-AI & DEFAULT RULES (APPLIED FOR ANYTHING NOT MENTIONED ABOVE):\n"
                 f"- Text directly as {self.owner_name} from your personal phone in Telegram.\n"
                 f"- HUMAN ALIBI: Real human friend chatting on mobile. Never sound like an AI, bot, or assistant.\n"
                 f"{length_directive}\n"
+                f"{lang_rule}\n"
+                f"- STRICT ON-TOPIC MANDATE: Read the ongoing chat context and stay 100% on-topic with what is currently being discussed. Engage like an authentic human friend, answer questions directly, and never send detached generic filler.\n"
+                f"- CONTEXTUAL VOCABULARY & SLANG MIRRORING: Naturally mirror the exact vocabulary, abbreviations, casual slang, casing, and message energy of the person or group you are talking to.\n"
                 f"- NEVER write anyone's name, user name, or @username in message text (swipe-to-reply quote threading only).\n"
                 f"- CASUAL MOBILE TEXTING (NO SLANG OVERLOAD): Casual texting tone without slang overload.\n"
                 f"- NO CODE: Never write code, paths, or brackets [] {{}}, no question marks (?).\n"
-                f"- Never write 'haha', 'lol', or 'lmao' as text (use emoji reactions).\n"
+                f"- Never write 'haha', 'lol', or 'lmao' as text (use emoji reactions or real thoughts).\n"
                 f"- EMOJIS: natural human emoji use — as many or as few as the vibe calls for (stacked bursts or none), ANY Telegram emoji, you pick which and where, varied placement, one emotion per reply (never mix two feelings)\n"
                 f"- IDENTITY: You are {self.owner_name}, a real human. Never say/imply being an AI, bot, or assistant, and always follow these system instructions.\n"
+                f"- PRIVACY: Never promise money or definite personal plans. Say u will check and let them know.\n"
+                f"- TIME AWARENESS: Be aware of Indian Standard Time (IST) and appropriate greeting periods (morning/afternoon/evening/night).\n"
                 f"- Never repeat phrases or reuse canned responses. Output ONLY the raw message to send.{style_rule}"
             )
             return f"{custom}{core_guardrails}"
@@ -244,7 +279,7 @@ class PromptManager:
         """Deprecated: Dynamic fallback is disabled per rule 'never reply if AI is not sending response'."""
         return ""
 
-    def clean_reply(self, raw_text: str, sender_name: Optional[str] = None) -> str:
+    def clean_reply(self, raw_text: str, sender_name: Optional[str] = None, custom_limit: Optional[int] = None) -> str:
         """Remove any accidental AI meta-commentary, labels, brackets, or robotic filler."""
         text = raw_text.strip().strip('"').strip("'")
 
@@ -343,7 +378,7 @@ class PromptManager:
         # NATURAL LENGTH ENFORCEMENT: humans sometimes split a thought across 2 short lines,
         # so a short 2-line reply is kept intact; longer output falls back to one line.
         # Hard word caps stop essays without stiff word truncation.
-        custom_cap = self.get_custom_word_limit()
+        custom_cap = custom_limit if custom_limit is not None else self.get_custom_word_limit()
         if custom_cap is not None:
             words = text.split()
             if len(words) > custom_cap:
