@@ -153,12 +153,21 @@ class MiniAppAPI:
             tokens_today = 0
         ai_model = ctx.db.get_state("ai_model", getattr(getattr(ctx, "reply_manager", None), "config", None) and getattr(ctx.reply_manager.config, "ai_model", "") or "")
         ai_base_url = ctx.db.get_state("ai_base_url", getattr(getattr(ctx, "reply_manager", None), "config", None) and getattr(ctx.reply_manager.config, "ai_base_url", "") or "")
+        token_stats = {}
+        if hasattr(ctx.db, "get_token_usage_stats"):
+            try:
+                token_stats = ctx.db.get_token_usage_stats()
+            except Exception:
+                pass
+        qh_start = ctx.db.get_state("quiet_hours_start", getattr(ctx.reply_manager.config, "quiet_hours_start", "02:00"))
+        qh_end = ctx.db.get_state("quiet_hours_end", getattr(ctx.reply_manager.config, "quiet_hours_end", "08:00"))
         return {
             "mode": mode,
             "state": "stopped" if emergency else ("paused" if paused > 0 else "active"),
             "paused_remaining_sec": int(paused),
             "emergency": emergency,
             "quiet_hours": in_quiet,
+            "quiet_hours_schedule": f"{qh_start} – {qh_end} IST",
             "safe_mode": safe_mode,
             "chatty_global": chatty_global,
             "style": ctx.generator.style,
@@ -171,6 +180,8 @@ class MiniAppAPI:
             "pending_count": len(ctx.db.list_pending_approvals()),
             "replies_24h": ctx.db.get_recent_reply_count(86400.0),
             "tokens_today": tokens_today,
+            "total_tokens": token_stats.get("total_tokens", 0),
+            "token_requests": token_stats.get("request_count", 0),
             "version": APP_VERSION,
         }
 
@@ -184,13 +195,38 @@ class MiniAppAPI:
             blocked = set(ctx.privacy._get_dynamic_set("dynamic_blocked_chats"))
         chats = []
         all_cids = sorted((priv | grps) | blocked)
+        import re
+        gradients = [
+            "linear-gradient(135deg, #153421 0%, #1E3F2A 100%)",
+            "linear-gradient(135deg, #2e1065 0%, #581c87 100%)",
+            "linear-gradient(135deg, #0f2c1f 0%, #1e40af 100%)",
+            "linear-gradient(135deg, #3b0764 0%, #153421 100%)",
+            "linear-gradient(135deg, #164e63 0%, #064e3b 100%)",
+            "linear-gradient(135deg, #312e81 0%, #4c1d95 100%)",
+        ]
         for cid in all_cids:
             meta = ctx.db.get_chat_metadata(cid) or {}
             perm = ctx.db.get_permanent_context(cid) if hasattr(ctx.db, "get_permanent_context") else {}
+            title = meta.get("title") or f"Chat {cid}"
+            username = meta.get("username") or ""
+
+            clean_name = re.sub(r"[^\w\s]", "", title).strip()
+            words = clean_name.split()
+            if len(words) >= 2:
+                initials = (words[0][0] + words[1][0]).upper()
+            elif words:
+                initials = words[0][:2].upper()
+            else:
+                initials = "GP" if cid < 0 else "DM"
+
+            avatar_bg = gradients[abs(cid) % len(gradients)]
+
             chats.append({
                 "id": cid,
-                "name": meta.get("title") or f"Chat {cid}",
-                "username": meta.get("username") or "",
+                "name": title,
+                "username": username,
+                "initials": initials,
+                "avatar_bg": avatar_bg,
                 "type": "Group" if cid < 0 else "Private",
                 "chatty": ctx.db.get_state(f"chat_chatty_{cid}") or "",
                 "style": ctx.db.get_state(f"chat_style_{cid}") or "",

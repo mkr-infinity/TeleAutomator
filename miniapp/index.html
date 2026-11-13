@@ -61,6 +61,44 @@
         <div class="kpi"><p class="kpi-label">Tokens today</p><p class="kpi-value" id="kpi-tokens">—</p></div>
       </div>
 
+      <!-- Usage & AI Intelligence Card -->
+      <div class="card usage-card" id="ov-usage-card">
+        <div class="usage-card-head">
+          <div class="usage-card-title-group">
+            <span class="usage-card-title">AI Engine &amp; Quota Usage</span>
+            <span class="pill pill-positive" id="ov-engine-badge">Local</span>
+          </div>
+          <span class="pill pill-neutral num" id="ov-tokens-total">0 tokens</span>
+        </div>
+        <div class="usage-grid">
+          <div class="usage-cell">
+            <span class="usage-cell-label">Active Model</span>
+            <span class="usage-cell-val" id="ov-model-val">—</span>
+          </div>
+          <div class="usage-cell">
+            <span class="usage-cell-label">Free Quota Pool</span>
+            <span class="usage-cell-val num" id="ov-quota-rem">100M tokens</span>
+          </div>
+          <div class="usage-cell">
+            <span class="usage-cell-label">Quiet Hours</span>
+            <span class="usage-cell-val" id="ov-qh-sched">02:00 – 08:00 IST</span>
+          </div>
+          <div class="usage-cell">
+            <span class="usage-cell-label">Total Requests</span>
+            <span class="usage-cell-val num" id="ov-req-count">0</span>
+          </div>
+        </div>
+        <div class="usage-meter-wrap">
+          <div class="usage-meter-track">
+            <div class="usage-meter-fill" id="ov-quota-bar" style="width: 0.1%"></div>
+          </div>
+          <div class="usage-meter-meta">
+            <span id="ov-quota-pct" class="num">0.0% used</span>
+            <span>Free Tier (100,000,000 pool)</span>
+          </div>
+        </div>
+      </div>
+
       <h2 class="section-h">Quick actions</h2>
       <div class="actions">
         <button class="btn primary" id="act-pause">Pause 30m</button>

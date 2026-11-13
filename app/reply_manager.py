@@ -1158,6 +1158,13 @@ class ReplyManager:
                             username = f"@{meta.get('username')}"
 
                 target = "Group" if cid < 0 else "Private contact"
+                if (title or username) and self.db:
+                    self.db.record_chat_metadata(
+                        cid,
+                        title=title,
+                        username=username.lstrip("@"),
+                        chat_type=target,
+                    )
                 info_parts = []
                 if title:
                     info_parts.append(f"*{title}*")
@@ -1434,22 +1441,36 @@ class ReplyManager:
 
         if cmd in ("/contextttl", "/aging"):
             if len(cmd_parts) < 2:
-                curr = self.db.get_state("context_ttl_hours", "4.0")
+                curr = self.db.get_state("context_ttl_hours", "24.0")
                 return (
                     f"⏳ *Conversation Context Auto-Aging:* `{curr} hours`\n"
                     "After this period of inactivity, older conversation context expires so the AI starts fresh.\n"
-                    "Usage: `/contextttl <hours>` (e.g. `/contextttl 4.0`)"
+                    "Usage: `/contextttl <hours|days>` (e.g. `/contextttl 24.0` or `/contextttl 1d`)"
                 )
-            try:
-                val = max(0.1, float(cmd_parts[1]))
+            raw_input = " ".join(cmd_parts[1:]).strip().lower()
+            val = None
+            if raw_input in ("1d", "1day", "1 day", "day"):
+                val = 24.0
+            elif raw_input in ("12h", "12hr", "12hrs", "12 hours"):
+                val = 12.0
+            elif raw_input.endswith("d") and raw_input[:-1].replace(".", "", 1).isdigit():
+                val = float(raw_input[:-1]) * 24.0
+            elif raw_input.endswith("h") and raw_input[:-1].replace(".", "", 1).isdigit():
+                val = float(raw_input[:-1])
+            else:
+                try:
+                    val = float(cmd_parts[1])
+                except ValueError:
+                    val = None
+
+            if val is not None and val >= 0.1:
                 self.db.set_state("context_ttl_hours", str(val))
                 return f"⏳ Context aging window set to *{val} hours*. Messages older than this will expire from AI prompt memory."
-            except ValueError:
-                return (
-                    "❌ /contextttl failed\n"
-                    "Missing: Valid positive number of hours\n"
-                    "Fix: /contextttl <hours> (e.g. /contextttl 4.0)"
-                )
+            return (
+                "❌ /contextttl failed\n"
+                "Missing: Valid positive number of hours or days\n"
+                "Fix: /contextttl <hours> (e.g. /contextttl 24.0 or /contextttl 1d)"
+            )
 
         if cmd in ("/clearcontext", "/resetcontext"):
             if len(cmd_parts) < 2:

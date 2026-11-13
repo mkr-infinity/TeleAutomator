@@ -240,6 +240,21 @@
     $("kpi-replies").textContent = s.replies_24h;
     $("kpi-tokens").textContent = s.tokens_today >= 1000 ? `${(s.tokens_today / 1000).toFixed(1)}k` : s.tokens_today;
 
+    if ($("ov-engine-badge")) {
+      $("ov-engine-badge").textContent = `${s.ai_engine || "AI"} Engine`;
+      const tot = s.total_tokens || s.tokens_today || 0;
+      $("ov-tokens-total").textContent = `${tot.toLocaleString()} tokens`;
+      $("ov-model-val").textContent = s.ai_model || (s.ai_engine === "Local" ? "Local Rule Base" : "Default");
+      const FREE_POOL = 100000000;
+      const rem = Math.max(0, FREE_POOL - tot);
+      const pct = Math.min(100, (tot / FREE_POOL) * 100);
+      $("ov-quota-rem").textContent = `${(rem / 1000000).toFixed(1)}M pool`;
+      $("ov-qh-sched").textContent = s.quiet_hours_schedule || "02:00 – 08:00 IST";
+      $("ov-req-count").textContent = (s.token_requests || 0).toLocaleString();
+      $("ov-quota-bar").style.width = `${Math.max(0.5, pct).toFixed(2)}%`;
+      $("ov-quota-pct").textContent = `${pct.toFixed(3)}% consumed`;
+    }
+
     $("act-pause").classList.toggle("hidden", s.state !== "active");
     $("act-resume").classList.toggle("hidden", s.state === "active");
   }
@@ -266,24 +281,41 @@
   }
 
   function chatRowHtml(c) {
-    const sub = [c.type, c.blocked ? "blocked" : "", c.prompt ? "custom prompt" : "", c.context ? "has context" : "", c.style ? c.style : "", c.voice_profile ? "voice profile" : ""]
-      .filter(Boolean).join(" · ");
-    return `<div class="row" data-cid="${c.id}">
-      <div class="row-main">
-        <p class="row-title">${esc(c.name)}</p>
-        <p class="row-sub">chatty ${esc(fmtPct(c.chatty))}${sub ? " · " + esc(sub) : ""}</p>
+    const initials = c.initials || (c.type === "Group" ? "GP" : "DM");
+    const avatarBg = c.avatar_bg || "linear-gradient(135deg, #153421 0%, #1E3F2A 100%)";
+    const userDisplay = c.username ? (c.username.startsWith("@") ? c.username : "@" + c.username) : "";
+
+    return `<div class="chat-capsule ${c.blocked ? "is-blocked" : ""}" data-cid="${c.id}">
+      <div class="chat-capsule-head">
+        <div class="chat-avatar" style="background: ${avatarBg}">${esc(initials)}</div>
+        <div class="chat-info">
+          <div class="chat-title-row">
+            <span class="chat-name">${esc(c.name)}</span>
+            ${userDisplay ? `<span class="pill pill-neutral chat-user">${esc(userDisplay)}</span>` : ""}
+            <span class="pill pill-neutral num chat-id">${esc(String(c.id))}</span>
+          </div>
+          <div class="chat-badges">
+            <span class="pill ${c.type === "Group" ? "pill-positive" : "pill-neutral"}">${esc(c.type)}</span>
+            ${c.blocked ? `<span class="pill pill-negative">Blocked</span>` : ""}
+            ${c.prompt ? `<span class="pill pill-warning">Custom Prompt</span>` : ""}
+            ${c.context ? `<span class="pill pill-positive">Has Context</span>` : ""}
+            ${c.voice_profile ? `<span class="pill pill-neutral">Voice Profile</span>` : ""}
+            <span class="pill pill-neutral">Chatty ${esc(fmtPct(c.chatty))}</span>
+            ${c.style ? `<span class="pill pill-neutral">${esc(c.style)}</span>` : ""}
+          </div>
+        </div>
       </div>
-      <div class="row-side">
+      <div class="chat-actions">
         <button class="btn small" data-op="prompt">Prompt</button>
         <button class="btn small" data-op="context">Context</button>
         <button class="btn small" data-op="chatty">Chatty</button>
-        <button class="btn small" data-op="remove">Remove</button>
+        <button class="btn small danger" data-op="remove">Remove</button>
       </div>
     </div>`;
   }
 
   function wireChatRows() {
-    document.querySelectorAll("#chat-list .row").forEach((row) => {
+    document.querySelectorAll("#chat-list .chat-capsule, #chat-list .row").forEach((row) => {
       const cid = row.dataset.cid;
       row.querySelectorAll("[data-op]").forEach((btn) => {
         btn.addEventListener("click", () => {
@@ -507,11 +539,14 @@
       openSheet("Recent replies", rows.length ? rows.map(feedRowHtml).join("") : "<p>Nothing yet.</p>", [{ label: "Close" }]);
     });
 
-    $("allow-btn").addEventListener("click", () => {
+    $("allow-btn").addEventListener("click", async () => {
       const v = $("allow-id").value.trim();
       if (!v) return toast("Enter a chat ID");
       $("allow-id").value = "";
-      runAction("allow", { chat_id: v });
+      const res = await runAction("allow", { chat_id: v });
+      if (res && res.ok) {
+        refreshChats();
+      }
     });
     $("allow-id").addEventListener("keydown", (e) => { if (e.key === "Enter") $("allow-btn").click(); });
 

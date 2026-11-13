@@ -381,3 +381,153 @@ h1.brand-name { font-size: var(--fs-title); font-weight: 600; }
 .test-pill.ok { background: var(--pill-positive-bg); color: var(--pill-positive-ink); }
 .test-pill.fail { background: var(--pill-negative-bg); color: var(--pill-negative-ink); }
 
+/* -------------------------------------------------- usage & stats dashboard card */
+.usage-card {
+  margin-bottom: 22px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.usage-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.usage-card-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.usage-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.usage-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  padding: 12px;
+  background: rgba(7, 21, 12, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+.usage-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.usage-cell-label {
+  font-size: 11px;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.usage-cell-val {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-meter-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.usage-meter-track {
+  height: 6px;
+  background: var(--raised);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.usage-meter-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--positive) 0%, var(--accent) 100%);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.usage-meter-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--faint);
+}
+
+/* ---------------------------------------------------- chat capsule styling */
+.chat-capsule {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--rule);
+  transition: background 0.15s ease;
+}
+.chat-capsule:first-child { border-top: 0; }
+.chat-capsule.is-blocked { opacity: 0.7; }
+.chat-capsule-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.chat-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffffff;
+  flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(244, 239, 226, 0.15);
+}
+.chat-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+.chat-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chat-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.chat-user {
+  color: var(--accent-bright);
+  font-size: 11px;
+}
+.chat-id {
+  font-size: 11px;
+  color: var(--faint);
+}
+.chat-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chat-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-left: 54px;
+}
+@media (max-width: 720px) {
+  .usage-grid { grid-template-columns: 1fr 1fr; }
+  .chat-actions { padding-left: 0; }
+}
+

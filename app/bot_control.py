@@ -38,9 +38,11 @@ UNAUTHORIZED_MESSAGE = (
     "🤖 *TeleAutomator Control Panel*\n"
     "This control panel belongs to a private automation project — "
     "your account isn't authorized to use it yet.\n\n"
-    "👉 *Want access?*\n"
+    "💳 *Authentication Note:*\n"
+    "To get authorized access, pay *100 Stars* or *1 TON* to *@mkr_infinity*.\n\n"
+    "👉 *Contact & Verification:*\n"
     "Reach out on Telegram: [@mkr_infinity](https://t.me/mkr_infinity)\n"
-    "Just mention __TeleAutomator__ and the project you'd like authorization for.\n"
+    "Just mention *TeleAutomator* with payment confirmation for instant access.\n"
     "━━━━━━━━━━━━━━━━━━━━\n"
     "_Thanks for understanding! 🙏_"
 )
@@ -51,9 +53,11 @@ UNAUTHORIZED_MESSAGE_HTML = (
     "🤖 <b>TeleAutomator Control Panel</b>\n"
     "This control panel belongs to a private automation project, "
     "and your account isn't authorized to use it yet.\n\n"
-    "👉 <b>Want access?</b>\n"
+    "💳 <b>Authentication Note:</b>\n"
+    "To get authorized access, pay <b>100 Stars</b> or <b>1 TON</b> to <b>@mkr_infinity</b>.\n\n"
+    "👉 <b>Contact & Verification:</b>\n"
     "Contact <b>@mkr_infinity</b> — <a href=\"https://t.me/mkr_infinity\">Open chat</a>\n"
-    "Just mention <b>TeleAutomator</b> and the project you'd like authorization for.\n"
+    "Just mention <b>TeleAutomator</b> with payment confirmation for instant access.\n"
     "━━━━━━━━━━━━━━━━━━━━\n"
     "<i>Thanks for understanding! 🙏</i>"
 )
@@ -61,7 +65,7 @@ UNAUTHORIZED_MESSAGE_HTML = (
 SPAM_WARNING_MESSAGE = (
     "🙇 *Please don't spam*\n\n"
     "This channel is for project control only. I'll stay silent until you're authorized.\n"
-    "If you need access, contact <b>@mkr_infinity</b>."
+    "For authentication, pay 100 Stars or 1 TON and contact <b>@mkr_infinity</b>."
 )
 
 AUTHORIZED_NOTICE = (
@@ -313,7 +317,10 @@ class BotControl:
         if parse_markdown:
             return await self.send_message(chat_id, text, parse_markdown=False, reply_markup=reply_markup)
         try:
-            await self._call("sendMessage", {"chat_id": chat_id, "text": text, "parse_mode": "HTML"})
+            fb_payload: dict[str, Any] = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+            if reply_markup is not None:
+                fb_payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+            await self._call("sendMessage", fb_payload)
             return True
         except Exception as e:
             logger.warning(f"Bot sendMessage fallback failed for {chat_id}: {e}")
@@ -696,7 +703,7 @@ class BotControl:
         if not self.is_authorized(user_id):
             await self._call("answerCallbackQuery", {
                 "callback_query_id": cb_id,
-                "text": "❌ Access denied\nMissing: Authorized account\nFix: Contact @mkr_infinity for authorization.",
+                "text": "❌ Access denied\nMissing: Authorized account\nFix: Contact @mkr_infinity. Note: Pay 100 Stars or 1 TON to @mkr_infinity for authentication.",
                 "show_alert": True,
             })
             return
@@ -840,10 +847,15 @@ class BotControl:
         self.db.set_state(key, str(strikes))
         if strikes <= 2:
             logger.info(f"Bot: unauthorized user {user_id} messaged (strike {strikes}).")
-            await self.send_message(chat_id, UNAUTHORIZED_MESSAGE_HTML, parse_markdown=False)
+            contact_markup = {
+                "inline_keyboard": [
+                    [{"text": "💬 Contact @mkr_infinity", "url": "https://t.me/mkr_infinity"}]
+                ]
+            }
+            await self.send_message(chat_id, UNAUTHORIZED_MESSAGE_HTML, parse_markdown=False, reply_markup=contact_markup)
             if strikes == 2:
                 await asyncio.sleep(2.0)
-                await self.send_message(chat_id, SPAM_WARNING_MESSAGE, parse_markdown=False)
+                await self.send_message(chat_id, SPAM_WARNING_MESSAGE, parse_markdown=False, reply_markup=contact_markup)
         else:
             # Silently ignored until the user is added to authorized list (reduce Railway usage)
             if strikes == 3:

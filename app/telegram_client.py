@@ -52,6 +52,7 @@ class TelegramService:
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._last_context_purge = 0.0
         self._last_summary_check = 0.0
+        self._last_daily_prune = 0.0
 
     async def initialize(self) -> TelegramClient:
         """Create and connect the Telethon client, verifying personal account identity."""
@@ -229,6 +230,21 @@ class TelegramService:
                     await self.reply_manager.refresh_group_summaries()
                 except Exception as e:
                     logger.debug(f"Group summary refresh error: {e}")
+
+            # Automated SQLite daily maintenance (every 24 hours / 1 day)
+            if now - self._last_daily_prune >= 86400.0:
+                self._last_daily_prune = now
+                try:
+                    self.db.prune_old_reactions(86400.0 * 7)
+                    self.db.prune_old_reply_events(86400.0 * 7)
+                    ttl_hours = float(self.db.get_state("context_ttl_hours", "24.0"))
+                    if ttl_hours > 0:
+                        self.db.prune_messages_older_than(ttl_hours * 3600)
+                    with self.db._get_connection() as conn:
+                        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                    logger.info("[DAILY MAINTENANCE] Automated 24h prune and SQLite maintenance completed.")
+                except Exception as e:
+                    logger.debug(f"Daily maintenance error: {e}")
 
             await asyncio.sleep(30)
 
