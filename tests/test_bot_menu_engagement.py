@@ -17,10 +17,12 @@ from app.storage.database import Database
 
 
 def test_command_menu_covers_every_registered_command():
-    """Every command the engine understands must appear in the '/' menu — no half menus."""
+    """Every command the engine understands must appear in the '/' menu — no half menus.
+    Exception: alias commands kept engine-side only (menu dedupe, v2.9.0) — they still work."""
     menu_cmds = {c["command"] for c in BOT_COMMAND_MENU}
     registered = {name.lstrip("/") for name in _BOT_COMMAND_NAMES}
-    missing = registered - menu_cmds
+    engine_only_aliases = {"allow", "ban", "setprompt"}
+    missing = registered - menu_cmds - engine_only_aliases
     assert not missing, f"Commands missing from bot menu: {sorted(missing)}"
 
 
@@ -43,8 +45,16 @@ def test_quick_menu_markup_structure():
     assert len(rows) >= 3
     for row in rows:
         for btn in row:
-            assert btn["callback_data"].startswith("cmd:/")
+            assert btn.get("callback_data", "").startswith("cmd:/") or btn.get("web_app")
             assert btn["text"].strip()
+
+
+def test_quick_menu_markup_with_miniapp():
+    markup = quick_menu_markup("https://teleautomator.up.railway.app")
+    rows = markup["inline_keyboard"]
+    first_btn = rows[0][0]
+    assert first_btn["text"] == "⚡ Launch TeleAutomator"
+    assert first_btn["web_app"]["url"] == "https://teleautomator.up.railway.app"
 
 
 # --------------------------------------------------------------------- engagement

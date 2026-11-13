@@ -8,7 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from app.logger import setup_logger
 
@@ -25,16 +25,32 @@ class AIProvider(ABC):
 
 
 class LocalRuleProvider(AIProvider):
-    """Local, offline draft generator using natural human texting patterns (zero API calls)."""
+    """Local, offline draft generator using contextual human texting patterns (zero API calls)."""
 
     def generate_reply(self, prompt: str, system_instructions: str) -> str:
-        lower = prompt.lower()
+        # Extract the incoming text from prompt if present
+        m = re.search(r'Latest incoming message from [^:\n]+:\s*\n["\']?([^"\']+)["\']?', prompt)
+        incoming = m.group(1).strip() if m else prompt.strip()
+        lower = incoming.lower()
+
         if re.search(r"\b(bot|ai|real|fake|who are you)\b", lower):
             return "bruh u fr rn it's me lol"
-        if re.search(r"\b(tonight|free|available|meet|time|coming|there)\b", lower):
+        if re.search(r"\b(tonight|meet|dinner|lunch|hangout|plans)\b", lower):
             return "yeah sounds good, will let you know 👍"
-        if re.search(r"\b(thanks|thank)\b", lower):
+        if re.search(r"\b(free|available|when|time|ready)\b", lower):
+            return "yeah free now, what's up"
+        if re.search(r"\b(thanks|thank you|thx)\b", lower):
             return "anytime bro 👍"
+        if re.search(r"\b(how are you|how r u|what's up|wassup|sup)\b", lower):
+            return "all good here, what about you"
+        if re.search(r"\b(ok|okay|cool|done|noted|got it)\b", lower):
+            return "sounds good 👍"
+
+        # Dynamically mirror context keywords if a specific question or topic was raised
+        words = [w for w in re.findall(r"\b[a-zA-Z]{3,}\b", lower) if w not in ("the", "and", "can", "you", "for", "with", "this", "that", "have", "are", "what", "how", "will")]
+        if words and "?" in incoming:
+            return f"will check the {words[-1]} and let you know"
+
         return "sounds good bro 👍"
 
 

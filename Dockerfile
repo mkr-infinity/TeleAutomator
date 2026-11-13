@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application source code, scripts, and prompt configuration
 COPY app/ ./app/
+COPY miniapp/ ./miniapp/
 COPY scripts/ ./scripts/
 COPY system_prompt.txt* ./
 COPY entrypoint.sh ./entrypoint.sh
@@ -36,6 +37,8 @@ USER appuser
 # Health check using self-contained python health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD /app/healthcheck.sh
+
+EXPOSE 8080
 
 ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["python3", "-m", "app.main"]

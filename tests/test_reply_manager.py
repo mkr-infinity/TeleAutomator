@@ -557,7 +557,7 @@ def test_control_commands_model_baseurl_provider_chatty(tmp_path: Path):
 
         # 3. /chatty
         chatty_info = await mgr.handle_control_command("/chatty")
-        assert "Group Banter Participation" in chatty_info
+        assert "Group Banter Rate" in chatty_info
         chatty_set = await mgr.handle_control_command("/chatty 20")
         assert "20%" in chatty_set
         assert float(db.get_state("chatty_probability")) == 0.20
@@ -928,6 +928,7 @@ def test_group_unthreaded_reply_without_mention(tmp_path: Path):
     async def _run():
         cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
         db = Database(tmp_path / "test_unthreaded.db")
+        db.set_state("typo_correction_enabled", "0")
         safety = SafetyManager(cfg, db)
         privacy = PrivacyManager(cfg, database=db)
         generator = ReplyGenerator(cfg, database=db)
@@ -1138,7 +1139,7 @@ def test_version_and_typing_speed_modulation(tmp_path: Path):
 
 
 def test_daily_quota_threshold_alert(tmp_path: Path):
-    """Verify daily quota alert triggers heads-up message to Saved Messages when consumption exceeds threshold."""
+    """Verify daily quota alert is completely disabled and sends no warning messages."""
     async def _run():
         cfg = AppConfig(
             api_id=123,
@@ -1163,23 +1164,20 @@ def test_daily_quota_threshold_alert(tmp_path: Path):
         mock_client.send_message = AsyncMock(side_effect=mock_send_message)
         mgr.set_telegram_client(mock_client)
 
-        # 1. Configure threshold to 50,000 tokens
+        # 1. /quotathreshold returns disabled notice
         thresh_res = await mgr.handle_control_command("/quotathreshold 50000")
-        assert "50,000" in thresh_res
-        assert db.get_state("quota_threshold_tokens") == "50000"
+        assert "disabled and removed" in thresh_res
 
         # 2. Record 60,000 tokens consumed in the last 24h
         db.record_token_usage("custom", "mercury-3", 20000, 40000, 60000)
         daily = db.get_daily_token_usage()
         assert daily == 60000
 
-        # 3. Check daily quota warning
+        # 3. Check daily quota warning is suppressed (no alerts sent)
         await mgr.check_daily_quota_warning()
-        assert len(sent_to_me) == 1
-        assert "Daily Token Quota Threshold Alert" in sent_to_me[0]
-        assert "60,000" in sent_to_me[0]
+        assert len(sent_to_me) == 0
 
-        # 4. Check that /usage reports 24h consumption
+        # 4. Check that /usage reports 24h consumption cleanly
         usage_res = await mgr.handle_control_command("/usage")
         assert "24h Daily Consumption" in usage_res
         assert "60,000" in usage_res
@@ -1270,7 +1268,7 @@ def test_permanent_group_context_and_pinned_sync(tmp_path: Path):
 
         # 2. Add custom notes
         res2 = await mgr.handle_control_command("/setcontext -100999 CS graduation project team")
-        assert "Permanent context saved" in res2
+        assert "Permanent Context Saved" in res2
 
         # 3. View context
         res3 = await mgr.handle_control_command("/showcontext -100999")
@@ -1714,7 +1712,7 @@ def test_typo_injection_and_auto_correction(tmp_path: Path):
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
         status_msg = await mgr.handle_control_command("/typo")
-        assert "Typo & Auto-Correction Simulation" in status_msg
+        assert "Typo & Self-Edit Simulation" in status_msg
 
         off_msg = await mgr.handle_control_command("/typo off")
         assert "DISABLED" in off_msg
@@ -1724,7 +1722,7 @@ def test_typo_injection_and_auto_correction(tmp_path: Path):
         assert "ENABLED" in on_msg
         assert db.get_state("typo_correction_enabled") == "1"
 
-        # 3. Sending reply with typo sends correction follow-up
+        # 3. Sending reply with typo edits message in-place clean (never sends *word)
         sent_messages = []
         async def mock_send(chat_id, text, **kwargs):
             sent_messages.append(text)
@@ -1732,6 +1730,7 @@ def test_typo_injection_and_auto_correction(tmp_path: Path):
 
         mock_client = AsyncMock()
         mock_client.send_message = AsyncMock(side_effect=mock_send)
+        mock_client.edit_message = AsyncMock()
         mgr.set_telegram_client(mock_client)
 
         # Force typo injection in _send_reply by temporarily patching probability to 1.0
@@ -1739,11 +1738,11 @@ def test_typo_injection_and_auto_correction(tmp_path: Path):
         mgr.maybe_inject_typo_correction = lambda t, **kw: orig_maybe(t, probability=1.0)
 
         await mgr._send_reply(chat_id=555, reply_to_msg_id=0, text="sounds good bro", adaptive_delay=False)
-        assert len(sent_messages) == 2
-        # First message had the typo
+        assert len(sent_messages) == 1
+        # The sent message initially had the typo
         assert sent_messages[0] != "sounds good bro"
-        # Second message was the correction
-        assert sent_messages[1].startswith("*")
+        # The message was edited in-place clean (never sending *word)
+        mock_client.edit_message.assert_awaited_once_with(555, 1, "sounds good bro")
 
     asyncio.run(_run())
 
@@ -2079,27 +2078,28 @@ def test_incoming_burst_debouncer(tmp_path: Path):
         db.set_state("debounce_seconds", "0.15")
 
         chat_id = 4444
-        # Send 2 rapid burst messages
-        await mgr.handle_incoming_eligible_message(
+        # Send 2 rapid burst messages concurrently (as Telegram MTProto delivers them)
+        task1 = asyncio.create_task(mgr.handle_incoming_eligible_message(
             chat_id=chat_id,
             chat_title="Friend",
             message_id=1,
             sender_id=777,
             sender_name="Bob",
             text="yo",
-        )
+        ))
         await asyncio.sleep(0.04)
-        await mgr.handle_incoming_eligible_message(
+        task2 = asyncio.create_task(mgr.handle_incoming_eligible_message(
             chat_id=chat_id,
             chat_title="Friend",
             message_id=2,
             sender_id=777,
             sender_name="Bob",
             text="are you free",
-        )
+        ))
 
         # Wait for debounce window to elapse (0.15s + buffer)
         await asyncio.sleep(0.28)
+        await asyncio.gather(task1, task2)
 
         # Should have sent only 1 reply instead of 2 separate replies!
         assert mock_client.send_message.call_count == 1

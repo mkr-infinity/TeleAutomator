@@ -128,6 +128,7 @@ class ReplyGenerator:
         incoming_text: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         style_override: Optional[str] = None,
+        persona_override: Optional[str] = None,
         permanent_context: Optional[str] = None,
         is_group: bool = False,
         is_mention: bool = False,
@@ -141,31 +142,37 @@ class ReplyGenerator:
             is_group=is_group,
             is_mention=is_mention,
         )
-        instructions = self.prompt_manager.get_system_instructions(style_override=style_override)
+        instructions = self.prompt_manager.get_system_instructions(
+            style_override=style_override,
+            persona_override=persona_override,
+            is_group=is_group,
+        )
         try:
             draft = self.provider.generate_reply(prompt, instructions)
-            return self.prompt_manager.clean_reply(draft, sender_name=sender_name)
+            custom_limit = self.prompt_manager.get_custom_word_limit(persona_override)
+            return self.prompt_manager.clean_reply(draft, sender_name=sender_name, custom_limit=custom_limit)
         except Exception as e:
             logger.error(f"Failed to generate draft reply: {e}")
             # Never return fallbacks to groups or peer chats; raise so caller alerts Saved Messages exclusively
             raise RuntimeError(f"AI generation failed: {e}") from e
 
-    def summarize_chat_history(self, chat_title: str, existing_summary: str, raw_text: str) -> str:
-        """Condense recent group chat messages into a short rolling recap using AI (no hardcoded text)."""
+    def summarize_chat_history(self, chat_title: str, existing_summary: str, raw_text: str, is_group: bool = True) -> str:
+        """Condense recent chat messages into a short rolling recap using AI (no hardcoded text)."""
         if not raw_text or not raw_text.strip():
             return ""
         from app.ai.provider import LocalRuleProvider
         if isinstance(self.provider, LocalRuleProvider):
             return ""
+        chat_type_label = "Telegram group chat" if is_group else "Telegram private chat"
         prompt = (
-            f"You are building permanent memory for a Telegram group chat '{chat_title}'.\n\n"
+            f"You are building permanent memory for a {chat_type_label} '{chat_title}'.\n\n"
             f"Recap so far:\n{existing_summary.strip() or '(none)'}\n\n"
             f"New recent messages:\n{raw_text}\n\n"
-            f"Update the recap in under 120 words. Always carry over important facts verbatim: pinned rules, "
-            f"announcements, events, dates/plans, names & nicknames people use for each other, commitments, staff/mods, "
-            f"recurring topics and running jokes. Describe the group's mood/vibe. "
-            f"Never lose previously learned important facts. "
-            f"Output ONLY the updated recap text, no preamble."
+            f"Update the recap in under 150 words. Focus strictly on retaining important permanent facts: "
+            f"commitments, decisions, preferences, names/nicknames, dates/plans, personal facts mentioned, "
+            f"rules, running jokes, and ongoing topics. "
+            f"Describe the mood/energy. Never lose previously learned important facts. "
+            f"Output ONLY the updated permanent memory text, no preamble."
         )
         try:
             draft = self.provider.generate_reply(prompt, "You are a concise chat-memory system. Output only the updated recap.")
@@ -187,6 +194,35 @@ class ReplyGenerator:
         instructions = self.prompt_manager.get_system_instructions()
         draft = self.provider.generate_reply(prompt, instructions)
         return self.prompt_manager.clean_reply(draft)
+
+    def generate_voice_profile(self, chat_title: str, raw_text: str) -> str:
+        """Learn how a group's people actually talk from recent messages: tone, slang,
+        message length, topics. AI-written voice profile used to blend in as a regular."""
+        if not raw_text or not raw_text.strip():
+            return ""
+        from app.ai.provider import LocalRuleProvider
+        if isinstance(self.provider, LocalRuleProvider):
+            return ""
+
+        prompt = (
+            f"You are studying recent messages from the Telegram group '{chat_title}' so you can "
+            f"text there exactly like one of its regular members.\n\n"
+            f"Messages:\n{raw_text}\n\n"
+            f"Write a compact voice profile (max 120 words) capturing ONLY what you observe:\n"
+            f"- Tone and energy (dry, hyped, sarcastic, wholesome, etc.)\n"
+            f"- Typical message length and style (one-liners vs paragraphs, caps, punctuation habits)\n"
+            f"- Slang, greetings, filler words and emoji habits (cite real examples from these messages)\n"
+            f"- Recurring topics, running jokes and nicknames people use\n"
+            f"- How banter and disagreements sound in this group\n\n"
+            f"Write it as direct instructions starting with 'Talk like: '. Output ONLY the profile, no preamble."
+        )
+        system_inst = "You are a chat-behavior analyst. Output only the requested profile text."
+        try:
+            draft = self.provider.generate_reply(prompt, system_inst)
+            return draft.strip()[:1500]
+        except Exception as e:
+            logger.error(f"Failed to generate voice profile: {e}")
+            return ""
 
     def distill_group_context(self, chat_title: str, raw_text: str) -> str:
         """Distill raw pinned messages and group announcements into concise permanent context using AI."""

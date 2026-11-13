@@ -294,10 +294,22 @@ def register_handlers(
 
                 # Active group conversation (even when replying to another member or sending into group stream):
                 # Engages dynamically based on chatty rate without waiting 20 minutes!
-                chatty_prob = float(reply_manager.db.get_state(
-                    "chatty_probability",
-                    str(getattr(reply_manager.config, "chatty_probability", 0.20))
-                ))
+                # Priority: per-chat override (inline picker) → explicitly-set global → human default band 30-60%.
+                per_chat_chatty = reply_manager.db.get_state(f"chat_chatty_{chat_id}")
+                global_chatty_raw = reply_manager.db.get_state("chatty_probability")
+                band_prob = random.uniform(0.30, 0.60)
+                if per_chat_chatty:
+                    try:
+                        chatty_prob = float(per_chat_chatty)
+                    except ValueError:
+                        chatty_prob = band_prob
+                elif global_chatty_raw:
+                    try:
+                        chatty_prob = float(global_chatty_raw)
+                    except ValueError:
+                        chatty_prob = band_prob
+                else:
+                    chatty_prob = band_prob
                 is_relevant = reply_manager.is_group_message_relevant(chat_id, text, chat_title)
                 # If message is relevant to group topic or discussion, boost engagement
                 effective_prob = max(chatty_prob, 0.40) if is_relevant else chatty_prob

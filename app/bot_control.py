@@ -33,28 +33,39 @@ BOT_COMMAND_HELP = (
 )
 
 UNAUTHORIZED_MESSAGE = (
-    "🔒 *TeleAutomator — Access Restricted*\n\n"
-    "Hi there! This control panel belongs to a private automation project, "
-    "and your account isn't authorized to use it yet.\n\n"
-    "👉 Want access? Reach out on Telegram: [@mkr_infinity](https://t.me/mkr_infinity)\n"
-    "Just mention __TeleAutomator__ and the project you'd like authorization for.\n\n"
+    "🔒 *Access Restricted*\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "🤖 *TeleAutomator Control Panel*\n"
+    "This control panel belongs to a private automation project — "
+    "your account isn't authorized to use it yet.\n\n"
+    "💳 *Authentication Note:*\n"
+    "To get authorized access, pay *100 Stars* or *1 TON* to *@mkr_infinity*.\n\n"
+    "👉 *Contact & Verification:*\n"
+    "Reach out on Telegram: [@mkr_infinity](https://t.me/mkr_infinity)\n"
+    "Just mention *TeleAutomator* with payment confirmation for instant access.\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
     "_Thanks for understanding! 🙏_"
 )
 
 UNAUTHORIZED_MESSAGE_HTML = (
-    "<b>🔒 TeleAutomator — Access Restricted</b>\n\n"
-    "Hi there! This control panel belongs to a private automation project, "
+    "<b>🔒 Access Restricted</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "🤖 <b>TeleAutomator Control Panel</b>\n"
+    "This control panel belongs to a private automation project, "
     "and your account isn't authorized to use it yet.\n\n"
-    "👉 Want access? Contact <b>@mkr_infinity</b>\n"
-    "<a href=\"https://t.me/mkr_infinity\">Open chat: @mkr_infinity</a>\n"
-    "Just mention <b>TeleAutomator</b> and the project you'd like authorization for.\n\n"
+    "💳 <b>Authentication Note:</b>\n"
+    "To get authorized access, pay <b>100 Stars</b> or <b>1 TON</b> to <b>@mkr_infinity</b>.\n\n"
+    "👉 <b>Contact & Verification:</b>\n"
+    "Contact <b>@mkr_infinity</b> — <a href=\"https://t.me/mkr_infinity\">Open chat</a>\n"
+    "Just mention <b>TeleAutomator</b> with payment confirmation for instant access.\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
     "<i>Thanks for understanding! 🙏</i>"
 )
 
 SPAM_WARNING_MESSAGE = (
     "🙇 *Please don't spam*\n\n"
     "This channel is for project control only. I'll stay silent until you're authorized.\n"
-    "If you need access, contact <b>@mkr_infinity</b>."
+    "For authentication, pay 100 Stars or 1 TON and contact <b>@mkr_infinity</b>."
 )
 
 AUTHORIZED_NOTICE = (
@@ -86,12 +97,12 @@ BOT_COMMAND_MENU: list[dict] = [
     {"command": "watchdog", "description": "🐕 Crash-alert threshold — /watchdog <minutes> (default 5)"},
     # -- Persona & language --
     {"command": "prompt", "description": "🎭 AI persona — /prompt <text> to set · bare /prompt to view"},
-    {"command": "setprompt", "description": "🎭 Set persona directly — /setprompt <text> · `/setprompt default` resets"},
     {"command": "name", "description": "👤 Owner identity name the AI texts as — /name <name>"},
     {"command": "style", "description": "🎨 AI style — /style casual|concise|formal|humorous"},
     {"command": "styles", "description": "🗂️ List per-chat style overrides"},
+    {"command": "chatprompt", "description": "🗣 Per-chat AI persona — /chatprompt <chat_id> <text>"},
     {"command": "lang", "description": "🌐 Reply language — /lang dynamic|english|hindi|..."},
-    {"command": "chatty", "description": "💬 Group banter rate 0-100 — /chatty <percent>"},
+    {"command": "chatty", "description": "💬 Per-group banter picker (buttons) — bare /chatty"},
     # -- AI engine --
     {"command": "aiconfig", "description": "🤖 AI engine dashboard — provider, model, temperature"},
     {"command": "setai", "description": "⚙️ 1-step AI setup — /setai <provider> <key>"},
@@ -104,8 +115,6 @@ BOT_COMMAND_MENU: list[dict] = [
     {"command": "temp", "description": "🌡️ AI creativity — /temp <0.0-1.0>"},
     {"command": "maxtokens", "description": "📏 Max output tokens — /maxtokens <tokens>"},
     {"command": "usage", "description": "📈 Token tracker — daily use & free-quota remaining"},
-    {"command": "quotathreshold", "description": "⚠️ Daily token warning limit — /quotathreshold <tokens>"},
-    {"command": "quotaalert", "description": "🔔 Daily quota warnings — /quotaalert on|off"},
     # -- Human behavior sim --
     {"command": "reaction", "description": "❤️ Auto-reactions — /reaction on|off"},
     {"command": "reactioncooldown", "description": "⏱️ Reaction cooldown — /reactioncooldown <min> <max> seconds"},
@@ -123,16 +132,15 @@ BOT_COMMAND_MENU: list[dict] = [
     # -- Chats & context --
     {"command": "chats", "description": "📋 Allowlisted contacts & groups table"},
     {"command": "allowchat", "description": "➕ Allowlist a chat — /allowchat <chat_id>"},
-    {"command": "allow", "description": "➕ Alias of /allowchat — /allow <chat_id>"},
     {"command": "removechat", "description": "➖ Remove chat from allowlist — /removechat <chat_id>"},
     {"command": "blockchat", "description": "🚫 Block a chat ID — /blockchat <chat_id>"},
-    {"command": "ban", "description": "🚫 Alias of /blockchat — /ban <chat_id>"},
     {"command": "mentiononly", "description": "🎯 Group safety — reply only when mentioned — /mentiononly on|off"},
     {"command": "contextttl", "description": "⏳ Context aging window — /contextttl <hours>"},
     {"command": "clearcontext", "description": "🧹 Reset cached AI context — /clearcontext <chat_id>"},
     {"command": "syncpins", "description": "📌 Sync pinned messages into permanent context — /syncpins [chat_id]"},
     {"command": "setcontext", "description": "📝 Save permanent notes for a group — /setcontext <chat_id> <notes>"},
     {"command": "showcontext", "description": "👁️ View permanent context — /showcontext <chat_id>"},
+    {"command": "gencontext", "description": "🧠 Rebuild group AI voice profile — /gencontext <chat_id>"},
     {"command": "delcontext", "description": "🗑️ Delete permanent context — /delcontext <chat_id>"},
     # -- Custom keyword rules --
     {"command": "addrule", "description": "📜 Keyword auto-reply — /addrule <word> => <reply>"},
@@ -150,32 +158,62 @@ BOT_COMMAND_MENU: list[dict] = [
     {"command": "removeauth", "description": "👋 Remove authorized user — /removeauth <user_id>"},
     {"command": "grantperm", "description": "🔑 Restrict user to commands — /grantperm <user_id> all|/status,/prompt"},
     {"command": "revokeperm", "description": "🔓 Remove user command restrictions — /revokeperm <user_id>"},
+    {"command": "miniapp", "description": "📱 Launch TeleAutomator Mini App — /miniapp"},
 ]
 
 
-def quick_menu_markup() -> dict:
+def quick_menu_markup(miniapp_url: Optional[str] = None) -> dict:
     """Inline quick-action keyboard attached to key cards (welcome, /start, /status, /help).
     Callbacks arrive as 'cmd:<command>' and are routed through the normal command engine."""
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "📊 Status", "callback_data": "cmd:/status"},
-                {"text": "📝 Pending", "callback_data": "cmd:/pending"},
-            ],
-            [
-                {"text": "⏸ Pause 30m", "callback_data": "cmd:/pause 30"},
-                {"text": "▶️ Resume", "callback_data": "cmd:/resume"},
-            ],
-            [
-                {"text": "🛡 Safe-mode", "callback_data": "cmd:/safemode"},
-                {"text": "🤖 AI Config", "callback_data": "cmd:/aiconfig"},
-            ],
-            [
-                {"text": "📋 Chats", "callback_data": "cmd:/chats"},
-                {"text": "📖 Help", "callback_data": "cmd:/help"},
-            ],
-        ]
-    }
+    rows = []
+    if not miniapp_url:
+        try:
+            from app.miniapp_server import resolve_miniapp_url
+            miniapp_url = resolve_miniapp_url()
+        except Exception:
+            miniapp_url = None
+
+    if miniapp_url:
+        rows.append([{"text": "⚡ Launch TeleAutomator", "web_app": {"url": miniapp_url}}])
+
+    rows.extend([
+        [
+            {"text": "📊 Status", "callback_data": "cmd:/status"},
+            {"text": "📝 Pending", "callback_data": "cmd:/pending"},
+        ],
+        [
+            {"text": "⏸ Pause 30m", "callback_data": "cmd:/pause 30"},
+            {"text": "▶️ Resume", "callback_data": "cmd:/resume"},
+        ],
+        [
+            {"text": "🛡 Safe-mode", "callback_data": "cmd:/safemode"},
+            {"text": "🤖 AI Config", "callback_data": "cmd:/aiconfig"},
+        ],
+        [
+            {"text": "📋 Chats", "callback_data": "cmd:/chats"},
+            {"text": "📖 Help", "callback_data": "cmd:/help"},
+        ],
+    ])
+    return {"inline_keyboard": rows}
+
+
+def chatty_picker_markup(chats: list[tuple[int, str]]) -> dict:
+    """Inline picker for per-chat banter rates: one row per allowed group.
+    Name button shows the current setting; 10/30/50/70 presets set it; DEF resets to the default band."""
+    rows = []
+    for cid, name in chats:
+        label = name if len(name) <= 16 else name[:15] + "…"
+        rows.append([
+            {"text": f"💬 {label}", "callback_data": f"chatty:{cid}:show"},
+            {"text": "10", "callback_data": f"chatty:{cid}:10"},
+            {"text": "30", "callback_data": f"chatty:{cid}:30"},
+            {"text": "50", "callback_data": f"chatty:{cid}:50"},
+            {"text": "70", "callback_data": f"chatty:{cid}:70"},
+            {"text": "DEF", "callback_data": f"chatty:{cid}:default"},
+        ])
+    if not rows:
+        rows.append([{"text": "ℹ️ No allowlisted groups yet", "callback_data": "noop"}])
+    return {"inline_keyboard": rows}
 
 
 class BotControl:
@@ -279,7 +317,10 @@ class BotControl:
         if parse_markdown:
             return await self.send_message(chat_id, text, parse_markdown=False, reply_markup=reply_markup)
         try:
-            await self._call("sendMessage", {"chat_id": chat_id, "text": text, "parse_mode": "HTML"})
+            fb_payload: dict[str, Any] = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+            if reply_markup is not None:
+                fb_payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+            await self._call("sendMessage", fb_payload)
             return True
         except Exception as e:
             logger.warning(f"Bot sendMessage fallback failed for {chat_id}: {e}")
@@ -460,10 +501,16 @@ class BotControl:
 
         if lowered.startswith("/addauth"):
             if not self.is_main_user(user_id):
-                await self.send_message(chat_id, "👑 Only the main account owner can add authorized users.")
+                await self.send_message(
+                    chat_id,
+                    "❌ Permission denied\nMissing: Main owner privileges\nFix: Only the main account owner can add authorized users.",
+                )
                 return
             if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
-                await self.send_message(chat_id, "Usage: `/addauth <telegram_user_id>`")
+                await self.send_message(
+                    chat_id,
+                    "❌ /addauth failed\nMissing: Valid Telegram User ID\nFix: /addauth <user_id> (e.g. /addauth 123456789)",
+                )
                 return
             new_id = int(parts[1].lstrip("-"))
             users = self._load_authorized()
@@ -479,15 +526,24 @@ class BotControl:
 
         if lowered.startswith("/removeauth"):
             if not self.is_main_user(user_id):
-                await self.send_message(chat_id, "👑 Only the main account owner can remove authorized users.")
+                await self.send_message(
+                    chat_id,
+                    "❌ Permission denied\nMissing: Main owner privileges\nFix: Only the main account owner can remove authorized users.",
+                )
                 return
             if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
-                await self.send_message(chat_id, "Usage: `/removeauth <telegram_user_id>`")
+                await self.send_message(
+                    chat_id,
+                    "❌ /removeauth failed\nMissing: Valid Telegram User ID\nFix: /removeauth <user_id> (e.g. /removeauth 123456789)",
+                )
                 return
             target = int(parts[1].lstrip("-"))
             users = self._load_authorized()
             if target not in users:
-                await self.send_message(chat_id, f"User `{target}` is not in the authorized list.")
+                await self.send_message(
+                    chat_id,
+                    f"❌ /removeauth failed\nMissing: User in authorized list\nFix: User `{target}` is not in the authorized list.",
+                )
                 return
             if target == self.main_user_id:
                 await self.send_message(chat_id, "🛡️ The main account owner cannot be removed (at least one user must remain).")
@@ -506,14 +562,23 @@ class BotControl:
         # Per-command permissions (suggestion #1): main owner can restrict a secondary user
         if lowered.startswith("/grantperm"):
             if not self.is_main_user(user_id):
-                await self.send_message(chat_id, "👑 Only the main account owner can manage permissions.")
+                await self.send_message(
+                    chat_id,
+                    "❌ Permission denied\nMissing: Main owner privileges\nFix: Only the main account owner can manage permissions.",
+                )
                 return
             if len(parts) < 3 or not parts[1].lstrip("-").isdigit():
-                await self.send_message(chat_id, "Usage: `/grantperm <user_id> all` — or limit to specific commands:\n`/grantperm 555 /status,/prompt,/pause`")
+                await self.send_message(
+                    chat_id,
+                    "❌ /grantperm failed\nMissing: Target user ID and command list\nFix: /grantperm <user_id> all — or limit to specific commands:\n/grantperm 555 /status,/prompt,/pause",
+                )
                 return
             target = int(parts[1].lstrip("-"))
             if target not in self._load_authorized():
-                await self.send_message(chat_id, f"User `{target}` is not authorized yet. `/addauth` them first.")
+                await self.send_message(
+                    chat_id,
+                    f"❌ /grantperm failed\nMissing: Authorized user\nFix: User `{target}` is not authorized yet. /addauth {target} first.",
+                )
                 return
             granted = ",".join(p.strip().lower() for p in parts[2:] if p.strip())
             if granted.lower() == "all":
@@ -522,7 +587,10 @@ class BotControl:
             else:
                 cmds = granted.replace(" ", "").split(",")
                 if not cmds or not all(c.startswith("/") for c in cmds if c):
-                    await self.send_message(chat_id, "Commands must be comma-separated and start with `/` (e.g. `/status,/prompt`).")
+                    await self.send_message(
+                        chat_id,
+                        "❌ /grantperm failed\nMissing: Valid command names\nFix: Commands must be comma-separated and start with `/` (e.g. `/status,/prompt`).",
+                    )
                     return
                 self.db.set_state(f"bot_granted_cmds_{target}", ",".join(sorted(set(cmds))))
                 await self.send_message(chat_id, f"🔒 User `{target}` is now restricted to:\n{'  '.join(sorted(set(cmds)))}")
@@ -531,10 +599,16 @@ class BotControl:
 
         if lowered.startswith("/revokeperm"):
             if not self.is_main_user(user_id):
-                await self.send_message(chat_id, "👑 Only the main account owner can manage permissions.")
+                await self.send_message(
+                    chat_id,
+                    "❌ Permission denied\nMissing: Main owner privileges\nFix: Only the main account owner can manage permissions.",
+                )
                 return
             if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
-                await self.send_message(chat_id, "Usage: `/revokeperm <user_id>`")
+                await self.send_message(
+                    chat_id,
+                    "❌ /revokeperm failed\nMissing: Target user ID\nFix: /revokeperm <user_id> (e.g. /revokeperm 123456789)",
+                )
                 return
             target = int(parts[1].lstrip("-"))
             if self.db.get_state(f"bot_granted_cmds_{target}", "all") == "all":
@@ -547,11 +621,17 @@ class BotControl:
 
         if lowered.startswith("/watchdog"):
             if not self.is_main_user(user_id):
-                await self.send_message(chat_id, "👑 Only the main account owner can change watchdog settings.")
+                await self.send_message(
+                    chat_id,
+                    "❌ Permission denied\nMissing: Main owner privileges\nFix: Only the main account owner can change watchdog settings.",
+                )
                 return
             if len(parts) < 2 or not parts[1].isdigit():
                 curr = self.db.get_state("watchdog_minutes", "5")
-                await self.send_message(chat_id, f"⏱️ *Watchdog threshold:* {curr} min\nUsage: `/watchdog <minutes>` — alerts you here if the main process heartbeat goes silent that long.")
+                await self.send_message(
+                    chat_id,
+                    f"⏱️ *Watchdog threshold:* {curr} min\nUsage: `/watchdog <minutes>` — alerts you here if the main process heartbeat goes silent that long.\nExample: `/watchdog 5`",
+                )
                 return
             mins = max(2, int(parts[1]))
             self.db.set_state("watchdog_minutes", str(mins))
@@ -560,9 +640,10 @@ class BotControl:
 
         # Per-command permission enforcement (main owner always unrestricted)
         if not self.is_main_user(user_id) and not self._user_can(user_id, text.split()[0]):
+            cmd_root = text.split()[0].split('@')[0]
             await self.send_message(
                 chat_id,
-                f"⛔ `{text.split()[0].split('@')[0]}` is not permitted for your account. Ask the owner to grant it via `/grantperm`.",
+                f"❌ Permission denied\nMissing: Permission for `{cmd_root}`\nFix: `{cmd_root}` is not permitted for your account. Ask the owner to grant it via `/grantperm {user_id} {cmd_root}`.",
             )
             return
 
@@ -571,10 +652,26 @@ class BotControl:
         if response:
             if len(response) > 4000:
                 response = response[:4000] + "\n…"
-            # Key overview commands get the inline quick-action keyboard
+            # Key overview commands get the inline quick-action keyboard;
+            # /chatty gets the per-chat banter picker instead
             root_cmd = text.strip().split()[0].lower().split("@")[0]
-            markup = quick_menu_markup() if root_cmd in ("/status", "/help") else None
+            if root_cmd in ("/status", "/help", "/miniapp", "/panel", "/gui", "/app"):
+                markup = quick_menu_markup()
+            elif root_cmd in ("/chatty", "/banter"):
+                markup = chatty_picker_markup(self._allowed_chat_summaries())
+            else:
+                markup = None
             await self.send_message(chat_id, response, reply_markup=markup)
+
+    def _allowed_chat_summaries(self) -> list[tuple[int, str]]:
+        """(chat_id, display name) for every allowlisted chat — used by the /chatty picker."""
+        priv, grps = self.reply_manager.privacy.get_all_allowed_chats()
+        summaries = []
+        for cid in sorted(priv | grps):
+            meta = self.reply_manager.db.get_chat_metadata(cid) or {}
+            name = meta.get("title") or f"Chat {cid}"
+            summaries.append((cid, name))
+        return summaries
 
     def _user_can(self, user_id: int, raw_command: str) -> bool:
         """Check this user's granted command list ('all' or trailing-specific commands like /prompt)."""
@@ -604,7 +701,19 @@ class BotControl:
         data = cb.get("data") or ""
         cb_id = cb.get("id")
         if not self.is_authorized(user_id):
-            await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "Not authorized 🔒"})
+            await self._call("answerCallbackQuery", {
+                "callback_query_id": cb_id,
+                "text": "❌ Access denied\nMissing: Authorized account\nFix: Contact @mkr_infinity. Note: Pay 100 Stars or 1 TON to @mkr_infinity for authentication.",
+                "show_alert": True,
+            })
+            return
+
+        if data == "noop":
+            await self._call("answerCallbackQuery", {
+                "callback_query_id": cb_id,
+                "text": "ℹ️ No allowlisted groups yet.\nFix: Use /allowchat <group_id> to add one.",
+                "show_alert": True,
+            })
             return
 
         # Quick-menu buttons: route the embedded command through the normal engine,
@@ -615,10 +724,14 @@ class BotControl:
             chat_id = message.get("chat", {}).get("id")
             msg_id = message.get("message_id")
             if not command.startswith("/") or not chat_id:
-                await self._call("answerCallbackQuery", {"callback_query_id": cb_id})
+                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "❌ Invalid command button", "show_alert": False})
                 return
             if not (self.is_main_user(user_id) or self._user_can(user_id, command)):
-                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "⛔ Not permitted for your account."})
+                await self._call("answerCallbackQuery", {
+                    "callback_query_id": cb_id,
+                    "text": f"❌ Permission denied\nMissing: Permission for {command.split()[0]}\nFix: `{command.split()[0]}` is not permitted for your account. Ask owner to grant it via /grantperm.",
+                    "show_alert": True,
+                })
                 return
             response = await self.reply_manager.handle_control_command(command) or "Done."
             await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": response[:180], "show_alert": False})
@@ -646,31 +759,87 @@ class BotControl:
                 )
             return
 
+        # Per-chat banter picker: 'chatty:<chat_id>:<pct|default|show>'
+        if data.startswith("chatty:"):
+            _, cid_s, action = data.split(":", 2)
+            try:
+                cid = int(cid_s)
+            except ValueError:
+                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "❌ Invalid chat ID", "show_alert": False})
+                return
+            if not (self.is_main_user(user_id) or self._user_can(user_id, "/chatty")):
+                await self._call("answerCallbackQuery", {
+                    "callback_query_id": cb_id,
+                    "text": "❌ Permission denied\nMissing: Permission for /chatty\nFix: /chatty is not permitted for your account. Ask owner to grant via /grantperm.",
+                    "show_alert": True,
+                })
+                return
+            meta = self.reply_manager.db.get_chat_metadata(cid) or {}
+            name = meta.get("title") or f"Chat {cid}"
+            if action == "show":
+                cur = self.reply_manager.db.get_state(f"chat_chatty_{cid}")
+                if cur:
+                    try:
+                        text = f"💬 {name}: per-chat {int(float(cur) * 100)}% banter"
+                    except ValueError:
+                        text = f"💬 {name}: default band (30-60%)"
+                else:
+                    text = f"💬 {name}: default band (30-60%)"
+                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": text[:180], "show_alert": False})
+                return
+            if action == "default":
+                self.reply_manager.db.set_state(f"chat_chatty_{cid}", "")
+                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": f"♻️ {name}: reset to default 30-60% band", "show_alert": True})
+                return
+            try:
+                pct = max(0, min(100, int(action)))
+            except ValueError:
+                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "❌ Invalid banter value", "show_alert": False})
+                return
+            self.reply_manager.db.set_state(f"chat_chatty_{cid}", str(pct / 100.0))
+            await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": f"✅ {name}: {pct}% banter (always respects cooldowns)", "show_alert": True})
+            return
+
         if data not in ("approve", "reject") and ":" not in data:
-            await self._call("answerCallbackQuery", {"callback_query_id": cb_id})
+            await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "ℹ️ Button recognized", "show_alert": False})
             return
         action, _, target_id = data.partition(":")
         if action not in ("approve", "reject") or not target_id.isdigit():
-            await self._call("answerCallbackQuery", {"callback_query_id": cb_id})
+            await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "❌ Unknown action", "show_alert": False})
             return
         if not (self.is_main_user(user_id) or self._user_can(user_id, f"/{action}")):
-            await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "⛔ Not permitted for your account."})
+            await self._call("answerCallbackQuery", {
+                "callback_query_id": cb_id,
+                "text": f"❌ Permission denied\nMissing: Permission for /{action}\nFix: /{action} is not permitted for your account. Ask owner to grant via /grantperm.",
+                "show_alert": True,
+            })
             return
+
         response = await self.reply_manager.handle_control_command(f"/{action} {target_id}") or "Done."
-        # Popup answer + update the message so the buttons disappear once handled
+        # Popup answer + update the message in-place so buttons disappear and message is preserved (never delete)
         await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": response[:180], "show_alert": True})
         message = cb.get("message") or {}
+        chat_id = message.get("chat", {}).get("id")
+        msg_id = message.get("message_id")
+        title_action = "sent ✅" if action == "approve" else "rejected ❌"
+        if response.startswith("❌") or response.startswith("⚠️"):
+            title_action = "status"
+        card_text = f"*Draft #{target_id} — {title_action}*\n{response}"
         try:
-            await self._call(
-                "deleteMessage",
-                {"chat_id": message.get("chat", {}).get("id"), "message_id": message.get("message_id")},
-            )
-            await self.send_message(
-                message.get("chat", {}).get("id"),
-                f"*Draft #{target_id} — {'sent ✅' if action == 'approve' else 'rejected ❌'}*\n{response}",
-            )
+            if chat_id and msg_id:
+                await self._call(
+                    "editMessageText",
+                    {
+                        "chat_id": chat_id,
+                        "message_id": msg_id,
+                        "text": card_text,
+                        "parse_mode": "Markdown",
+                    },
+                )
+            elif chat_id:
+                await self.send_message(chat_id, card_text)
         except Exception as e:
-            logger.debug(f"Could not refresh approval message: {e}")
+            logger.debug(f"Could not edit approval message: {e}")
 
 
     async def _handle_unauthorized(self, chat_id: int, user_id: int) -> None:
@@ -685,10 +854,15 @@ class BotControl:
         self.db.set_state(key, str(strikes))
         if strikes <= 2:
             logger.info(f"Bot: unauthorized user {user_id} messaged (strike {strikes}).")
-            await self.send_message(chat_id, UNAUTHORIZED_MESSAGE_HTML, parse_markdown=False)
+            contact_markup = {
+                "inline_keyboard": [
+                    [{"text": "💬 Contact @mkr_infinity", "url": "https://t.me/mkr_infinity"}]
+                ]
+            }
+            await self.send_message(chat_id, UNAUTHORIZED_MESSAGE_HTML, parse_markdown=False, reply_markup=contact_markup)
             if strikes == 2:
                 await asyncio.sleep(2.0)
-                await self.send_message(chat_id, SPAM_WARNING_MESSAGE, parse_markdown=False)
+                await self.send_message(chat_id, SPAM_WARNING_MESSAGE, parse_markdown=False, reply_markup=contact_markup)
         else:
             # Silently ignored until the user is added to authorized list (reduce Railway usage)
             if strikes == 3:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 
 from app.logger import setup_logger
 from app.privacy_manager import PrivacyManager

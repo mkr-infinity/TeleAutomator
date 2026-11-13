@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from app.logger import setup_logger
 from app.session_manager import ensure_secure_dir, ensure_secure_file
+
+logger = setup_logger(__name__)
 
 
 class Database:
@@ -16,6 +21,8 @@ class Database:
     def __init__(self, db_path: Path):
         self.db_path = db_path
         ensure_secure_dir(db_path.parent)
+        self.contexts_dir = db_path.parent / "contexts"
+        ensure_secure_dir(self.contexts_dir)
         self._init_db()
         ensure_secure_file(self.db_path)
 
@@ -42,6 +49,7 @@ class Database:
                     status TEXT NOT NULL DEFAULT 'pending',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE INDEX IF NOT EXISTS idx_pending_approvals_status ON pending_approvals(status);
 
                 CREATE TABLE IF NOT EXISTS message_dedup (
                     msg_hash TEXT PRIMARY KEY,
@@ -64,6 +72,7 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp REAL NOT NULL
                 );
+                CREATE INDEX IF NOT EXISTS idx_reaction_events_timestamp ON reaction_events(timestamp);
 
                 CREATE TABLE IF NOT EXISTS reply_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,6 +80,7 @@ class Database:
                     timestamp REAL NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_reply_events_timestamp ON reply_events(timestamp);
+                CREATE INDEX IF NOT EXISTS idx_reply_events_chat_timestamp ON reply_events(chat_id, timestamp);
 
                 CREATE TABLE IF NOT EXISTS chat_messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,6 +112,7 @@ class Database:
                     total_tokens INTEGER NOT NULL DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE INDEX IF NOT EXISTS idx_token_usage_created_at ON token_usage(created_at);
 
                 CREATE TABLE IF NOT EXISTS permanent_chat_context (
                     chat_id INTEGER PRIMARY KEY,
@@ -492,12 +503,53 @@ class Database:
         return "\n".join(lines)
 
     def get_chat_summary(self, chat_id: int) -> str:
-        """AI-generated rolling recap for chat_id (runtime_state keyed storage)."""
-        return self.get_state(f"chat_summary_{chat_id}", "")
+        """AI-generated rolling recap for chat_id (runtime_state keyed storage with disk fallback)."""
+        summary = self.get_state(f"chat_summary_{chat_id}", "")
+        if summary:
+            return summary
+        # Fallback to isolated context file on disk
+        file_path = self._get_context_file_path(chat_id)
+        if file_path.exists():
+            try:
+                data = json.loads(file_path.read_text(encoding="utf-8"))
+                memory = data.get("ai_memory") or ""
+                if memory:
+                    self.set_state(f"chat_summary_{chat_id}", memory)
+                    return memory
+            except Exception:
+                pass
+        return ""
+
+    def get_chat_prompt(self, chat_id: int) -> str:
+        """Get per-chat custom AI persona (from runtime_state with disk context file fallback)."""
+        prompt = self.get_state(f"chat_prompt_{chat_id}", "")
+        if prompt:
+            return prompt
+        file_path = self._get_context_file_path(chat_id)
+        if file_path.exists():
+            try:
+                data = json.loads(file_path.read_text(encoding="utf-8"))
+                p = data.get("prompt") or ""
+                if p:
+                    self.set_state(f"chat_prompt_{chat_id}", p)
+                    return p
+            except Exception:
+                pass
+        return ""
+
+    def count_chat_messages(self, chat_id: int) -> int:
+        """Total cached messages for chat_id."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM chat_messages WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchone()
+            return int(row[0]) if row else 0
 
     def set_chat_summary(self, chat_id: int, summary: str) -> None:
-        """Store the AI-generated rolling recap for chat_id."""
+        """Store the AI-generated rolling recap for chat_id and sync to isolated context file."""
         self.set_state(f"chat_summary_{chat_id}", (summary or "").strip())
+        self.sync_chat_context_file(chat_id)
 
     def prune_messages_older_than(self, max_age_seconds: float) -> int:
         """Delete locally cached chat messages older than max_age_seconds (context aging purge).
@@ -569,6 +621,43 @@ class Database:
             row = cursor.fetchone()
             return dict(row) if row else None
 
+    def _get_context_file_path(self, chat_id: int) -> Path:
+        """Physical context file location for an individual chat/group."""
+        return self.contexts_dir / f"{chat_id}.json"
+
+    def _sync_context_to_disk(
+        self,
+        chat_id: int,
+        pinned_text: str = "",
+        notes: str = "",
+    ) -> None:
+        """Write isolated per-group context file named by chat_id so groups never mix context."""
+        try:
+            ensure_secure_dir(self.contexts_dir)
+            meta = self.get_chat_metadata(chat_id) or {}
+            file_path = self._get_context_file_path(chat_id)
+            data = {
+                "chat_id": chat_id,
+                "title": meta.get("title") or f"Chat {chat_id}",
+                "chat_type": meta.get("chat_type") or ("Group" if chat_id < 0 else "Private contact"),
+                "notes": notes or "",
+                "pinned_text": pinned_text or "",
+                "ai_memory": self.get_state(f"chat_summary_{chat_id}") or "",
+                "voice_profile": self.get_state(f"chat_voice_profile_{chat_id}") or "",
+                "prompt": self.get_state(f"chat_prompt_{chat_id}") or "",
+                "style": self.get_state(f"chat_style_{chat_id}") or "",
+                "updated_at": time.time(),
+            }
+            file_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            ensure_secure_file(file_path)
+        except Exception as e:
+            logger.debug(f"Failed to write context file for chat {chat_id} to disk: {e}")
+
+    def sync_chat_context_file(self, chat_id: int) -> None:
+        """Sync full per-chat context snapshot (persona, notes, pins) to its isolated disk file."""
+        ctx = self.get_permanent_context(chat_id)
+        self._sync_context_to_disk(chat_id, pinned_text=ctx.get("pinned_text", ""), notes=ctx.get("notes", ""))
+
     def set_permanent_context(
         self,
         chat_id: int,
@@ -594,13 +683,17 @@ class Database:
                     (new_pinned, new_notes, chat_id),
                 )
             else:
+                new_pinned = pinned_text or ""
+                new_notes = notes or ""
                 conn.execute(
                     """
                     INSERT INTO permanent_chat_context (chat_id, pinned_text, notes)
                     VALUES (?, ?, ?)
                     """,
-                    (chat_id, pinned_text or "", notes or ""),
+                    (chat_id, new_pinned, new_notes),
                 )
+
+        self._sync_context_to_disk(chat_id, new_pinned, new_notes)
 
     def get_permanent_context(self, chat_id: int) -> Dict[str, str]:
         """Retrieve permanent context (pinned message + custom notes) for chat_id."""
@@ -609,13 +702,46 @@ class Database:
                 "SELECT pinned_text, notes FROM permanent_chat_context WHERE chat_id = ?",
                 (chat_id,),
             ).fetchone()
-            if row:
-                return {"pinned_text": row["pinned_text"] or "", "notes": row["notes"] or ""}
-            return {"pinned_text": "", "notes": ""}
+            if row and (row["pinned_text"] or row["notes"]):
+                pinned = row["pinned_text"] or ""
+                notes = row["notes"] or ""
+                file_path = self._get_context_file_path(chat_id)
+                if not file_path.exists():
+                    self._sync_context_to_disk(chat_id, pinned, notes)
+                return {"pinned_text": pinned, "notes": notes}
+
+        # Fallback to isolated context file on disk if present
+        file_path = self._get_context_file_path(chat_id)
+        if file_path.exists():
+            try:
+                content = json.loads(file_path.read_text(encoding="utf-8"))
+                pinned = content.get("pinned_text") or ""
+                notes = content.get("notes") or ""
+                if pinned or notes:
+                    with self._get_connection() as conn:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO permanent_chat_context (chat_id, pinned_text, notes) VALUES (?, ?, ?)",
+                            (chat_id, pinned, notes),
+                        )
+                    return {"pinned_text": pinned, "notes": notes}
+            except Exception as e:
+                logger.debug(f"Could not read context file {file_path}: {e}")
+
+        return {"pinned_text": "", "notes": ""}
 
     def delete_permanent_context(self, chat_id: int) -> bool:
         """Explicitly remove permanent context for a chat upon owner request."""
         with self._get_connection() as conn:
             cursor = conn.execute("DELETE FROM permanent_chat_context WHERE chat_id = ?", (chat_id,))
-            return cursor.rowcount > 0
+            deleted = cursor.rowcount > 0
+
+        file_path = self._get_context_file_path(chat_id)
+        if file_path.exists():
+            try:
+                file_path.unlink()
+                deleted = True
+            except Exception as e:
+                logger.debug(f"Could not remove context file {file_path}: {e}")
+
+        return deleted
 

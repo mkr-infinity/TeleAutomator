@@ -124,12 +124,39 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
     if reply_mgr.bot_control is not None:
         bot_task = asyncio.create_task(reply_mgr.bot_control.run())
 
-    # Optional HTTP health server for cloud platforms like Render.com / Railway
-    port_env = os.getenv("PORT")
+    # HTTP server for cloud platforms (Railway / Render) and local Mini App GUI.
+    # Defaults to port 8080 so the Mini App server and health checks always start automatically.
+    port_env = os.getenv("PORT", "8080")
     http_server = None
+    miniapp_server = None
     server_status = {"healthy": True, "error": None}
 
-    if port_env:
+    try:
+        from app.miniapp_server import MiniAppContext, MiniAppServer, resolve_miniapp_url, set_telegram_menu_button
+        miniapp_ctx = MiniAppContext(
+            db=db,
+            safety=safety,
+            privacy=privacy,
+            reply_manager=reply_mgr,
+            generator=generator,
+            bot_token=config.bot_api_key or "",
+            loop=loop,
+            bot_control=reply_mgr.bot_control,
+        )
+        miniapp_ctx.health_status = server_status
+        miniapp_server = MiniAppServer(miniapp_ctx, port=int(port_env))
+        miniapp_server.start()
+        logger.info(f"TeleAutomator Mini App running on port {port_env}")
+
+        miniapp_url = resolve_miniapp_url()
+        if miniapp_url and config.bot_api_key:
+            logger.info(f"Auto-registering Telegram Mini App menu button: {miniapp_url}")
+            await loop.run_in_executor(None, set_telegram_menu_button, config.bot_api_key, miniapp_url)
+    except Exception as e:
+        logger.warning(f"Could not start mini app server on port {port_env}: {e}")
+        miniapp_server = None
+
+    if port_env and miniapp_server is None:
         try:
             port = int(port_env)
             async def _handle_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -198,6 +225,8 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
                         pass
                 raise exc
     finally:
+        if miniapp_server:
+            miniapp_server.stop()
         if http_server:
             http_server.close()
             await http_server.wait_closed()
