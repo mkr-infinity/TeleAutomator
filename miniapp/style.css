@@ -433,29 +433,6 @@ h1.brand-name { font-size: var(--fs-title); font-weight: 600; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.usage-meter-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.usage-meter-track {
-  height: 6px;
-  background: var(--raised);
-  border-radius: 3px;
-  overflow: hidden;
-}
-.usage-meter-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--positive) 0%, var(--accent) 100%);
-  border-radius: 3px;
-  transition: width 0.3s ease;
-}
-.usage-meter-meta {
-  display: flex;
-  justify-content: space-between;
-  font-size: 11px;
-  color: var(--faint);
-}
 
 /* ---------------------------------------------------- chat capsule styling */
 .chat-capsule {

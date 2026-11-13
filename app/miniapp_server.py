@@ -629,6 +629,29 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
         if user is None or int(user.get("id", 0)) not in _authorized_user_ids(self.api.ctx):
             self._json(401, self._unauthorized_payload())
             return
+        if path == "/api/events":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            try:
+                last_hash = None
+                for _ in range(30):  # 30 * 2s = 60s stream window, client auto-reconnects
+                    cur_state = self.api.handle_state()
+                    h = (cur_state.get("mode"), cur_state.get("state"), cur_state.get("pending_count"), cur_state.get("chats_allowed"))
+                    if h != last_hash:
+                        last_hash = h
+                        self.wfile.write(f"event: state\ndata: {json.dumps(cur_state)}\n\n".encode("utf-8"))
+                        self.wfile.flush()
+                    else:
+                        self.wfile.write(b": ping\n\n")
+                        self.wfile.flush()
+                    time.sleep(2.0)
+            except Exception:
+                pass
+            return
         try:
             if path == "/api/state":
                 self._json(200, self.api.handle_state())

@@ -238,21 +238,21 @@
     $("kpi-chats").textContent = s.chats_allowed;
     $("kpi-pending").textContent = s.pending_count;
     $("kpi-replies").textContent = s.replies_24h;
-    $("kpi-tokens").textContent = s.tokens_today >= 1000 ? `${(s.tokens_today / 1000).toFixed(1)}k` : s.tokens_today;
+    if ($("kpi-engine")) $("kpi-engine").textContent = s.ai_engine || "Local";
 
     if ($("ov-engine-badge")) {
       $("ov-engine-badge").textContent = `${s.ai_engine || "AI"} Engine`;
-      const tot = s.total_tokens || s.tokens_today || 0;
-      $("ov-tokens-total").textContent = `${tot.toLocaleString()} tokens`;
+      if ($("ov-status-pill")) {
+        const statusText = s.emergency ? "Stopped" : (s.safe_mode ? "Safe Mode" : (s.state === "paused" ? "Paused" : "Active"));
+        $("ov-status-pill").textContent = statusText;
+        $("ov-status-pill").className = `pill ${s.emergency ? "pill-negative" : (s.state === "paused" ? "pill-warning" : "pill-positive")}`;
+      }
       $("ov-model-val").textContent = s.ai_model || (s.ai_engine === "Local" ? "Local Rule Base" : "Default");
-      const FREE_POOL = 100000000;
-      const rem = Math.max(0, FREE_POOL - tot);
-      const pct = Math.min(100, (tot / FREE_POOL) * 100);
-      $("ov-quota-rem").textContent = `${(rem / 1000000).toFixed(1)}M pool`;
+      if ($("ov-persona-val")) {
+        $("ov-persona-val").textContent = (s.style || "casual").charAt(0).toUpperCase() + (s.style || "casual").slice(1);
+      }
       $("ov-qh-sched").textContent = s.quiet_hours_schedule || "02:00 – 08:00 IST";
       $("ov-req-count").textContent = (s.token_requests || 0).toLocaleString();
-      $("ov-quota-bar").style.width = `${Math.max(0.5, pct).toFixed(2)}%`;
-      $("ov-quota-pct").textContent = `${pct.toFixed(3)}% consumed`;
     }
 
     $("act-pause").classList.toggle("hidden", s.state !== "active");
@@ -745,10 +745,28 @@
     $("whoami").textContent = auth.user && auth.user.name ? auth.user.name : "";
     $("app-version").textContent = auth.version ? `v${auth.version}` : "";
     wire();
+    initEventSource();
     const params = new URLSearchParams(location.search);
     showView(["overview", "chats", "persona", "approvals", "more"].includes(params.get("view")) ? params.get("view") : "overview");
-    // Light refresh so the panel follows the bot if both are open.
-    setInterval(() => { if (currentView === "overview") refreshOverview(); }, 10000);
+    // Adaptive fallback polling
+    setInterval(() => { if (currentView === "overview") refreshOverview(); }, 12000);
+  }
+
+  function initEventSource() {
+    if (!window.EventSource) return;
+    try {
+      const q = window.__tgInitData ? `?initData=${encodeURIComponent(window.__tgInitData)}` : "";
+      const es = new EventSource(`/api/events${q}`);
+      es.addEventListener("state", (e) => {
+        try {
+          const s = JSON.parse(e.data);
+          if (s && s.state) renderState(s);
+        } catch (_) {}
+      });
+      es.onerror = () => {
+        // SSE reconnects automatically by browser spec
+      };
+    } catch (_) {}
   }
 
   init();

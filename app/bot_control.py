@@ -816,23 +816,30 @@ class BotControl:
             return
 
         response = await self.reply_manager.handle_control_command(f"/{action} {target_id}") or "Done."
-        # Popup answer + update the message so the buttons disappear once handled
+        # Popup answer + update the message in-place so buttons disappear and message is preserved (never delete)
         await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": response[:180], "show_alert": True})
         message = cb.get("message") or {}
+        chat_id = message.get("chat", {}).get("id")
+        msg_id = message.get("message_id")
+        title_action = "sent ✅" if action == "approve" else "rejected ❌"
+        if response.startswith("❌") or response.startswith("⚠️"):
+            title_action = "status"
+        card_text = f"*Draft #{target_id} — {title_action}*\n{response}"
         try:
-            await self._call(
-                "deleteMessage",
-                {"chat_id": message.get("chat", {}).get("id"), "message_id": message.get("message_id")},
-            )
-            title_action = "sent ✅" if action == "approve" else "rejected ❌"
-            if response.startswith("❌") or response.startswith("⚠️"):
-                title_action = "status"
-            await self.send_message(
-                message.get("chat", {}).get("id"),
-                f"*Draft #{target_id} — {title_action}*\n{response}",
-            )
+            if chat_id and msg_id:
+                await self._call(
+                    "editMessageText",
+                    {
+                        "chat_id": chat_id,
+                        "message_id": msg_id,
+                        "text": card_text,
+                        "parse_mode": "Markdown",
+                    },
+                )
+            elif chat_id:
+                await self.send_message(chat_id, card_text)
         except Exception as e:
-            logger.debug(f"Could not refresh approval message: {e}")
+            logger.debug(f"Could not edit approval message: {e}")
 
 
     async def _handle_unauthorized(self, chat_id: int, user_id: int) -> None:

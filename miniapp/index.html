@@ -58,17 +58,17 @@
         <div class="kpi"><p class="kpi-label">Chats allowed</p><p class="kpi-value" id="kpi-chats">—</p></div>
         <div class="kpi"><p class="kpi-label">Pending drafts</p><p class="kpi-value" id="kpi-pending">—</p></div>
         <div class="kpi"><p class="kpi-label">Replies 24h</p><p class="kpi-value" id="kpi-replies">—</p></div>
-        <div class="kpi"><p class="kpi-label">Tokens today</p><p class="kpi-value" id="kpi-tokens">—</p></div>
+        <div class="kpi"><p class="kpi-label">AI Engine</p><p class="kpi-value" id="kpi-engine">—</p></div>
       </div>
 
-      <!-- Usage & AI Intelligence Card -->
+      <!-- AI Engine & System Status Card -->
       <div class="card usage-card" id="ov-usage-card">
         <div class="usage-card-head">
           <div class="usage-card-title-group">
-            <span class="usage-card-title">AI Engine &amp; Quota Usage</span>
+            <span class="usage-card-title">AI Engine &amp; System Status</span>
             <span class="pill pill-positive" id="ov-engine-badge">Local</span>
           </div>
-          <span class="pill pill-neutral num" id="ov-tokens-total">0 tokens</span>
+          <span class="pill pill-neutral" id="ov-status-pill">Active</span>
         </div>
         <div class="usage-grid">
           <div class="usage-cell">
@@ -76,8 +76,8 @@
             <span class="usage-cell-val" id="ov-model-val">—</span>
           </div>
           <div class="usage-cell">
-            <span class="usage-cell-label">Free Quota Pool</span>
-            <span class="usage-cell-val num" id="ov-quota-rem">100M tokens</span>
+            <span class="usage-cell-label">Speaking Style</span>
+            <span class="usage-cell-val" id="ov-persona-val">Casual</span>
           </div>
           <div class="usage-cell">
             <span class="usage-cell-label">Quiet Hours</span>
@@ -86,15 +86,6 @@
           <div class="usage-cell">
             <span class="usage-cell-label">Total Requests</span>
             <span class="usage-cell-val num" id="ov-req-count">0</span>
-          </div>
-        </div>
-        <div class="usage-meter-wrap">
-          <div class="usage-meter-track">
-            <div class="usage-meter-fill" id="ov-quota-bar" style="width: 0.1%"></div>
-          </div>
-          <div class="usage-meter-meta">
-            <span id="ov-quota-pct" class="num">0.0% used</span>
-            <span>Free Tier (100,000,000 pool)</span>
           </div>
         </div>
       </div>

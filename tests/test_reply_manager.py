@@ -1712,7 +1712,7 @@ def test_typo_injection_and_auto_correction(tmp_path: Path):
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
         status_msg = await mgr.handle_control_command("/typo")
-        assert "Typo & Auto-Correction Simulation" in status_msg
+        assert "Typo & Self-Edit Simulation" in status_msg
 
         off_msg = await mgr.handle_control_command("/typo off")
         assert "DISABLED" in off_msg
@@ -1722,7 +1722,7 @@ def test_typo_injection_and_auto_correction(tmp_path: Path):
         assert "ENABLED" in on_msg
         assert db.get_state("typo_correction_enabled") == "1"
 
-        # 3. Sending reply with typo sends correction follow-up
+        # 3. Sending reply with typo edits message in-place clean (never sends *word)
         sent_messages = []
         async def mock_send(chat_id, text, **kwargs):
             sent_messages.append(text)
@@ -1730,6 +1730,7 @@ def test_typo_injection_and_auto_correction(tmp_path: Path):
 
         mock_client = AsyncMock()
         mock_client.send_message = AsyncMock(side_effect=mock_send)
+        mock_client.edit_message = AsyncMock()
         mgr.set_telegram_client(mock_client)
 
         # Force typo injection in _send_reply by temporarily patching probability to 1.0
@@ -1737,11 +1738,11 @@ def test_typo_injection_and_auto_correction(tmp_path: Path):
         mgr.maybe_inject_typo_correction = lambda t, **kw: orig_maybe(t, probability=1.0)
 
         await mgr._send_reply(chat_id=555, reply_to_msg_id=0, text="sounds good bro", adaptive_delay=False)
-        assert len(sent_messages) == 2
-        # First message had the typo
+        assert len(sent_messages) == 1
+        # The sent message initially had the typo
         assert sent_messages[0] != "sounds good bro"
-        # Second message was the correction
-        assert sent_messages[1].startswith("*")
+        # The message was edited in-place clean (never sending *word)
+        mock_client.edit_message.assert_awaited_once_with(555, 1, "sounds good bro")
 
     asyncio.run(_run())
 

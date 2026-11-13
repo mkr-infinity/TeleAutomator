@@ -208,22 +208,10 @@ class TelegramService:
             except Exception as e:
                 logger.debug(f"Safe-mode recovery check error: {e}")
 
-            # Every 4 hours, hard-delete cached chat messages older than the context TTL window
-            now = time.monotonic()
-            if now - self._last_context_purge >= 14400.0:
-                self._last_context_purge = now
-                try:
-                    ttl_hours = float(self.db.get_state("context_ttl_hours", "4.0"))
-                    if ttl_hours > 0:
-                        removed = self.db.prune_messages_older_than(ttl_hours * 3600)
-                        if removed:
-                            logger.info(f"[CONTEXT PURGE] Deleted {removed} cached messages older than {ttl_hours}h.")
-                except Exception as e:
-                    logger.debug(f"Context purge error: {e}")
-
             # Every 15 minutes, refresh AI-generated rolling context recaps for active chats
             # (shortened interval so busy community groups keep a fresh memory; per-chat
             # thresholds in refresh_group_summaries skip quiet chats anyway)
+            now = time.monotonic()
             if now - self._last_summary_check >= 900.0:
                 self._last_summary_check = now
                 try:
@@ -232,17 +220,14 @@ class TelegramService:
                     logger.debug(f"Group summary refresh error: {e}")
 
             # Automated SQLite daily maintenance (every 24 hours / 1 day)
+            # Performs non-blocking WAL checkpointing; messages and reactions are preserved
+            # in context storage for AI intelligence and never automatically deleted.
             if now - self._last_daily_prune >= 86400.0:
                 self._last_daily_prune = now
                 try:
-                    self.db.prune_old_reactions(86400.0 * 7)
-                    self.db.prune_old_reply_events(86400.0 * 7)
-                    ttl_hours = float(self.db.get_state("context_ttl_hours", "24.0"))
-                    if ttl_hours > 0:
-                        self.db.prune_messages_older_than(ttl_hours * 3600)
                     with self.db._get_connection() as conn:
                         conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
-                    logger.info("[DAILY MAINTENANCE] Automated 24h prune and SQLite maintenance completed.")
+                    logger.info("[DAILY MAINTENANCE] Automated 24h SQLite WAL maintenance completed (all messages/reactions preserved).")
                 except Exception as e:
                     logger.debug(f"Daily maintenance error: {e}")
 
