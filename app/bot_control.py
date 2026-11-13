@@ -233,21 +233,22 @@ class BotControl:
         self.db = db
         self.reply_manager = reply_manager
         self.health_file = health_file
+        self.seed_user_ids: set[int] = {int(x) for x in (seed_user_ids or ()) if int(x) > 0}
         self._offset: int = 0
         self._running = False
         self._me_cache: Optional[dict] = None
         self._watchdog_last_alert: float = 0.0
-        # Bootstrap: seed authorized users from env once (DB list owns it afterwards)
+        # Bootstrap: seed authorized users from env (DB list persists dynamic changes)
         existing = self._load_authorized()
-        if not existing and seed_user_ids:
-            self._save_authorized(seed_user_ids)
-            logger.info(f"Seeded bot authorized users from env: {sorted(seed_user_ids)}")
-        elif existing and seed_user_ids:
-            # Keep the main account (env first entry) authoritative even if DB lost it
-            main_env = sorted(seed_user_ids)[0]
-            if main_env not in existing:
-                existing.add(main_env)
-                self._save_authorized(existing)
+        if not existing and self.seed_user_ids:
+            self._save_authorized(self.seed_user_ids)
+            logger.info(f"Seeded bot authorized users from env: {sorted(self.seed_user_ids)}")
+        elif existing and self.seed_user_ids:
+            # Synchronize seed IDs into database so all env IDs are recognized
+            merged = existing.union(self.seed_user_ids)
+            if merged != existing:
+                self._save_authorized(merged)
+                logger.info(f"Updated bot authorized users with env seed: {sorted(merged)}")
 
     # ------------------------------------------------------------------ state
     def _load_authorized(self) -> set[int]:
@@ -263,6 +264,8 @@ class BotControl:
     @property
     def main_user_id(self) -> int:
         """Main authorized user (project owner) — first env-provided ID, lowest ID fallback."""
+        if self.seed_user_ids:
+            return min(self.seed_user_ids)
         users = self._load_authorized()
         if not users:
             return 0
@@ -272,7 +275,10 @@ class BotControl:
         """Read live from DB on every message so /addauth & /removeauth apply instantly."""
         if not user_id or int(user_id) <= 0:
             return False
-        return int(user_id) in self._load_authorized()
+        uid = int(user_id)
+        if self.seed_user_ids and uid in self.seed_user_ids:
+            return True
+        return uid in self._load_authorized()
 
     def is_main_user(self, user_id: int) -> bool:
         return self.main_user_id == int(user_id)

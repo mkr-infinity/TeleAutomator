@@ -12,7 +12,15 @@
   // ------------------------------------------------------------ api layer
 
   function initDataHeader() {
-    try { return tg && tg.initData ? tg.initData : ""; } catch { return ""; }
+    try {
+      if (tg && tg.initData) return tg.initData;
+      if (location.hash && location.hash.includes("tgWebAppData=")) {
+        const hashParams = new URLSearchParams(location.hash.slice(1));
+        const raw = hashParams.get("tgWebAppData");
+        if (raw) return raw;
+      }
+      return "";
+    } catch { return ""; }
   }
 
   async function api(path, body) {

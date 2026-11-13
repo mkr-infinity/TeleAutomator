@@ -425,3 +425,60 @@ def test_resolve_miniapp_url_railway_and_custom(monkeypatch):
     assert resolve_miniapp_url() == "https://panel.mycustomdomain.com"
 
 
+def test_validate_init_data_real_telegram_url_encoded():
+    import urllib.parse
+    token = TEST_TOKEN
+    user_dict = {"id": 555000111, "first_name": "Kaif"}
+    auth_date = int(time.time())
+    user_json = json.dumps(user_dict, separators=(",", ":"))
+
+    # Exactly how Telegram client creates HMAC and encodes query
+    pairs = {"auth_date": str(auth_date), "user": user_json}
+    data_check = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs))
+    secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+    sig = hmac.new(secret, data_check.encode(), hashlib.sha256).hexdigest()
+
+    encoded_init_data = f"auth_date={auth_date}&user={urllib.parse.quote(user_json)}&hash={sig}"
+    user = validate_init_data(encoded_init_data, token)
+    assert user is not None
+    assert user["id"] == 555000111
+    assert user["first_name"] == "Kaif"
+
+
+def test_authorized_user_fallback_to_seed_and_config(tmp_path):
+    from app.miniapp_server import _authorized_user_ids
+    from app.storage.database import Database
+
+    db = Database(tmp_path / "empty_db.db")  # no bot_authorized_users key
+    reply_mgr = FakeReplyManager()
+    reply_mgr.config.bot_authorized_users = {888111, 888222}
+
+    bot_ctrl = type("BotControl", (), {"seed_user_ids": {888111, 888333}})()
+
+    ctx = MiniAppContext(
+        db=db, safety=FakeSafety(), privacy=FakePrivacy(),
+        reply_manager=reply_mgr, generator=FakeGenerator(),
+        bot_token=TEST_TOKEN, loop=None, bot_control=bot_ctrl,
+    )
+
+    auth_ids = _authorized_user_ids(ctx)
+    assert 888111 in auth_ids
+    assert 888222 in auth_ids
+    assert 888333 in auth_ids
+
+    api = MiniAppAPI(ctx)
+    res = api.handle_auth({"id": 888111, "first_name": "AuthorizedUser"})
+    assert res["authorized"] is True
+    assert "paywall" not in res
+
+
+def test_miniapp_paywall_svg_icons():
+    index_html = (Path(__file__).resolve().parent.parent / "miniapp" / "index.html").read_text()
+    assert 'class="pay-curr-icon star-icon"' in index_html
+    assert 'class="pay-curr-icon gram-icon"' in index_html
+    assert 'viewBox="0 0 240 240"' in index_html  # authentic Gram SVG
+    assert '100 Telegram Stars' not in index_html
+    assert '1 TON' not in index_html
+
+
+
