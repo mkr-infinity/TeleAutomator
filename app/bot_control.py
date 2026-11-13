@@ -655,7 +655,7 @@ class BotControl:
             # Key overview commands get the inline quick-action keyboard;
             # /chatty gets the per-chat banter picker instead
             root_cmd = text.strip().split()[0].lower().split("@")[0]
-            if root_cmd in ("/status", "/help"):
+            if root_cmd in ("/status", "/help", "/miniapp", "/panel", "/gui", "/app"):
                 markup = quick_menu_markup()
             elif root_cmd in ("/chatty", "/banter"):
                 markup = chatty_picker_markup(self._allowed_chat_summaries())

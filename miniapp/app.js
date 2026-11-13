@@ -503,9 +503,18 @@
     loadView(currentView);
   }
 
-  // -------------------------------------------------------------- paywall
+  // -------------------------------------------------------------- paywall & loader
+
+  function hideLoading() {
+    const loader = $("loading-screen");
+    if (loader && !loader.classList.contains("hidden")) {
+      loader.classList.add("fade-out");
+      setTimeout(() => loader.classList.add("hidden"), 300);
+    }
+  }
 
   function maybePaywall(res) {
+    hideLoading();
     if (!res || res.authorized === false) {
       $("app").classList.add("hidden");
       $("paywall").classList.remove("hidden");
@@ -740,6 +749,7 @@
     try { auth = await api("/api/auth"); } catch { /* no server (plain browser / file) → paywall */ }
     if (!auth || auth.authorized !== true) { maybePaywall(auth); return; }
 
+    hideLoading();
     $("paywall").classList.add("hidden");
     $("app").classList.remove("hidden");
     $("whoami").textContent = auth.user && auth.user.name ? auth.user.name : "";
