@@ -33,21 +33,28 @@ BOT_COMMAND_HELP = (
 )
 
 UNAUTHORIZED_MESSAGE = (
-    "🔒 *TeleAutomator — Access Restricted*\n\n"
-    "Hi there! This control panel belongs to a private automation project, "
-    "and your account isn't authorized to use it yet.\n\n"
-    "👉 Want access? Reach out on Telegram: [@mkr_infinity](https://t.me/mkr_infinity)\n"
-    "Just mention __TeleAutomator__ and the project you'd like authorization for.\n\n"
+    "🔒 *Access Restricted*\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "🤖 *TeleAutomator Control Panel*\n"
+    "This control panel belongs to a private automation project — "
+    "your account isn't authorized to use it yet.\n\n"
+    "👉 *Want access?*\n"
+    "Reach out on Telegram: [@mkr_infinity](https://t.me/mkr_infinity)\n"
+    "Just mention __TeleAutomator__ and the project you'd like authorization for.\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
     "_Thanks for understanding! 🙏_"
 )
 
 UNAUTHORIZED_MESSAGE_HTML = (
-    "<b>🔒 TeleAutomator — Access Restricted</b>\n\n"
-    "Hi there! This control panel belongs to a private automation project, "
+    "<b>🔒 Access Restricted</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "🤖 <b>TeleAutomator Control Panel</b>\n"
+    "This control panel belongs to a private automation project, "
     "and your account isn't authorized to use it yet.\n\n"
-    "👉 Want access? Contact <b>@mkr_infinity</b>\n"
-    "<a href=\"https://t.me/mkr_infinity\">Open chat: @mkr_infinity</a>\n"
-    "Just mention <b>TeleAutomator</b> and the project you'd like authorization for.\n\n"
+    "👉 <b>Want access?</b>\n"
+    "Contact <b>@mkr_infinity</b> — <a href=\"https://t.me/mkr_infinity\">Open chat</a>\n"
+    "Just mention <b>TeleAutomator</b> and the project you'd like authorization for.\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
     "<i>Thanks for understanding! 🙏</i>"
 )
 
@@ -86,12 +93,12 @@ BOT_COMMAND_MENU: list[dict] = [
     {"command": "watchdog", "description": "🐕 Crash-alert threshold — /watchdog <minutes> (default 5)"},
     # -- Persona & language --
     {"command": "prompt", "description": "🎭 AI persona — /prompt <text> to set · bare /prompt to view"},
-    {"command": "setprompt", "description": "🎭 Set persona directly — /setprompt <text> · `/setprompt default` resets"},
     {"command": "name", "description": "👤 Owner identity name the AI texts as — /name <name>"},
     {"command": "style", "description": "🎨 AI style — /style casual|concise|formal|humorous"},
     {"command": "styles", "description": "🗂️ List per-chat style overrides"},
+    {"command": "chatprompt", "description": "🗣 Per-chat AI persona — /chatprompt <chat_id> <text>"},
     {"command": "lang", "description": "🌐 Reply language — /lang dynamic|english|hindi|..."},
-    {"command": "chatty", "description": "💬 Group banter rate 0-100 — /chatty <percent>"},
+    {"command": "chatty", "description": "💬 Per-group banter picker (buttons) — bare /chatty"},
     # -- AI engine --
     {"command": "aiconfig", "description": "🤖 AI engine dashboard — provider, model, temperature"},
     {"command": "setai", "description": "⚙️ 1-step AI setup — /setai <provider> <key>"},
@@ -123,16 +130,15 @@ BOT_COMMAND_MENU: list[dict] = [
     # -- Chats & context --
     {"command": "chats", "description": "📋 Allowlisted contacts & groups table"},
     {"command": "allowchat", "description": "➕ Allowlist a chat — /allowchat <chat_id>"},
-    {"command": "allow", "description": "➕ Alias of /allowchat — /allow <chat_id>"},
     {"command": "removechat", "description": "➖ Remove chat from allowlist — /removechat <chat_id>"},
     {"command": "blockchat", "description": "🚫 Block a chat ID — /blockchat <chat_id>"},
-    {"command": "ban", "description": "🚫 Alias of /blockchat — /ban <chat_id>"},
     {"command": "mentiononly", "description": "🎯 Group safety — reply only when mentioned — /mentiononly on|off"},
     {"command": "contextttl", "description": "⏳ Context aging window — /contextttl <hours>"},
     {"command": "clearcontext", "description": "🧹 Reset cached AI context — /clearcontext <chat_id>"},
     {"command": "syncpins", "description": "📌 Sync pinned messages into permanent context — /syncpins [chat_id]"},
     {"command": "setcontext", "description": "📝 Save permanent notes for a group — /setcontext <chat_id> <notes>"},
     {"command": "showcontext", "description": "👁️ View permanent context — /showcontext <chat_id>"},
+    {"command": "gencontext", "description": "🧠 Rebuild group AI voice profile — /gencontext <chat_id>"},
     {"command": "delcontext", "description": "🗑️ Delete permanent context — /delcontext <chat_id>"},
     # -- Custom keyword rules --
     {"command": "addrule", "description": "📜 Keyword auto-reply — /addrule <word> => <reply>"},
@@ -176,6 +182,25 @@ def quick_menu_markup() -> dict:
             ],
         ]
     }
+
+
+def chatty_picker_markup(chats: list[tuple[int, str]]) -> dict:
+    """Inline picker for per-chat banter rates: one row per allowed group.
+    Name button shows the current setting; 10/30/50/70 presets set it; DEF resets to the default band."""
+    rows = []
+    for cid, name in chats:
+        label = name if len(name) <= 16 else name[:15] + "…"
+        rows.append([
+            {"text": f"💬 {label}", "callback_data": f"chatty:{cid}:show"},
+            {"text": "10", "callback_data": f"chatty:{cid}:10"},
+            {"text": "30", "callback_data": f"chatty:{cid}:30"},
+            {"text": "50", "callback_data": f"chatty:{cid}:50"},
+            {"text": "70", "callback_data": f"chatty:{cid}:70"},
+            {"text": "DEF", "callback_data": f"chatty:{cid}:default"},
+        ])
+    if not rows:
+        rows.append([{"text": "ℹ️ No allowlisted groups yet", "callback_data": "noop"}])
+    return {"inline_keyboard": rows}
 
 
 class BotControl:
@@ -571,10 +596,26 @@ class BotControl:
         if response:
             if len(response) > 4000:
                 response = response[:4000] + "\n…"
-            # Key overview commands get the inline quick-action keyboard
+            # Key overview commands get the inline quick-action keyboard;
+            # /chatty gets the per-chat banter picker instead
             root_cmd = text.strip().split()[0].lower().split("@")[0]
-            markup = quick_menu_markup() if root_cmd in ("/status", "/help") else None
+            if root_cmd in ("/status", "/help"):
+                markup = quick_menu_markup()
+            elif root_cmd in ("/chatty", "/banter"):
+                markup = chatty_picker_markup(self._allowed_chat_summaries())
+            else:
+                markup = None
             await self.send_message(chat_id, response, reply_markup=markup)
+
+    def _allowed_chat_summaries(self) -> list[tuple[int, str]]:
+        """(chat_id, display name) for every allowlisted chat — used by the /chatty picker."""
+        priv, grps = self.reply_manager.privacy.get_all_allowed_chats()
+        summaries = []
+        for cid in sorted(priv | grps):
+            meta = self.reply_manager.db.get_chat_metadata(cid) or {}
+            name = meta.get("title") or f"Chat {cid}"
+            summaries.append((cid, name))
+        return summaries
 
     def _user_can(self, user_id: int, raw_command: str) -> bool:
         """Check this user's granted command list ('all' or trailing-specific commands like /prompt)."""
@@ -644,6 +685,43 @@ class BotControl:
                         "reply_markup": json.dumps(quick_menu_markup(), ensure_ascii=False),
                     },
                 )
+            return
+
+        # Per-chat banter picker: 'chatty:<chat_id>:<pct|default|show>'
+        if data.startswith("chatty:"):
+            _, cid_s, action = data.split(":", 2)
+            try:
+                cid = int(cid_s)
+            except ValueError:
+                await self._call("answerCallbackQuery", {"callback_query_id": cb_id})
+                return
+            if not (self.is_main_user(user_id) or self._user_can(user_id, "/chatty")):
+                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "⛔ Not permitted for your account."})
+                return
+            meta = self.reply_manager.db.get_chat_metadata(cid) or {}
+            name = meta.get("title") or f"Chat {cid}"
+            if action == "show":
+                cur = self.reply_manager.db.get_state(f"chat_chatty_{cid}")
+                if cur:
+                    try:
+                        text = f"💬 {name}: per-chat {int(float(cur) * 100)}% banter"
+                    except ValueError:
+                        text = f"💬 {name}: default band (30-60%)"
+                else:
+                    text = f"💬 {name}: default band (30-60%)"
+                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": text[:180], "show_alert": False})
+                return
+            if action == "default":
+                self.reply_manager.db.set_state(f"chat_chatty_{cid}", "")
+                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": f"♻️ {name}: reset to default 30-60% band", "show_alert": True})
+                return
+            try:
+                pct = max(0, min(100, int(action)))
+            except ValueError:
+                await self._call("answerCallbackQuery", {"callback_query_id": cb_id})
+                return
+            self.reply_manager.db.set_state(f"chat_chatty_{cid}", str(pct / 100.0))
+            await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": f"✅ {name}: {pct}% banter (always respects cooldowns)", "show_alert": True})
             return
 
         if data not in ("approve", "reject") and ":" not in data:

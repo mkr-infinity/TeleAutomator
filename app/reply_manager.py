@@ -30,7 +30,7 @@ _BOT_COMMAND_NAMES = (
     "/quotathreshold", "/quotaalert", "/addrule", "/delrule", "/rules", "/chats", "/allowchat", "/removechat",
     "/blockchat", "/mentiononly", "/contextttl", "/clearcontext", "/syncpins", "/setcontext", "/showcontext",
     "/delcontext", "/backup", "/pending", "/approve", "/reject", "/name", "/prompt", "/setprompt", "/chatty",
-    "/safemode",
+    "/chatprompt", "/gencontext", "/safemode",
 )
 
 try:
@@ -181,6 +181,43 @@ class ReplyManager:
         except Exception as e:
             logger.debug(f"Could not fetch pinned messages for chat {chat_id}: {e}")
         return None
+
+    async def generate_chat_voice_profile(self, chat_id: int, min_messages: int = 45) -> Optional[str]:
+        """Fetch 40+ recent messages of a group, AI learns how its people talk, store permanently."""
+        if not self._client or chat_id >= 0:
+            logger.debug(f"Voice profile skipped for chat {chat_id}: client attached={bool(self._client)}, is_group={chat_id < 0}")
+            return None
+        try:
+            entity = await self._client.get_entity(chat_id)
+            chat_title = getattr(entity, "title", "") or str(chat_id)
+            msgs = await self._client.get_messages(chat_id, limit=min_messages)
+            lines: list[str] = []
+            for m in msgs:
+                txt = (getattr(m, "text", "") or "").strip()
+                if not txt:
+                    continue
+                sender = "someone"
+                try:
+                    s = await m.get_sender()
+                    if s:
+                        sender = getattr(s, "first_name", None) or getattr(s, "username", None) or "someone"
+                except Exception:
+                    pass
+                lines.append(f"{sender}: {txt}")
+            if len(lines) < 10:
+                logger.info(f"[VOICE PROFILE] Chat {chat_id}: only {len(lines)} text messages available (need 10+); skipping for now.")
+                return None
+            loop = asyncio.get_running_loop()
+            profile = await loop.run_in_executor(
+                None, self.generator.generate_voice_profile, chat_title, "\n".join(lines)
+            )
+            if profile:
+                self.db.set_state(f"chat_voice_profile_{chat_id}", profile)
+                logger.info(f"[VOICE PROFILE] Saved AI voice profile for '{chat_title}' ({chat_id}): {len(profile)} chars")
+            return profile
+        except Exception as e:
+            logger.debug(f"Could not build voice profile for chat {chat_id}: {e}")
+            return None
 
     async def handle_incoming_eligible_message(
         self,
@@ -354,14 +391,22 @@ class ReplyManager:
                     perm_parts.append(f"📌 Pinned message / group rules:\n{pinned_text}")
                 if notes:
                     perm_parts.append(f"📝 Important chat notes & background:\n{notes}")
+                # AI-generated voice profile for this group (how people talk, slang, lengths, topics)
+                voice_profile = self.db.get_state(f"chat_voice_profile_{chat_id}")
+                if voice_profile:
+                    perm_parts.append(
+                        f"🗣 HOW PEOPLE TALK IN THIS CHAT (AI-observed voice — mirror this tone, "
+                        f"slang, message length and energy so you blend in like a regular here):\n{voice_profile}"
+                    )
                 # AI-generated rolling recap of recent chat context (refreshed by background job)
                 ai_summary = self.db.get_chat_summary(chat_id)
                 if ai_summary:
                     perm_parts.append(f"🧠 AI recap of this chat's recent conversations (so you remember older banter):\n{ai_summary}")
                 permanent_context_str = "\n\n".join(perm_parts) if perm_parts else None
 
-                # Check for per-chat style/persona override; fallback to global default
+                # Check for per-chat style/persona overrides; fallback to global defaults
                 chat_style = self.db.get_state(f"chat_style_{chat_id}")
+                chat_persona = self.db.get_state(f"chat_prompt_{chat_id}")
 
                 async def _do_generate():
                     return await asyncio.to_thread(
@@ -370,6 +415,7 @@ class ReplyManager:
                         incoming_text=clean_text,
                         conversation_history=conversation_history,
                         style_override=chat_style or None,
+                        persona_override=chat_persona or None,
                         permanent_context=permanent_context_str,
                         is_group=(chat_id < 0),
                         is_mention=is_mention,
@@ -1012,6 +1058,7 @@ class ReplyManager:
                 "• `/syncpins [chat_id]` - Sync pinned message(s) into permanent chat context\n"
                 "• `/setcontext <chat_id> <notes>` - Save permanent notes/guidelines for a group\n"
                 "• `/showcontext <chat_id>` - View permanent background context for a group\n"
+                "• `/gencontext <chat_id>` - Rebuild AI voice profile from recent group messages\n"
                 "• `/delcontext <chat_id>` - Delete permanent context for a group\n"
                 "• `/backup` - Create database snapshot & send directly to Saved Messages\n\n"
                 "*Approvals & Drafts:*\n"
@@ -1022,10 +1069,11 @@ class ReplyManager:
                 "• `/name <name>` - Set your display name for AI persona\n"
                 "• `/prompt` - View active system prompt\n"
                 "• `/setprompt <text>` - Update system prompt on the fly\n"
+                "• `/chatprompt <chat_id> <text>` - Custom AI persona for one chat only\n"
                 "• `/model <name>` - Switch AI model (e.g. `gemini-2.5-flash-lite`)\n"
                 "• `/baseurl <url>` - Set custom base URL for NVIDIA/Groq/Ollama\n"
                 "• `/provider <gemini|openai|nvidia|custom>` - Switch AI backend\n"
-                "• `/chatty <0-100>` - Set group banter participation %"
+                "• `/chatty` - Banter picker per group (inline buttons) or global %"
             )
 
         if cmd in ("/rules", "/listrules"):
@@ -1110,7 +1158,12 @@ class ReplyManager:
                     info_parts.append(f"({username})")
                 info_str = f" {' '.join(info_parts)}" if info_parts else ""
 
-                return f"✅ {target}{info_str} [ID: `{cid}`] has been added to the allowlist!"
+                result = f"✅ {target}{info_str} [ID: `{cid}`] has been added to the allowlist!"
+                if cid < 0 and self._client:
+                    # Auto-build this group's AI voice profile from its recent messages (background task)
+                    asyncio.create_task(self.generate_chat_voice_profile(cid))
+                    result += "\n\n🧠 _AI is now reading recent messages to learn how this group talks (voice profile). Use `/gencontext %d` to rebuild it later._" % cid
+                return result
             except ValueError:
                 return "Error: Chat ID must be an integer."
 
@@ -1223,6 +1276,87 @@ class ReplyManager:
             lines.append("\n_Customize per chat with `/style <chat_id> <style>` or `/style <chat_id> default`._")
             return "\n".join(lines)
 
+        if cmd == "/chatprompt":
+            if len(cmd_parts) < 2:
+                lines = ["🗣 *Per-Chat AI Personas:*"]
+                overrides_found = 0
+                priv, grps = self.privacy.get_all_allowed_chats()
+                for cid in sorted(priv | grps):
+                    p = self.db.get_state(f"chat_prompt_{cid}")
+                    if p:
+                        overrides_found += 1
+                        meta = self.db.get_chat_metadata(cid) or {}
+                        name = meta.get("title") or f"Chat {cid}"
+                        preview = p[:60] + ("…" if len(p) > 60 else "")
+                        lines.append(f"• {name} (`{cid}`): _{preview}_")
+                if not overrides_found:
+                    lines.append("• _All chats currently use the default global persona._")
+                lines.append(
+                    "\n*Usage:* `/chatprompt <chat_id> <prompt>` — custom AI behavior for that chat only.\n"
+                    "*Example:* `/chatprompt -1001234567890 Talk like a crypto trader, use Hindi slang, keep replies under 5 words.`\n"
+                    "_Reset: `/chatprompt <chat_id> default`_"
+                )
+                return "\n".join(lines)
+            try:
+                target_cid = int(cmd_parts[1])
+            except ValueError:
+                return "Error: First argument must be an integer chat ID. Usage: `/chatprompt <chat_id> <prompt>`"
+            persona_text = " ".join(cmd_parts[2:]).strip()
+            if persona_text.lower() in ("default", "clear", "reset", "none", ""):
+                self.db.set_state(f"chat_prompt_{target_cid}", "")
+                meta = self.db.get_chat_metadata(target_cid) or {}
+                name = meta.get("title") or f"Chat {target_cid}"
+                return f"🔄 {name} (`{target_cid}`) reset to the default global persona."
+            if len(persona_text) < 5:
+                return "Persona prompt is too short — write at least a few words describing how the AI should talk in that chat."
+            self.db.set_state(f"chat_prompt_{target_cid}", persona_text)
+            meta = self.db.get_chat_metadata(target_cid) or {}
+            name = meta.get("title") or f"Chat {target_cid}"
+            username = f" ({'@' + meta['username']})" if meta.get("username") else ""
+            return (
+                "✅ *Per-Chat Persona Saved*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                f"🗣 *Chat:* {name}{username} · `{target_cid}`\n\n"
+                f"*Custom persona:*\n_{persona_text}_\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "_The AI follows this persona only in this chat; all other chats keep the default._"
+            )
+
+        if cmd in ("/gencontext", "/genvoice"):
+            if not self._client:
+                return "⚠️ Telegram client not attached yet — try again after the account is connected."
+            if len(cmd_parts) >= 2:
+                try:
+                    target_cid = int(cmd_parts[1])
+                except ValueError:
+                    return "Error: Chat ID must be an integer. Usage: `/gencontext <chat_id>`"
+                if target_cid >= 0:
+                    return "Voice profiles are for groups only — private chats use the normal persona."
+                profile = await self.generate_chat_voice_profile(target_cid)
+                if not profile:
+                    return f"⚠️ Couldn't build a voice profile for `{target_cid}` — need recent text messages in that group. Try again after some chat activity."
+                meta = self.db.get_chat_metadata(target_cid) or {}
+                name = meta.get("title") or f"Group {target_cid}"
+                username = f" ({'@' + meta['username']})" if meta.get("username") else ""
+                preview = profile[:300] + ("…" if len(profile) > 300 else "")
+                return (
+                    "🧠 *AI Voice Profile Rebuilt*\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🗣 *Group:* {name}{username} · `{target_cid}`\n\n"
+                    f"*Profile:*\n_{preview}_\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "_The AI now mirrors how people talk, their slang and message lengths in this group._"
+                )
+            priv, grps = self.privacy.get_all_allowed_chats()
+            targets = sorted(g for g in grps if g < 0)
+            if not targets:
+                return "No allowlisted groups found. Usage: `/gencontext <chat_id>`"
+            built = 0
+            for gid in targets:
+                if await self.generate_chat_voice_profile(gid):
+                    built += 1
+            return f"🧠 Voice profiles rebuilt for *{built}/{len(targets)}* allowlisted groups."
+
         if cmd in ("/contextttl", "/aging"):
             if len(cmd_parts) < 2:
                 curr = self.db.get_state("context_ttl_hours", "4.0")
@@ -1288,7 +1422,17 @@ class ReplyManager:
                 target_cid = int(cmd_parts[1])
                 notes_text = " ".join(cmd_parts[2:]).strip()
                 self.db.set_permanent_context(target_cid, notes=notes_text)
-                return f"📌 Permanent context saved for chat `{target_cid}`:\n_{notes_text}_\n\nThis will be remembered permanently across all conversations."
+                meta = self.db.get_chat_metadata(target_cid) or {}
+                name = meta.get("title") or f"Chat {target_cid}"
+                username = f" ({'@' + meta['username']})" if meta.get("username") else ""
+                return (
+                    "✅ *Permanent Context Saved*\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🗣 *Chat:* {name}{username} · `{target_cid}`\n\n"
+                    f"📝 *Saved notes:*\n_{notes_text}_\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "_Remembered permanently across all conversations in this chat._"
+                )
             except ValueError:
                 return "Error: Chat ID must be an integer."
 
@@ -1300,11 +1444,23 @@ class ReplyManager:
                 ctx = self.db.get_permanent_context(target_cid)
                 pinned = ctx.get("pinned_text") or "(No pinned message cached)"
                 notes = ctx.get("notes") or "(No custom notes set)"
+                voice = self.db.get_state(f"chat_voice_profile_{target_cid}")
+                voice_str = voice if voice else "(No AI voice profile yet — `/gencontext %d` to build)" % target_cid
+                meta = self.db.get_chat_metadata(target_cid) or {}
+                name = meta.get("title") or f"Chat {target_cid}"
+                username = f" ({'@' + meta['username']})" if meta.get("username") else ""
                 return (
-                    f"📌 *Permanent Context for Chat `{target_cid}`:*\n\n"
-                    f"*Pinned Info / Rules:*\n{pinned}\n\n"
-                    f"*Custom Notes:*\n{notes}\n\n"
-                    f"_Use `/setcontext {target_cid} <notes>` to update notes, or `/syncpin {target_cid}` to refresh pins._"
+                    "📌 *Permanent Context*\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🗣 *Chat:* {name}{username} · `{target_cid}`\n\n"
+                    "📌 *Pinned info / rules:*\n"
+                    f"{pinned}\n\n"
+                    "📝 *Custom notes:*\n"
+                    f"{notes}\n\n"
+                    "🧠 *AI voice profile:*\n"
+                    f"{voice_str}\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    f"_Update notes: `/setcontext {target_cid} <notes>` · Refresh pins: `/syncpins {target_cid}`_"
                 )
             except ValueError:
                 return "Error: Chat ID must be an integer."
@@ -1990,14 +2146,33 @@ class ReplyManager:
                     "chatty_probability",
                     str(getattr(self.config, "chatty_probability", 0.15))
                 ))
-                return (
-                    f"💬 *Group Banter Participation:* `{int(curr_prob * 100)}%`\n"
-                    f"Chance of casually chiming in on group conversation even when not directly mentioned.\n\n"
-                    f"*Commands:*\n"
-                    f"• `/chatty off` - Strictly reply only when mentioned (0%)\n"
-                    f"• `/chatty on` - Enable natural 15% group banter\n"
-                    f"• `/chatty <0-100>` - Set custom percentage (e.g. `/chatty 25`)"
+                lines = [
+                    "💬 *Group Banter Rate*",
+                    "━━━━━━━━━━━━━━━━━━━━",
+                    f"🌐 *Global default:* `{int(curr_prob * 100)}%`",
+                    "🎯 *Unset chats:* random 30–60% band (natural human default)",
+                    "",
+                    "*Per-chat settings:*",
+                ]
+                overrides_found = 0
+                priv, grps = self.privacy.get_all_allowed_chats()
+                for cid in sorted(grps):
+                    p = self.db.get_state(f"chat_chatty_{cid}")
+                    if p:
+                        overrides_found += 1
+                        meta = self.db.get_chat_metadata(cid) or {}
+                        name = meta.get("title") or f"Group {cid}"
+                        try:
+                            pct = int(float(p) * 100)
+                            lines.append(f"• {name} (`{cid}`): *{pct}%*")
+                        except ValueError:
+                            continue
+                if not overrides_found:
+                    lines.append("• _No per-chat overrides — every group uses the global default / band._")
+                lines.append(
+                    "\n👇 *Tap a chat below to set its banter %* — or globally: `/chatty off` (mention-only) · `/chatty <0-100>`."
                 )
+                return "\n".join(lines)
             arg = cmd_parts[1].lower().strip()
             if arg == "off":
                 self.db.set_state("chatty_probability", "0.0")
@@ -2726,6 +2901,13 @@ class ReplyManager:
             logger.error("Cannot send reply: Telegram client is not attached.")
             return False
 
+        # Human burst guard: never machine-gun >3 reply sequences into one chat within 10s.
+        # Counts one sequence per _send_reply call (multi-bubble parts stay inside the same moment).
+        burst_wait = self.safety.burst_wait_needed(chat_id)
+        if burst_wait > 0:
+            logger.info(f"[BURST GUARD] Pausing {burst_wait:.1f}s before next reply in chat {chat_id} (human burst cap {self.safety.burst_max_sends}/{self.safety.burst_window_seconds:.0f}s).")
+            await asyncio.sleep(burst_wait)
+
         multibubble_enabled = self.db.get_state("multibubble_enabled", "1") == "1"
         msg_parts = self.split_reply_messages(text, enabled=multibubble_enabled)
         if not msg_parts:
@@ -2834,6 +3016,7 @@ class ReplyManager:
             actual_reply_to = reply_to_msg_id if (chat_id > 0 or is_mention) else None
             first_sent = await self._client.send_message(chat_id, first_part, reply_to=actual_reply_to)
             self.safety.mark_reply_sent(chat_id)
+            self.safety.record_burst_send(chat_id)
             self._last_sent_reply_by_chat[chat_id] = first_part
             if chat_id not in self._recent_replies_history:
                 self._recent_replies_history[chat_id] = []

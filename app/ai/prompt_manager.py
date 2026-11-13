@@ -178,9 +178,10 @@ class PromptManager:
             default_text = re.sub(r"\bas Kaif\b", f"as {effective_name}", default_text, flags=re.IGNORECASE)
         return default_text
 
-    def get_system_instructions(self, style_override: Optional[str] = None) -> str:
-        """Return instructions for AI generation: uses custom prompt as top priority, honoring custom word rules if set."""
-        custom = self.custom_prompt
+    def get_system_instructions(self, style_override: Optional[str] = None, persona_override: Optional[str] = None) -> str:
+        """Return instructions for AI generation: uses custom prompt as top priority, honoring custom word rules if set.
+        persona_override replaces the global custom prompt for ONE chat (per-chat /chatprompt); falls back to default."""
+        custom = (persona_override or "").strip() or self.custom_prompt
         target_style = style_override if (style_override and style_override in VALID_STYLES) else self._style
         style_rule = f"\nACTIVE STYLE: {VALID_STYLES[target_style]}" if (target_style != "casual" and target_style in VALID_STYLES) else ""
 

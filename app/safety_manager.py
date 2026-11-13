@@ -7,6 +7,7 @@ import hashlib
 import random
 import re
 import time
+from collections import deque
 from typing import Dict, Optional, Tuple
 
 from app.config import AppConfig
@@ -48,6 +49,8 @@ class SafetyManager:
         self._error_pause_until: float = 0.0
         self._minute_cap: int = self.max_replies_per_minute
         self._minute_cap_ts: float = 0.0
+        # Human burst guard: per-chat timestamps of reply SEQUENCES actually sent
+        self._burst_times: Dict[int, deque] = {}
 
     @property
     def is_emergency_stopped(self) -> bool:
@@ -404,3 +407,42 @@ class SafetyManager:
             except Exception as e:
                 logger.debug(f"Could not record reply event: {e}")
         self.record_success()
+
+    # ---------------- Human burst guard (never >N reply sequences within W seconds) ----------------
+
+    @property
+    def burst_max_sends(self) -> int:
+        """Max reply sequences allowed into one chat within the burst window (human default: 3)."""
+        db_val = self.db.get_state("burst_max_sends")
+        if db_val:
+            try:
+                return max(1, int(db_val))
+            except ValueError:
+                pass
+        return 3
+
+    @property
+    def burst_window_seconds(self) -> float:
+        """Burst guard window in seconds (human default: 10)."""
+        db_val = self.db.get_state("burst_window_seconds")
+        if db_val:
+            try:
+                return max(1.0, float(db_val))
+            except ValueError:
+                pass
+        return 10.0
+
+    def burst_wait_needed(self, chat_id: int) -> float:
+        """Seconds to wait so the next send stays inside the human burst cap (0 = free to send)."""
+        window = self.burst_window_seconds
+        now = time.time()
+        times = self._burst_times.setdefault(chat_id, deque())
+        while times and now - times[0] > window:
+            times.popleft()
+        if len(times) >= self.burst_max_sends:
+            return max(0.1, window - (now - times[0]))
+        return 0.0
+
+    def record_burst_send(self, chat_id: int) -> None:
+        """Record ONE reply sequence (not each multi-bubble part) for the burst window."""
+        self._burst_times.setdefault(chat_id, deque()).append(time.time())

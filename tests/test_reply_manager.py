@@ -557,7 +557,7 @@ def test_control_commands_model_baseurl_provider_chatty(tmp_path: Path):
 
         # 3. /chatty
         chatty_info = await mgr.handle_control_command("/chatty")
-        assert "Group Banter Participation" in chatty_info
+        assert "Group Banter Rate" in chatty_info
         chatty_set = await mgr.handle_control_command("/chatty 20")
         assert "20%" in chatty_set
         assert float(db.get_state("chatty_probability")) == 0.20
@@ -1270,7 +1270,7 @@ def test_permanent_group_context_and_pinned_sync(tmp_path: Path):
 
         # 2. Add custom notes
         res2 = await mgr.handle_control_command("/setcontext -100999 CS graduation project team")
-        assert "Permanent context saved" in res2
+        assert "Permanent Context Saved" in res2
 
         # 3. View context
         res3 = await mgr.handle_control_command("/showcontext -100999")

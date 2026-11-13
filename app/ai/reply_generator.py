@@ -128,6 +128,7 @@ class ReplyGenerator:
         incoming_text: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         style_override: Optional[str] = None,
+        persona_override: Optional[str] = None,
         permanent_context: Optional[str] = None,
         is_group: bool = False,
         is_mention: bool = False,
@@ -141,7 +142,9 @@ class ReplyGenerator:
             is_group=is_group,
             is_mention=is_mention,
         )
-        instructions = self.prompt_manager.get_system_instructions(style_override=style_override)
+        instructions = self.prompt_manager.get_system_instructions(
+            style_override=style_override, persona_override=persona_override
+        )
         try:
             draft = self.provider.generate_reply(prompt, instructions)
             return self.prompt_manager.clean_reply(draft, sender_name=sender_name)
@@ -187,6 +190,35 @@ class ReplyGenerator:
         instructions = self.prompt_manager.get_system_instructions()
         draft = self.provider.generate_reply(prompt, instructions)
         return self.prompt_manager.clean_reply(draft)
+
+    def generate_voice_profile(self, chat_title: str, raw_text: str) -> str:
+        """Learn how a group's people actually talk from recent messages: tone, slang,
+        message length, topics. AI-written voice profile used to blend in as a regular."""
+        if not raw_text or not raw_text.strip():
+            return ""
+        from app.ai.provider import LocalRuleProvider
+        if isinstance(self.provider, LocalRuleProvider):
+            return ""
+
+        prompt = (
+            f"You are studying recent messages from the Telegram group '{chat_title}' so you can "
+            f"text there exactly like one of its regular members.\n\n"
+            f"Messages:\n{raw_text}\n\n"
+            f"Write a compact voice profile (max 120 words) capturing ONLY what you observe:\n"
+            f"- Tone and energy (dry, hyped, sarcastic, wholesome, etc.)\n"
+            f"- Typical message length and style (one-liners vs paragraphs, caps, punctuation habits)\n"
+            f"- Slang, greetings, filler words and emoji habits (cite real examples from these messages)\n"
+            f"- Recurring topics, running jokes and nicknames people use\n"
+            f"- How banter and disagreements sound in this group\n\n"
+            f"Write it as direct instructions starting with 'Talk like: '. Output ONLY the profile, no preamble."
+        )
+        system_inst = "You are a chat-behavior analyst. Output only the requested profile text."
+        try:
+            draft = self.provider.generate_reply(prompt, system_inst)
+            return draft.strip()[:1500]
+        except Exception as e:
+            logger.error(f"Failed to generate voice profile: {e}")
+            return ""
 
     def distill_group_context(self, chat_title: str, raw_text: str) -> str:
         """Distill raw pinned messages and group announcements into concise permanent context using AI."""
