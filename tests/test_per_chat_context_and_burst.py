@@ -271,3 +271,13 @@ def test_isolated_per_group_context_files_on_disk(tmp_path: Path):
     assert not file_a.exists()
     assert file_b.exists()
 
+    # 5. Verify AI rolling context memory is saved into Group B file
+    mgr.db.set_chat_summary(grp_b, "Recap: Group frequently critiques landing page typography and favors dark modes.")
+    data_b3 = json.loads(file_b.read_text(encoding="utf-8"))
+    assert "typography" in data_b3["ai_memory"]
+
+    # Verify fallback from disk file if SQLite state is purged
+    mgr.db.set_state(f"chat_summary_{grp_b}", "")
+    assert "typography" in mgr.db.get_chat_summary(grp_b)
+
+

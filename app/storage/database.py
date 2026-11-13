@@ -499,12 +499,27 @@ class Database:
         return "\n".join(lines)
 
     def get_chat_summary(self, chat_id: int) -> str:
-        """AI-generated rolling recap for chat_id (runtime_state keyed storage)."""
-        return self.get_state(f"chat_summary_{chat_id}", "")
+        """AI-generated rolling recap for chat_id (runtime_state keyed storage with disk fallback)."""
+        summary = self.get_state(f"chat_summary_{chat_id}", "")
+        if summary:
+            return summary
+        # Fallback to isolated context file on disk
+        file_path = self._get_context_file_path(chat_id)
+        if file_path.exists():
+            try:
+                data = json.loads(file_path.read_text(encoding="utf-8"))
+                memory = data.get("ai_memory") or ""
+                if memory:
+                    self.set_state(f"chat_summary_{chat_id}", memory)
+                    return memory
+            except Exception:
+                pass
+        return ""
 
     def set_chat_summary(self, chat_id: int, summary: str) -> None:
-        """Store the AI-generated rolling recap for chat_id."""
+        """Store the AI-generated rolling recap for chat_id and sync to isolated context file."""
         self.set_state(f"chat_summary_{chat_id}", (summary or "").strip())
+        self.sync_chat_context_file(chat_id)
 
     def prune_messages_older_than(self, max_age_seconds: float) -> int:
         """Delete locally cached chat messages older than max_age_seconds (context aging purge).
@@ -596,6 +611,8 @@ class Database:
                 "title": meta.get("title") or f"Chat {chat_id}",
                 "notes": notes or "",
                 "pinned_text": pinned_text or "",
+                "ai_memory": self.get_state(f"chat_summary_{chat_id}") or "",
+                "voice_profile": self.get_state(f"chat_voice_profile_{chat_id}") or "",
                 "prompt": self.get_state(f"chat_prompt_{chat_id}") or "",
                 "style": self.get_state(f"chat_style_{chat_id}") or "",
                 "updated_at": time.time(),

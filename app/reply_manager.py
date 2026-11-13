@@ -595,7 +595,33 @@ class ReplyManager:
                 return
 
             sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True, is_mention=is_mention)
-            # Token quota alerts removed per configuration
+            if sent:
+                asyncio.create_task(self.refresh_single_chat_summary(chat_id))
+
+    async def refresh_single_chat_summary(self, chat_id: int, min_new_messages: int = 4) -> None:
+        """Dynamically update AI context memory for a single chat after recent messages."""
+        try:
+            marker = int(self.db.get_state(f"chat_summary_marker_{chat_id}", "0"))
+            new_count = self.db.count_chat_messages_since(chat_id, marker)
+            if new_count < min_new_messages:
+                return
+            raw = self.db.get_chat_messages_since_text(chat_id, marker, limit=40)
+            if not raw:
+                return
+            meta = self.db.get_chat_metadata(chat_id) or {}
+            title = meta.get("title") or ("this group" if chat_id < 0 else "this chat")
+            summary = await asyncio.to_thread(
+                self.generator.summarize_chat_history,
+                title,
+                self.db.get_chat_summary(chat_id),
+                raw,
+            )
+            if summary:
+                self.db.set_chat_summary(chat_id, summary)
+                self.db.set_state(f"chat_summary_marker_{chat_id}", str(self.db.latest_chat_message_row_id(chat_id)))
+                logger.info(f"[AI CHAT MEMORY] Auto-updated rolling context memory for chat {chat_id} ({new_count} new messages).")
+        except Exception as e:
+            logger.debug(f"[AI CHAT MEMORY] Could not update memory for chat {chat_id}: {e}")
 
     async def check_daily_quota_warning(self) -> None:
         """Daily quota threshold alerts have been disabled and removed."""
@@ -632,6 +658,8 @@ class ReplyManager:
                     return
 
             sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True, is_mention=True)
+            if sent:
+                asyncio.create_task(self.refresh_single_chat_summary(chat_id))
             logger.info(f"[DEFERRED MENTION SENT] Successfully replied to mention in chat {chat_id} after cooldown.")
         except Exception as e:
             logger.error(f"Error in deferred mention reply: {e}")
