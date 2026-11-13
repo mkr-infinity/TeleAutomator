@@ -2078,27 +2078,28 @@ def test_incoming_burst_debouncer(tmp_path: Path):
         db.set_state("debounce_seconds", "0.15")
 
         chat_id = 4444
-        # Send 2 rapid burst messages
-        await mgr.handle_incoming_eligible_message(
+        # Send 2 rapid burst messages concurrently (as Telegram MTProto delivers them)
+        task1 = asyncio.create_task(mgr.handle_incoming_eligible_message(
             chat_id=chat_id,
             chat_title="Friend",
             message_id=1,
             sender_id=777,
             sender_name="Bob",
             text="yo",
-        )
+        ))
         await asyncio.sleep(0.04)
-        await mgr.handle_incoming_eligible_message(
+        task2 = asyncio.create_task(mgr.handle_incoming_eligible_message(
             chat_id=chat_id,
             chat_title="Friend",
             message_id=2,
             sender_id=777,
             sender_name="Bob",
             text="are you free",
-        )
+        ))
 
         # Wait for debounce window to elapse (0.15s + buffer)
         await asyncio.sleep(0.28)
+        await asyncio.gather(task1, task2)
 
         # Should have sent only 1 reply instead of 2 separate replies!
         assert mock_client.send_message.call_count == 1

@@ -50,7 +50,6 @@ class TelegramService:
         self.client: Optional[TelegramClient] = None
         self._running = False
         self._heartbeat_task: Optional[asyncio.Task] = None
-        self._last_context_purge = 0.0
         self._last_summary_check = 0.0
         self._last_daily_prune = 0.0
 

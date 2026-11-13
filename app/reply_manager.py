@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import datetime
-import difflib
 import json
 import random
 import re
-import shutil
 import time
 from typing import Any, Optional
 
@@ -339,6 +337,14 @@ class ReplyManager(CommandRouterMixin):
         """Process a single or stitched incoming message."""
         # Sanitize incoming text before passing to generator
         clean_text = self.privacy.sanitize_text(text)
+
+        # Ensure recent chat context is always populated so AI is strictly on-topic in DMs & groups
+        if not conversation_history:
+            ttl_hours = float(self.db.get_state("context_ttl_hours", "4.0"))
+            max_age_secs = int(ttl_hours * 3600) if ttl_hours > 0 else None
+            conversation_history = self.db.get_recent_chat_messages(
+                chat_id, limit=15, max_age_seconds=max_age_secs
+            )
 
         # Record chat metadata for DataFrame display
         self.db.record_chat_metadata(
@@ -701,8 +707,8 @@ class ReplyManager(CommandRouterMixin):
                 logger.debug(f"[SPONTANEOUS FOLLOW-UP] Safety suppression: {reason}")
                 return
 
-            # Short typing burst
-            typing_duration = random.uniform(1.2, 2.5)
+            # Short typing burst (human takes at least 2.0s)
+            typing_duration = random.uniform(2.0, 3.5)
             try:
                 if hasattr(self._client, "action") and callable(self._client.action):
                     act = self._client.action(chat_id, "typing")
@@ -1652,14 +1658,14 @@ class ReplyManager(CommandRouterMixin):
                     logger.warning(f"Follow-up message to chat {chat_id} aborted: emergency stop triggered.")
                     break
 
-                # Multi-bubble rapid human typing pause (1.2 - 2.5s) between bubbles
+                # Multi-bubble human typing pause (minimum 2.0s) between bubbles - humans take minimum 2 seconds
                 if self.min_delay == 0 and self.max_delay == 0:
                     followup_delay = 0.0
                     followup_typing = 0.0
                     followup_pause = 0.0
                 else:
-                    followup_delay = random.uniform(1.2, 2.5)
-                    followup_typing = min(followup_delay, max(0.8, min(1.8, len(part.split()) * 0.4)))
+                    followup_delay = random.uniform(2.5, 4.0)
+                    followup_typing = min(followup_delay, max(2.0, min(3.5, len(part.split()) * 0.4)))
                     followup_pause = max(0.0, followup_delay - followup_typing)
 
                 if followup_pause > 0:

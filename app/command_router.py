@@ -13,13 +13,10 @@ import asyncio
 import datetime
 import difflib
 import json
-import math
-import os
 import random
 import re
 import shutil
 import time
-from pathlib import Path
 from typing import Optional, Any
 
 from app.logger import setup_logger
@@ -80,7 +77,7 @@ class CommandRouterMixin:
 
         closest = difflib.get_close_matches(cmd, _BOT_COMMAND_NAMES, n=3, cutoff=0.6)
         known = ", ".join(f"`{c}`" for c in _BOT_COMMAND_NAMES)
-        hint = f"\nDid you mean: {chr(32).join(f"`{c}`" for c in closest)}?" if closest else ""
+        hint = f"\nDid you mean: {' '.join(f'`{c}`' for c in closest)}?" if closest else ""
         return (
             f"❓ Unknown command `{cmd}`.\n"
             f"Common ones: {known}{hint}\n"
