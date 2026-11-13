@@ -219,3 +219,55 @@ def test_unauthorized_message_is_structured():
     assert "━━━" in UNAUTHORIZED_MESSAGE
     assert "Access Restricted" in UNAUTHORIZED_MESSAGE
     assert "@mkr_infinity" in UNAUTHORIZED_MESSAGE
+
+
+def test_isolated_per_group_context_files_on_disk(tmp_path: Path):
+    """Verify each chat/group gets an isolated physical file by its ID, preventing any context mixing."""
+    mgr = _make_manager(tmp_path)
+    grp_a = -100111222333
+    grp_b = -100444555666
+
+    mgr.privacy.allow_chat(grp_a)
+    mgr.privacy.allow_chat(grp_b)
+    mgr.db.record_chat_metadata(grp_a, title="Crypto Alpha", chat_type="Group")
+    mgr.db.record_chat_metadata(grp_b, title="Design Hub", chat_type="Group")
+
+    # 1. Set context for Group A
+    res_a = asyncio.run(mgr.handle_control_command(f"/setcontext {grp_a} Solana meme coins only, speak fast"))
+    assert "Context Saved" in res_a
+
+    # File on disk for Group A exists
+    file_a = tmp_path / "contexts" / f"{grp_a}.json"
+    assert file_a.exists(), f"Context file {file_a} should have been created"
+    data_a = json.loads(file_a.read_text(encoding="utf-8"))
+    assert data_a["chat_id"] == grp_a
+    assert "Solana meme coins" in data_a["notes"]
+
+    # Group B file does NOT exist yet (pure isolation)
+    file_b = tmp_path / "contexts" / f"{grp_b}.json"
+    assert not file_b.exists()
+
+    # 2. Set context for Group B
+    res_b = asyncio.run(mgr.handle_control_command(f"/setcontext {grp_b} Minimalist Figma layouts, critique only"))
+    assert "Context Saved" in res_b
+
+    # Group B file exists and has its own isolated context
+    assert file_b.exists()
+    data_b = json.loads(file_b.read_text(encoding="utf-8"))
+    assert data_b["chat_id"] == grp_b
+    assert "Figma" in data_b["notes"]
+    assert "Solana" not in data_b["notes"]
+
+    # 3. Add per-chat prompt to Group A
+    asyncio.run(mgr.handle_control_command(f"/chatprompt {grp_a} Talk like a degenerate crypto trader"))
+    data_a2 = json.loads(file_a.read_text(encoding="utf-8"))
+    assert "degenerate crypto trader" in data_a2["prompt"]
+    # Group B prompt remains untouched
+    data_b2 = json.loads(file_b.read_text(encoding="utf-8"))
+    assert data_b2["prompt"] == ""
+
+    # 4. Deleting Group A's context removes Group A file, leaves Group B intact
+    asyncio.run(mgr.handle_control_command(f"/delcontext {grp_a}"))
+    assert not file_a.exists()
+    assert file_b.exists()
+

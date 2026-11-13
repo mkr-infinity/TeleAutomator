@@ -1215,10 +1215,14 @@ class ReplyManager:
                 target_style = cmd_parts[2].lower().strip()
                 if target_style in ("default", "clear", "reset", "none"):
                     self.db.set_state(f"chat_style_{target_cid}", "")
+                    if hasattr(self.db, "sync_chat_context_file"):
+                        self.db.sync_chat_context_file(target_cid)
                     return f"🔄 Chat `{target_cid}` reset to default global style (*{self.generator.style}*)."
                 if target_style not in ("casual", "concise", "formal", "humorous"):
                     return "Invalid style. Available: `casual`, `concise`, `formal`, `humorous`, `default`."
                 self.db.set_state(f"chat_style_{target_cid}", target_style)
+                if hasattr(self.db, "sync_chat_context_file"):
+                    self.db.sync_chat_context_file(target_cid)
                 return f"🎨 Chat `{target_cid}` custom AI persona set to *{target_style}*."
 
             target_style = cmd_parts[1].lower().strip()
@@ -1273,12 +1277,16 @@ class ReplyManager:
             persona_text = " ".join(cmd_parts[2:]).strip()
             if persona_text.lower() in ("default", "clear", "reset", "none", ""):
                 self.db.set_state(f"chat_prompt_{target_cid}", "")
+                if hasattr(self.db, "sync_chat_context_file"):
+                    self.db.sync_chat_context_file(target_cid)
                 meta = self.db.get_chat_metadata(target_cid) or {}
                 name = meta.get("title") or f"Chat {target_cid}"
                 return f"🔄 {name} (`{target_cid}`) reset to the default global persona."
             if len(persona_text) < 5:
                 return "Persona prompt is too short — write at least a few words describing how the AI should talk in that chat."
             self.db.set_state(f"chat_prompt_{target_cid}", persona_text)
+            if hasattr(self.db, "sync_chat_context_file"):
+                self.db.sync_chat_context_file(target_cid)
             meta = self.db.get_chat_metadata(target_cid) or {}
             name = meta.get("title") or f"Chat {target_cid}"
             username = f" ({'@' + meta['username']})" if meta.get("username") else ""
