@@ -177,7 +177,7 @@ TG_API_HASH=0123456789abcdef0123456789abcdef
 TG_SESSION_MODE=local
 TG_SESSION_NAME=telegram_client
 
-# 3. Allowlist (Leave empty initially; authorize chats via Saved Messages later)
+# 3. Allowlist (Leave empty initially; authorize chats via Control Bot later)
 ALLOWED_PRIVATE_CHATS=
 ALLOWED_GROUPS=
 
@@ -378,10 +378,10 @@ To keep TeleAutomator awake and responding 24/7 on the Free tier:
 
 ## Step 9: Test & Verify from Telegram
 
-You never need to log into the server again for everyday tasks. Everything is managed through your Telegram **Saved Messages** (chat with yourself):
+You never need to log into the server again for everyday tasks. Everything is managed through your Telegram **Control Bot**:
 
 1. Open Telegram on your phone.
-2. Go to **Saved Messages**.
+2. Open your **Control Bot**.
 3. Send:
    ```text
    /status
@@ -457,7 +457,7 @@ docker compose up -d --build
 - **No**. The server runs independently 24/7. Your phone can be turned off, in airplane mode, or offline, and TeleAutomator will continue running.
 
 ### Q: Where do errors go?
-- TeleAutomator isolates all errors to your private **Saved Messages**. Nothing is ever leaked to groups or contacts.
+- TeleAutomator isolates all alerts and errors to your private **Control Bot**. Nothing is ever leaked to groups or contacts.
 
 ---
 *Maintained by Mohammad Kaif Raja ([@mkr_infinity](https://t.me/mkr_infinity)) • Repository: [TeleAutomator](https://github.com/mkr-infinity/TeleAutomator)*

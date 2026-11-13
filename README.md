@@ -6,7 +6,7 @@
 [![MTProto Telethon](https://img.shields.io/badge/protocol-MTProto%20Telethon-informational.svg)](https://github.com/LonamiWebs/Telethon)
 [![AI Supported](https://img.shields.io/badge/AI-Gemini%20%7C%20OpenAI%20%7C%20Custom-orange.svg)](DEPLOYMENT.md)
 [![License](https://img.shields.io/badge/license-Source--Available-red.svg)](LICENSE)
-[![Tests Passing](https://img.shields.io/badge/tests-183%2F183%20passed-brightgreen.svg)](test.sh)
+[![Tests Passing](https://img.shields.io/badge/tests-191%2F191%20passed-brightgreen.svg)](test.sh)
 
 > 🚀 **Deploying to Railway, Render, or Cloud VPS 24/7?**  
 > For complete step-by-step cloud deployment walkthroughs, automated build guides, and environment variable configurations, see **[DEPLOYMENT.md](DEPLOYMENT.md)**.
@@ -39,7 +39,7 @@ git clone https://github.com/mkr-infinity/TeleAutomator.git && cd TeleAutomator
 
 TeleAutomator includes a built-in Telegram Mini App running concurrently on the same server/container without requiring a separate domain or infrastructure.
 
-- **Direct Launch in Telegram**: Registered automatically as the bot's persistent chat menu button (`⚡ TeleAutomator`) via Telegram's `setChatMenuButton` API, and accessible via `/miniapp` inline Web App buttons.
+- **Direct Launch in Telegram**: Registered automatically as the bot's persistent chat menu button (`Open`) via Telegram's `setChatMenuButton` API, and accessible via `/miniapp` inline Web App buttons.
 - **Sleek Loading Screen**: Smooth animated startup with glowing project logo, gradient progress bar, and instant state hydration.
 - **Overview Dashboard**: Live status pill, 24h reply counters, speaking style, quiet hours schedule, and quick controls (Pause 30m, Resume, Emergency Stop, Mode switch).
 - **Chats & Memory Management**: Capsule-style chat cards showing profile initials, titles, allowlist status, per-chat custom personas, voice profiles, and isolated disk context files (`data/contexts/{chat_id}.json`).
@@ -51,19 +51,19 @@ TeleAutomator includes a built-in Telegram Mini App running concurrently on the 
 
 ## 📑 Operating Modes
 
-Switch modes on the fly from terminal, the Mini App GUI, or your Telegram **Saved Messages** / Control Bot:
+Switch modes on the fly from terminal, the Mini App GUI, or your Telegram **Control Bot**:
 
 | Mode | Description | How to Activate |
 | :--- | :--- | :--- |
 | **`draft`** *(Default)* | Generates and logs drafts to SQLite; **never sends to chat**. | `/mode draft` or `./start.sh --draft` |
-| **`approval`** | Sends drafts to your **Saved Messages** or Control Bot for `/approve <id>` dispatch. | `/mode approval` or `./start.sh --mode approval` |
+| **`approval`** | Sends drafts to your **Control Bot** for `/approve <id>` dispatch. | `/mode approval` or `./start.sh --mode approval` |
 | **`restricted_auto`**| Automatically replies to allowlisted chats with human-like delays (min 2.0s between bubbles). | `/mode auto` or set `REPLY_MODE=restricted_auto` |
 
 ---
 
 ## 📱 Remote Control & Command Reference
 
-Manage your automation straight from your phone by texting your **Control Bot** or **Saved Messages**:
+Manage your automation straight from your phone by texting your **Control Bot**:
 
 ### Permanent Group Context & Memory
 | Command | Action | Example |
@@ -120,7 +120,7 @@ Run the automated test suite locally:
 # Or via universal runner:
 python run.py --test
 ```
-**183 passing unit tests** covering configuration, safety guards, quiet hours, randomized cooldowns, permanent context caching, pinned message syncing, adaptive typing, and mock MTProto workflows.
+**191 passing unit tests** covering configuration, safety guards, quiet hours, randomized cooldowns, permanent context caching, pinned message syncing, adaptive typing, and mock MTProto workflows.
 
 ---
 
