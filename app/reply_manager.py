@@ -27,7 +27,7 @@ _BOT_COMMAND_NAMES = (
     "/reaction", "/reactioncooldown", "/chatcooldown", "/globalcooldown", "/ratelimit", "/editfix", "/ownreact",
     "/typo", "/followup", "/debounce", "/multibubble", "/quiethours", "/sleep", "/aiconfig", "/setai", "/apikey",
     "/usage", "/checkmodels", "/thinking", "/temp", "/maxtokens", "/model", "/baseurl", "/provider",
-    "/quotathreshold", "/quotaalert", "/addrule", "/delrule", "/rules", "/chats", "/allowchat", "/removechat",
+    "/addrule", "/delrule", "/rules", "/chats", "/allowchat", "/removechat",
     "/blockchat", "/mentiononly", "/contextttl", "/clearcontext", "/syncpins", "/setcontext", "/showcontext",
     "/delcontext", "/backup", "/pending", "/approve", "/reject", "/name", "/prompt", "/setprompt", "/chatty",
     "/chatprompt", "/gencontext", "/safemode",
@@ -595,38 +595,11 @@ class ReplyManager:
                 return
 
             sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True, is_mention=is_mention)
-            if sent:
-                asyncio.create_task(self.check_daily_quota_warning())
+            # Token quota alerts removed per configuration
 
     async def check_daily_quota_warning(self) -> None:
-        """Check if 24-hour token consumption exceeded user-defined threshold and alert Saved Messages."""
-        if (not self._client and self.bot_control is None) or not self.db:
-            return
-        enabled = self.db.get_state("quota_alert_enabled", "1") == "1"
-        if not enabled:
-            return
-        try:
-            threshold = int(self.db.get_state("quota_threshold_tokens", "100000"))
-            daily_tokens = self.db.get_daily_token_usage()
-            if daily_tokens >= threshold:
-                last_alert = float(self.db.get_state("last_quota_alert_timestamp", "0"))
-                now = time.time()
-                # Alert once per 24 hours
-                if (now - last_alert) >= 86400:
-                    self.db.set_state("last_quota_alert_timestamp", str(now))
-                    rem = max(0, 100_000_000 - daily_tokens)
-                    alert_text = (
-                        f"⚠️ *Daily Token Quota Threshold Alert*\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"　• 24h consumed: *{daily_tokens:,}* tokens\n"
-                        f"　• Warning threshold: `{threshold:,}` tokens\n"
-                        f"　• Remaining free pool: *{rem:,}* tokens\n\n"
-                        f"_💡 Adjust: `/quotathreshold <tokens>` · toggle: `/quotaalert off`_"
-                    )
-                    await self._send_control_alert(alert_text)
-                    logger.info(f"[QUOTA ALERT] Sent 24h threshold warning ({daily_tokens:,} tokens) via control channel.")
-        except Exception as e:
-            logger.debug(f"Could not execute quota warning check: {e}")
+        """Daily quota threshold alerts have been disabled and removed."""
+        return
 
     async def _schedule_deferred_reply(
         self,
@@ -659,8 +632,6 @@ class ReplyManager:
                     return
 
             sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True, is_mention=True)
-            if sent:
-                asyncio.create_task(self.check_daily_quota_warning())
             logger.info(f"[DEFERRED MENTION SENT] Successfully replied to mention in chat {chat_id} after cooldown.")
         except Exception as e:
             logger.error(f"Error in deferred mention reply: {e}")
@@ -1040,9 +1011,7 @@ class ReplyManager:
                 "• `/baseurl <url>` - Set custom API endpoint/base URL\n"
                 "• `/provider <name>` - Switch AI engine (custom, gemini, openai, nvidia, local)\n"
                 "• `/style [chat_id] <style>` - Global or per-chat persona override\n"
-                "• `/styles` - List all per-chat persona overrides\n"
-                "• `/quotathreshold <tokens>` - Set daily token warning limit\n"
-                "• `/quotaalert <on|off>` - Toggle daily quota warning alerts\n\n"
+                "• `/styles` - List all per-chat persona overrides\n\n"
                 "*Custom Keyword Auto-Replies:*\n"
                 "• `/addrule <word> => <reply>` - Auto-reply when a word is detected\n"
                 "• `/delrule <word>` - Delete keyword trigger\n"
@@ -1512,9 +1481,6 @@ class ReplyManager:
             used_pct = (tot_tokens / FREE_POOL) * 100
 
             daily_tokens = self.db.get_daily_token_usage()
-            thresh = int(self.db.get_state("quota_threshold_tokens", "100000"))
-            alert_on = self.db.get_state("quota_alert_enabled", "1") == "1"
-            alert_status = f"ON (alert at {thresh:,} tokens)" if alert_on else "OFF"
 
             model_lines = []
             for bm in stats["by_model"]:
@@ -1525,7 +1491,7 @@ class ReplyManager:
                 f"📊 *Inception Labs / AI Token Tracker:*\n\n"
                 f"• Total AI Requests: `{reqs:,}`\n"
                 f"• Total Tokens Used: *{tot_tokens:,}* / 100,000,000 ({used_pct:.4f}%)\n"
-                f"• 24h Daily Consumption: *{daily_tokens:,}* tokens (Alert: `{alert_status}`)\n"
+                f"• 24h Daily Consumption: *{daily_tokens:,}* tokens\n"
                 f"• Prompt Tokens: `{p_tokens:,}`\n"
                 f"• Completion Tokens: `{c_tokens:,}`\n"
                 f"• Remaining Free Quota: *{rem_tokens:,}* tokens\n\n"
@@ -1533,24 +1499,10 @@ class ReplyManager:
             )
 
         if cmd in ("/quotathreshold", "/threshold"):
-            if len(cmd_parts) < 2:
-                curr = self.db.get_state("quota_threshold_tokens", "100000")
-                return f"⚠️ *Daily Quota Warning Threshold:* `{int(curr):,} tokens`\nUsage: `/quotathreshold <tokens>` (e.g. `/quotathreshold 150000`)"
-            try:
-                val = max(1000, int(cmd_parts[1]))
-                self.db.set_state("quota_threshold_tokens", str(val))
-                return f"⚠️ Daily quota warning threshold set to *{val:,} tokens*."
-            except ValueError:
-                return "Error: Threshold must be a valid integer number of tokens."
+            return "ℹ️ Daily token quota threshold alerts have been disabled and removed."
 
         if cmd in ("/quotaalert", "/thresholdalert"):
-            if len(cmd_parts) < 2 or cmd_parts[1].lower() not in ("on", "off"):
-                curr = "ON" if self.db.get_state("quota_alert_enabled", "1") == "1" else "OFF"
-                return f"Daily quota warning alerts are currently: *{curr}*\nUsage: `/quotaalert on` or `/quotaalert off`"
-            val = "1" if cmd_parts[1].lower() == "on" else "0"
-            self.db.set_state("quota_alert_enabled", val)
-            status_str = "ENABLED" if val == "1" else "DISABLED"
-            return f"⚠️ Daily quota warning alerts are now *{status_str}*."
+            return "ℹ️ Daily quota warning alerts have been disabled and removed."
 
         if cmd in ("/thinking", "/reasoning", "/effort"):
             if len(cmd_parts) < 2:

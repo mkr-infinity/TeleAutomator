@@ -326,3 +326,82 @@ def test_handle_state_includes_ai_engine_fields(tmp_path):
     state = api.handle_state()
     assert state["ai_model"] == "test-model-4"
     assert state["ai_base_url"] == "https://api.example.com/v1"
+
+
+def test_setcontext_and_delcontext_actions(tmp_path):
+    ctx, reply_mgr = make_ctx(tmp_path)
+    api = MiniAppAPI(ctx)
+    cmd1 = api.map_action_to_command("setcontext", {"chat_id": -100123, "value": "Solana meme coin focus"})
+    assert cmd1 == "/setcontext -100123 Solana meme coin focus"
+    cmd2 = api.map_action_to_command("delcontext", {"chat_id": -100123})
+    assert cmd2 == "/delcontext -100123"
+
+
+def test_handle_chats_includes_context(tmp_path):
+    ctx, _ = make_ctx(tmp_path)
+    api = MiniAppAPI(ctx)
+    ctx.db.set_permanent_context(-222, notes="Crypto group rules")
+    res = api.handle_chats()
+    matching = [c for c in res["chats"] if c["id"] == -222]
+    assert len(matching) == 1
+    assert matching[0]["context"] == "Crypto group rules"
+
+
+def test_handle_fetch_models_parses_json(tmp_path, monkeypatch):
+    ctx, _ = make_ctx(tmp_path)
+    api = MiniAppAPI(ctx)
+
+    class MockResponse:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def read(self):
+            return json.dumps({
+                "data": [{"id": "model-b"}, {"id": "model-a"}, {"id": "model-c"}]
+            }).encode("utf-8")
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=10.0: MockResponse())
+    res = api.handle_fetch_models("https://custom.endpoint/v1")
+    assert res["ok"] is True
+    assert res["models"] == ["model-a", "model-b", "model-c"]
+
+
+def test_handle_test_model_prunes_dead_and_saves_working(tmp_path, monkeypatch):
+    ctx, _ = make_ctx(tmp_path)
+    api = MiniAppAPI(ctx)
+
+    class MockResponse:
+        def __init__(self, model):
+            self.model = model
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def read(self):
+            if "fail" in self.model:
+                raise urllib.error.HTTPError(None, 404, "Not Found", {}, None)
+            return json.dumps({
+                "choices": [{"message": {"content": f"Hello from {self.model}!"}}]
+            }).encode("utf-8")
+
+    def mock_urlopen(req, timeout=12.0):
+        body = json.loads(req.data.decode("utf-8"))
+        m = body.get("model", "")
+        return MockResponse(m)
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+
+    res = api.handle_test_model(
+        message="hello",
+        model="working-1,fail-model,working-2",
+        base_url="https://api.openai.com/v1",
+        api_key="test-key",
+    )
+    assert res["ok"] is True
+    assert res["working_models"] == ["working-1", "working-2"]
+    assert res["failed_models"] == ["fail-model"]
+    assert res["active_model"] == "working-1,working-2"
+    assert ctx.db.get_state("ai_model") == "working-1,working-2"
+    assert "Hello from working-1!" in res["reply"]
+

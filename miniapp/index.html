@@ -107,7 +107,7 @@
         <div class="segrow" id="pf-style"></div>
       </div>
 
-      <h2 class="section-h">Per-chat prompts</h2>
+      <h2 class="section-h">Per-chat prompts &amp; context</h2>
       <div class="card list" id="pf-chats"></div>
     </section>
 
@@ -131,18 +131,52 @@
 
       <h3 class="section-h">AI engine</h3>
       <div class="card form">
-        <label for="ai-model">Model</label>
-        <input type="text" id="ai-model" placeholder="gemini-2.5-flash-lite">
+        <label for="ai-baseurl">Custom endpoint</label>
+        <input type="text" id="ai-baseurl" placeholder="https://integrate.api.nvidia.com/v1">
         <div class="inline-save">
-          <button class="btn primary" id="ai-model-save">Save model</button>
-          <button class="btn" id="ai-check">Check models</button>
+          <button class="btn primary" id="ai-baseurl-save">Save endpoint</button>
+          <button class="btn" id="ai-fetch-models">Fetch models</button>
         </div>
+
         <label for="ai-key">API key</label>
         <input type="password" id="ai-key" placeholder="Paste a new key to replace">
         <button class="btn primary" id="ai-key-save">Save key</button>
-        <label for="ai-baseurl">Custom endpoint</label>
-        <input type="text" id="ai-baseurl" placeholder="https://integrate.api.nvidia.com/v1">
-        <button class="btn primary" id="ai-baseurl-save">Save endpoint</button>
+
+        <label for="ai-model">Active model / rotation <span class="faint">(comma-separated)</span></label>
+        <input type="text" id="ai-model" placeholder="gemini-2.5-flash-lite,gpt-4o-mini">
+        <div class="inline-save">
+          <button class="btn primary" id="ai-model-save">Save model</button>
+          <button class="btn" id="ai-check">Check health</button>
+        </div>
+
+        <div class="model-picker-wrap">
+          <div class="model-picker-header">
+            <span class="model-picker-title">Available models from endpoint</span>
+            <span class="faint num" id="models-fetched-count"></span>
+          </div>
+          <div id="ai-model-chips" class="model-chips-container">
+            <div class="empty sm">Click &ldquo;Fetch models&rdquo; to load live models from your endpoint.</div>
+          </div>
+          <p class="field-hint">Select one or multiple models. Multiple selected models auto-rotate with fallback.</p>
+        </div>
+      </div>
+
+      <h3 class="section-h">Live model test &amp; playground</h3>
+      <div class="card form playground-card">
+        <label for="test-prompt">Test prompt / message</label>
+        <div class="test-row">
+          <input type="text" id="test-prompt" value="hello" placeholder="Send a message (e.g. hello)">
+          <button class="btn primary" id="btn-test-model">Send test</button>
+        </div>
+        <p class="field-hint">Tests the model live. Automatically prunes dead models and saves working models to rotation.</p>
+        <div id="test-results-box" class="test-results-box hidden">
+          <div class="test-status-row">
+            <span class="pill pill-positive" id="test-badge">Working</span>
+            <span class="test-model-name num" id="test-model-name"></span>
+          </div>
+          <div class="test-reply-content" id="test-reply-content"></div>
+          <div class="test-models-summary" id="test-models-summary"></div>
+        </div>
       </div>
 
       <h3 class="section-h">All commands <span id="cmd-count" class="cmd-count num"></span></h3>

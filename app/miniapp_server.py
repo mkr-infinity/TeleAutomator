@@ -20,6 +20,7 @@ import hmac
 import json
 import threading
 import time
+import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -185,6 +186,7 @@ class MiniAppAPI:
         all_cids = sorted((priv | grps) | blocked)
         for cid in all_cids:
             meta = ctx.db.get_chat_metadata(cid) or {}
+            perm = ctx.db.get_permanent_context(cid) if hasattr(ctx.db, "get_permanent_context") else {}
             chats.append({
                 "id": cid,
                 "name": meta.get("title") or f"Chat {cid}",
@@ -193,6 +195,7 @@ class MiniAppAPI:
                 "chatty": ctx.db.get_state(f"chat_chatty_{cid}") or "",
                 "style": ctx.db.get_state(f"chat_style_{cid}") or "",
                 "prompt": ctx.db.get_state(f"chat_prompt_{cid}") or "",
+                "context": perm.get("notes") or "",
                 "voice_profile": bool(ctx.db.get_state(f"chat_voice_profile_{cid}")),
                 "blocked": cid in blocked,
             })
@@ -266,6 +269,8 @@ class MiniAppAPI:
         "block": "/blockchat {chat_id}",
         "clearcontext": "/clearcontext {chat_id}",
         "syncpins": "/syncpins {chat_id}",
+        "setcontext": "/setcontext {chat_id} {value}",
+        "delcontext": "/delcontext {chat_id}",
         "gencontext": "/gencontext {chat_id}",
         "approve": "/approve {id}",
         "reject": "/reject {id}",
@@ -375,6 +380,160 @@ class MiniAppAPI:
             return {"ok": False, "response": f"Command failed: {e}"}
         return {"ok": response is not None, "response": response or "No response."}
 
+    def handle_fetch_models(self, base_url: str = "", api_key: Optional[str] = None) -> dict:
+        """Fetch available models from an OpenAI-compatible /models endpoint."""
+        raw_url = (base_url or "").strip().rstrip("/")
+        if not raw_url:
+            raw_url = (
+                self.ctx.db.get_state("ai_base_url")
+                or (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_base_url", ""))
+                or "https://api.openai.com/v1"
+            )
+        if raw_url.endswith("/chat/completions"):
+            raw_url = raw_url[:-len("/chat/completions")].rstrip("/")
+        models_url = raw_url if raw_url.endswith("/models") else f"{raw_url}/models"
+
+        key = (
+            api_key
+            or self.ctx.db.get_state("ai_api_key")
+            or (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_api_key", ""))
+            or ""
+        )
+        headers = {"Accept": "application/json"}
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+
+        req = urllib.request.Request(models_url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+                raw_data = body.get("data") if isinstance(body, dict) else (body if isinstance(body, list) else [])
+                if raw_data is None and isinstance(body, dict):
+                    raw_data = body.get("models") or []
+                models = []
+                if isinstance(raw_data, list):
+                    for item in raw_data:
+                        if isinstance(item, dict) and "id" in item:
+                            models.append(str(item["id"]))
+                        elif isinstance(item, str):
+                            models.append(item)
+                models = sorted(list(dict.fromkeys(models)))
+                return {"ok": True, "models": models, "url": models_url}
+        except urllib.error.HTTPError as e:
+            err_msg = f"HTTP {e.code}"
+            try:
+                eb = json.loads(e.read().decode("utf-8"))
+                if isinstance(eb, dict) and "error" in eb:
+                    err_msg = f"HTTP {e.code}: {eb['error'].get('message', eb['error'])}"
+            except Exception:
+                pass
+            return {"ok": False, "error": err_msg, "url": models_url}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "url": models_url}
+
+    def handle_test_model(
+        self,
+        message: str = "hello",
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+    ) -> dict:
+        """Test chat message live in the GUI, test candidates, auto-prune dead models, and auto-save working rotation."""
+        prompt = (message or "hello").strip()
+        raw_base = (
+            base_url
+            or self.ctx.db.get_state("ai_base_url")
+            or (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_base_url", ""))
+            or "https://api.openai.com/v1"
+        ).strip()
+        endpoint = raw_base.rstrip("/")
+        if not endpoint.endswith("/chat/completions"):
+            endpoint = f"{endpoint}/chat/completions"
+
+        key = (
+            api_key
+            or self.ctx.db.get_state("ai_api_key")
+            or (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_api_key", ""))
+            or ""
+        )
+
+        model_param = (
+            model
+            or self.ctx.db.get_state("ai_model")
+            or (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_model", ""))
+            or "gpt-4o-mini"
+        )
+        candidates = [m.strip() for m in model_param.replace(";", ",").split(",") if m.strip()]
+        if not candidates:
+            candidates = ["gpt-4o-mini"]
+
+        results: list[dict] = []
+        working_models: list[str] = []
+        reply_text = ""
+        first_working_model = ""
+
+        for m in candidates:
+            payload = {
+                "model": m,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 150,
+                "temperature": 0.7,
+            }
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                endpoint,
+                data=data,
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=12.0) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                    choices = body.get("choices", [])
+                    if choices:
+                        content = choices[0].get("message", {}).get("content") or ""
+                        content = str(content).strip()
+                        if content and content.lower() not in ("none", "null", "undefined"):
+                            working_models.append(m)
+                            results.append({"model": m, "ok": True, "detail": "Working"})
+                            if not reply_text:
+                                reply_text = content
+                                first_working_model = m
+                            continue
+                    results.append({"model": m, "ok": False, "detail": "Empty response"})
+            except urllib.error.HTTPError as e:
+                detail = f"HTTP {e.code}"
+                try:
+                    eb = json.loads(e.read().decode("utf-8"))
+                    if isinstance(eb, dict) and "error" in eb:
+                        detail = f"HTTP {e.code}: {eb['error'].get('message', eb['error'])}"[:45]
+                except Exception:
+                    pass
+                results.append({"model": m, "ok": False, "detail": detail})
+            except Exception as e:
+                results.append({"model": m, "ok": False, "detail": str(e)[:45]})
+
+        updated_chain = ""
+        if working_models:
+            updated_chain = ",".join(working_models)
+            self.ctx.db.set_state("ai_model", updated_chain)
+            if hasattr(self.ctx.generator, "provider") and self.ctx.generator.provider:
+                self.ctx.generator.provider.model = updated_chain
+            if base_url:
+                self.ctx.db.set_state("ai_base_url", base_url)
+            if api_key:
+                self.ctx.db.set_state("ai_api_key", api_key)
+
+        return {
+            "ok": len(working_models) > 0,
+            "reply": reply_text or "No reply received.",
+            "model_used": first_working_model,
+            "working_models": working_models,
+            "failed_models": [r["model"] for r in results if not r["ok"]],
+            "results": results,
+            "active_model": updated_chain or model_param,
+        }
+
 
 class MiniAppRequestHandler(BaseHTTPRequestHandler):
     api: MiniAppAPI = None  # injected at server construction
@@ -448,6 +607,8 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/commands":
                 from app.bot_control import BOT_COMMAND_MENU
                 self._json(200, {"commands": BOT_COMMAND_MENU})
+            elif path in ("/api/models", "/api/fetch_models"):
+                self._json(200, self.api.handle_fetch_models(""))
             else:
                 self._serve_static(path)
         except Exception as e:
@@ -487,6 +648,16 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
                     self._json(400, {"ok": False, "response": "Provide an action."})
                     return
                 self._json(200, self.api.handle_action(user_id, action, params))
+            elif path == "/api/fetch_models":
+                base_url = str(body.get("base_url") or "").strip()
+                api_key = str(body.get("api_key") or "").strip() or None
+                self._json(200, self.api.handle_fetch_models(base_url, api_key))
+            elif path == "/api/test_model":
+                message = str(body.get("message") or "hello").strip()
+                model = str(body.get("model") or "").strip() or None
+                base_url = str(body.get("base_url") or "").strip() or None
+                api_key = str(body.get("api_key") or "").strip() or None
+                self._json(200, self.api.handle_test_model(message, model, base_url, api_key))
             else:
                 self._json(404, {"ok": False, "response": "Unknown endpoint."})
         except Exception as e:

@@ -111,8 +111,6 @@ BOT_COMMAND_MENU: list[dict] = [
     {"command": "temp", "description": "🌡️ AI creativity — /temp <0.0-1.0>"},
     {"command": "maxtokens", "description": "📏 Max output tokens — /maxtokens <tokens>"},
     {"command": "usage", "description": "📈 Token tracker — daily use & free-quota remaining"},
-    {"command": "quotathreshold", "description": "⚠️ Daily token warning limit — /quotathreshold <tokens>"},
-    {"command": "quotaalert", "description": "🔔 Daily quota warnings — /quotaalert on|off"},
     # -- Human behavior sim --
     {"command": "reaction", "description": "❤️ Auto-reactions — /reaction on|off"},
     {"command": "reactioncooldown", "description": "⏱️ Reaction cooldown — /reactioncooldown <min> <max> seconds"},

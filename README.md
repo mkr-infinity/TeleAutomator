@@ -84,8 +84,7 @@ Manage your automation straight from your phone by texting your **Saved Messages
 | **`/provider <name>`** | Switch AI engine (`custom`, `gemini`, `openai`, `nvidia`, `local`) | `/provider custom` |
 | **`/model <name>`** | Switch AI candidate model (supports comma-separated fallbacks) | `/model <model_name>` |
 | **`/usage`** | Displays 24h consumption, total token usage, and remaining free quota | `/usage` |
-| **`/quotathreshold <tokens>`** | Sets 24h token warning alert limit (default: 100,000 tokens) | `/quotathreshold 50000` |
-| **`/quotaalert <on\|off>`** | Toggles daily quota alert warnings to Saved Messages | `/quotaalert on` |
+| **`/checkmodels`** | Pings candidate models live and picks verified working ones | `/checkmodels` |
 | **`/reasoning <low\|medium\|high\|off>`** | Adjusts reasoning effort for reasoning-capable models | `/reasoning low` |
 | **`/reaction <on\|off>`** | Toggles natural emoji reactions (pool of 26 mobile emojis) | `/reaction on` |
 | **`/reactioncooldown <min> <max>`**| Sets randomized reaction interval (default: 3s–9s) | `/reactioncooldown 3 9` |

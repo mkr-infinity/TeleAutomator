@@ -266,7 +266,7 @@
   }
 
   function chatRowHtml(c) {
-    const sub = [c.type, c.blocked ? "blocked" : "", c.style ? c.style : "", c.voice_profile ? "voice profile" : ""]
+    const sub = [c.type, c.blocked ? "blocked" : "", c.prompt ? "custom prompt" : "", c.context ? "has context" : "", c.style ? c.style : "", c.voice_profile ? "voice profile" : ""]
       .filter(Boolean).join(" · ");
     return `<div class="row" data-cid="${c.id}">
       <div class="row-main">
@@ -274,8 +274,9 @@
         <p class="row-sub">chatty ${esc(fmtPct(c.chatty))}${sub ? " · " + esc(sub) : ""}</p>
       </div>
       <div class="row-side">
-        <button class="btn small" data-op="chatty">Chatty</button>
         <button class="btn small" data-op="prompt">Prompt</button>
+        <button class="btn small" data-op="context">Context</button>
+        <button class="btn small" data-op="chatty">Chatty</button>
         <button class="btn small" data-op="remove">Remove</button>
       </div>
     </div>`;
@@ -290,6 +291,7 @@
           if (!c) return;
           if (btn.dataset.op === "chatty") chattySheet(c);
           else if (btn.dataset.op === "prompt") promptSheet(c);
+          else if (btn.dataset.op === "context") contextSheet(c);
           else removeSheet(c, btn.dataset.op);
         });
       });
@@ -310,10 +312,24 @@
 
   function promptSheet(c) {
     openSheet(`Per-chat prompt · ${c.name}`,
+      `<p class="field-hint" style="margin-top:0;margin-bottom:8px">Custom AI persona for this chat only (slang, attitude, constraints).</p>` +
       `<textarea id="sheet-input" rows="4" placeholder="Empty = global prompt">${esc(c.prompt)}</textarea>`,
       [
         { label: "Save", kind: "primary", onClick: () => runAction("chatprompt", { chat_id: c.id, value: $("sheet-input").value.trim() }) },
         { label: "Clear", onClick: () => runAction("chatprompt", { chat_id: c.id, value: "default" }) },
+      ]);
+    const ta = $("sheet-input");
+    if (ta) ta.focus();
+  }
+
+  function contextSheet(c) {
+    openSheet(`Group context · ${c.name}`,
+      `<p class="field-hint" style="margin-top:0;margin-bottom:8px">Permanent background notes &amp; rules remembered across all conversations in this chat.</p>` +
+      `<textarea id="sheet-input" rows="5" placeholder="e.g. Solana meme coins, keep replies brief, focus on technical analysis">${esc(c.context || "")}</textarea>`,
+      [
+        { label: "Save notes", kind: "primary", onClick: () => runAction("setcontext", { chat_id: c.id, value: $("sheet-input").value.trim() }) },
+        { label: "Clear notes", onClick: () => runAction("delcontext", { chat_id: c.id }) },
+        { label: "Sync pins", onClick: () => runAction("syncpins", { chat_id: c.id }) },
       ]);
     const ta = $("sheet-input");
     if (ta) ta.focus();
@@ -341,14 +357,27 @@
     $("pf-style").querySelectorAll(".seg").forEach((b) =>
       b.addEventListener("click", () => runAction("style", { value: b.dataset.style })));
     const data = await api("/api/chats");
-    const chats = (data.chats || []).filter((c) => c.prompt);
+    const chats = (data.chats || []).filter((c) => c.prompt || c.context);
     $("pf-chats").innerHTML = chats.length
-      ? chats.map((c) => `<div class="row"><div class="row-main"><p class="row-title">${esc(c.name)}</p><p class="row-sub">${esc(c.prompt)}</p></div><div class="row-side"><button class="btn small" data-cid="${c.id}" data-op="edit">Edit</button></div></div>`).join("")
-      : `<div class="empty">No per-chat prompts. Set one from the Chats tab.</div>`;
+      ? chats.map((c) => {
+          const parts = [];
+          if (c.prompt) parts.push(`Persona: ${c.prompt}`);
+          if (c.context) parts.push(`Context: ${c.context}`);
+          return `<div class="row">
+            <div class="row-main"><p class="row-title">${esc(c.name)}</p><p class="row-sub">${esc(parts.join(" · "))}</p></div>
+            <div class="row-side">
+              <button class="btn small" data-cid="${c.id}" data-op="edit-prompt">Prompt</button>
+              <button class="btn small" data-cid="${c.id}" data-op="edit-context">Context</button>
+            </div>
+          </div>`;
+        }).join("")
+      : `<div class="empty">No per-chat prompts or context notes yet. Set them from the Chats tab.</div>`;
     $("pf-chats").querySelectorAll("[data-op]").forEach((btn) =>
       btn.addEventListener("click", () => {
         const c = (data.chats || []).find((x) => String(x.id) === btn.dataset.cid);
-        if (c) promptSheet(c);
+        if (!c) return;
+        if (btn.dataset.op === "edit-prompt") promptSheet(c);
+        else if (btn.dataset.op === "edit-context") contextSheet(c);
       }));
   }
 
@@ -526,6 +555,140 @@
       runAction("baseurl", { value: v });
     });
     $("ai-baseurl").addEventListener("keydown", (e) => { if (e.key === "Enter") $("ai-baseurl-save").click(); });
+
+    // Fetch models from endpoint
+    async function fetchModels() {
+      const btn = $("ai-fetch-models");
+      const baseurl = $("ai-baseurl").value.trim();
+      const apikey = $("ai-key").value.trim();
+      btn.disabled = true;
+      btn.textContent = "Fetching...";
+      try {
+        const res = await api("/api/fetch_models", { base_url: baseurl, api_key: apikey });
+        if (!res || !res.ok) {
+          toast(res && res.error ? res.error : "Failed to load models from endpoint");
+          return;
+        }
+        const models = res.models || [];
+        $("models-fetched-count").textContent = `(${models.length})`;
+        if (!models.length) {
+          $("ai-model-chips").innerHTML = `<div class="empty sm">Endpoint returned 0 models.</div>`;
+          return;
+        }
+
+        const curActive = new Set(($("ai-model").value || "").split(/[,;]/).map((s) => s.trim()).filter(Boolean));
+        $("ai-model-chips").innerHTML = models.map((m) => {
+          const isAct = curActive.has(m);
+          return `<button class="model-chip ${isAct ? "active" : ""}" data-model="${esc(m)}">${esc(m)}</button>`;
+        }).join("");
+
+        $("ai-model-chips").querySelectorAll(".model-chip").forEach((chip) => {
+          chip.addEventListener("click", () => {
+            chip.classList.toggle("active");
+            const activeChips = Array.from($("ai-model-chips").querySelectorAll(".model-chip.active"));
+            const selectedModels = activeChips.map((c) => c.dataset.model);
+            $("ai-model").value = selectedModels.join(",");
+            if (selectedModels.length > 1) {
+              toast(`Multi-rotation active (${selectedModels.length} models selected)`);
+            } else if (selectedModels.length === 1) {
+              toast(`Selected: ${selectedModels[0]}`);
+            } else {
+              toast("No models selected");
+            }
+          });
+        });
+        toast(`Loaded ${models.length} models from endpoint`);
+      } catch (e) {
+        toast("Error fetching models: " + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Fetch models";
+      }
+    }
+    $("ai-fetch-models").addEventListener("click", fetchModels);
+
+    // Live test playground
+    async function testModelPlayground() {
+      const btn = $("btn-test-model");
+      const prompt = $("test-prompt").value.trim() || "hello";
+      const model = $("ai-model").value.trim();
+      const baseurl = $("ai-baseurl").value.trim();
+      const apikey = $("ai-key").value.trim();
+
+      const box = $("test-results-box");
+      const badge = $("test-badge");
+      const modelEl = $("test-model-name");
+      const replyEl = $("test-reply-content");
+      const summaryEl = $("test-models-summary");
+
+      box.classList.remove("hidden");
+      badge.className = "pill pill-warning";
+      badge.textContent = "Testing...";
+      modelEl.textContent = "Pinging candidate model(s)...";
+      replyEl.textContent = "Sending test request...";
+      summaryEl.innerHTML = "";
+
+      btn.disabled = true;
+      btn.textContent = "Testing...";
+
+      try {
+        const res = await api("/api/test_model", {
+          message: prompt,
+          model,
+          base_url: baseurl,
+          api_key: apikey,
+        });
+
+        if (res && res.ok) {
+          badge.className = "pill pill-positive";
+          badge.textContent = "Working";
+          modelEl.textContent = `Replied: ${res.model_used || "OK"}`;
+          replyEl.textContent = `"${res.reply}"`;
+
+          if (res.active_model) {
+            $("ai-model").value = res.active_model;
+            const activeSet = new Set(res.active_model.split(","));
+            document.querySelectorAll("#ai-model-chips .model-chip").forEach((c) => {
+              c.classList.toggle("active", activeSet.has(c.dataset.model));
+            });
+          }
+
+          const pills = (res.results || []).map((r) => {
+            const cls = r.ok ? "test-pill ok" : "test-pill fail";
+            const icon = r.ok ? "✓" : "✗";
+            return `<span class="${cls}">${icon} ${esc(r.model)}: ${esc(r.detail)}</span>`;
+          });
+          summaryEl.innerHTML = pills.join("");
+
+          if (res.failed_models && res.failed_models.length > 0) {
+            toast(`Auto-pruned ${res.failed_models.length} failing model(s). Working: ${res.active_model}`);
+          } else {
+            toast(`Working model verified: ${res.active_model}`);
+          }
+        } else {
+          badge.className = "pill pill-negative";
+          badge.textContent = "Failed";
+          modelEl.textContent = "All candidate models failed";
+          replyEl.textContent = (res && res.error) || "No valid response received. Check your endpoint URL, model name, and API key.";
+
+          const pills = (res && res.results ? res.results : []).map((r) => {
+            return `<span class="test-pill fail">✗ ${esc(r.model)}: ${esc(r.detail)}</span>`;
+          });
+          summaryEl.innerHTML = pills.join("");
+          toast("Model test failed");
+        }
+      } catch (e) {
+        badge.className = "pill pill-negative";
+        badge.textContent = "Error";
+        replyEl.textContent = "Request error: " + e.message;
+        toast("Error during test: " + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Send test";
+      }
+    }
+    $("btn-test-model").addEventListener("click", testModelPlayground);
+    $("test-prompt").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btn-test-model").click(); });
 
     $("cmd-search").addEventListener("input", () => {
       renderCommandChips(commandCache);

@@ -1138,7 +1138,7 @@ def test_version_and_typing_speed_modulation(tmp_path: Path):
 
 
 def test_daily_quota_threshold_alert(tmp_path: Path):
-    """Verify daily quota alert triggers heads-up message to Saved Messages when consumption exceeds threshold."""
+    """Verify daily quota alert is completely disabled and sends no warning messages."""
     async def _run():
         cfg = AppConfig(
             api_id=123,
@@ -1163,23 +1163,20 @@ def test_daily_quota_threshold_alert(tmp_path: Path):
         mock_client.send_message = AsyncMock(side_effect=mock_send_message)
         mgr.set_telegram_client(mock_client)
 
-        # 1. Configure threshold to 50,000 tokens
+        # 1. /quotathreshold returns disabled notice
         thresh_res = await mgr.handle_control_command("/quotathreshold 50000")
-        assert "50,000" in thresh_res
-        assert db.get_state("quota_threshold_tokens") == "50000"
+        assert "disabled and removed" in thresh_res
 
         # 2. Record 60,000 tokens consumed in the last 24h
         db.record_token_usage("custom", "mercury-3", 20000, 40000, 60000)
         daily = db.get_daily_token_usage()
         assert daily == 60000
 
-        # 3. Check daily quota warning
+        # 3. Check daily quota warning is suppressed (no alerts sent)
         await mgr.check_daily_quota_warning()
-        assert len(sent_to_me) == 1
-        assert "Daily Token Quota Threshold Alert" in sent_to_me[0]
-        assert "60,000" in sent_to_me[0]
+        assert len(sent_to_me) == 0
 
-        # 4. Check that /usage reports 24h consumption
+        # 4. Check that /usage reports 24h consumption cleanly
         usage_res = await mgr.handle_control_command("/usage")
         assert "24h Daily Consumption" in usage_res
         assert "60,000" in usage_res
