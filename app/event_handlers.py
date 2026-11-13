@@ -115,31 +115,15 @@ def register_handlers(
         chat_id = getattr(event, "chat_id", None)
         text = getattr(event, "raw_text", "") or ""
 
-        # Check for control commands sent in private 'Saved Messages' (chat with self)
-        # In Telethon, private chat with oneself has chat_id == my_user_id or private out message to self
+        # Saved Messages (chat with self): completely ignored. All commands and messaging
+        # are handled strictly in the Telegram control bot.
         is_saved_messages = (chat_id == my_user_id) or (
             getattr(event, "is_private", False)
             and getattr(event, "out", False)
-            and (getattr(event, "sender_id", None) == my_user_id or chat_id is None)
+            and (chat_id is None or chat_id == my_user_id)
+            and getattr(event, "sender_id", None) == my_user_id
         )
-        clean_text = text.strip()
-        if is_saved_messages and clean_text.startswith("/"):
-            if reply_manager.bot_control is not None:
-                # Bot control channel is active: Saved Messages commands are disabled
-                # (the bot is the only control channel) — quietly ignore to keep the account output clean.
-                logger.info("Saved Messages command ignored (bot control channel is active).")
-                return
-            logger.info(f"Received control command in Saved Messages: {clean_text.split()[0]}")
-            response = await reply_manager.handle_control_command(clean_text)
-            if response:
-                try:
-                    await client.send_message("me", response, parse_mode="md")
-                except Exception as e:
-                    logger.warning(f"Could not deliver command response with markdown: {e}. Falling back to plain text.")
-                    try:
-                        await client.send_message("me", response, parse_mode=None)
-                    except Exception as e2:
-                        logger.error(f"Failed to deliver command response to Saved Messages: {e2}")
+        if is_saved_messages:
             return
 
         # Context continuity: always record the owner's own manually-typed outgoing messages

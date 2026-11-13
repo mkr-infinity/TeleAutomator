@@ -62,20 +62,37 @@ def validate_init_data(init_data: str, bot_token: str) -> Optional[dict]:
     if not init_data or not bot_token:
         return None
     try:
-        pairs = dict(pair.split("=", 1) for pair in init_data.split("&"))
-        received_hash = pairs.pop("hash", "")
+        from urllib.parse import parse_qsl, unquote
+        parsed = dict(parse_qsl(init_data, keep_blank_values=True))
+        received_hash = parsed.pop("hash", "")
         if not received_hash:
             return None
-        data_check_string = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs))
+        data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
         secret = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
         computed = hmac.new(secret, data_check_string.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(computed, received_hash):
-            return None
-        auth_date = float(pairs.get("auth_date", "0"))
+            raw_pairs = dict(pair.split("=", 1) for pair in init_data.split("&") if "=" in pair)
+            raw_hash = raw_pairs.pop("hash", "")
+            if raw_hash:
+                raw_data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(raw_pairs.items()))
+                raw_computed = hmac.new(secret, raw_data_check_string.encode(), hashlib.sha256).hexdigest()
+                if not hmac.compare_digest(raw_computed, raw_hash):
+                    return None
+            else:
+                return None
+        auth_date = float(parsed.get("auth_date", "0"))
         if auth_date <= 0 or (time.time() - auth_date) > INIT_DATA_MAX_AGE_SECONDS:
             return None
-        user = json.loads(pairs.get("user", "{}"))
-        if not user.get("id"):
+        user_val = parsed.get("user")
+        if not user_val:
+            return None
+        if isinstance(user_val, str):
+            if user_val.startswith("%"):
+                user_val = unquote(user_val)
+            user = json.loads(user_val)
+        else:
+            user = user_val
+        if not isinstance(user, dict) or not user.get("id"):
             return None
         return user
     except Exception as e:
@@ -98,17 +115,41 @@ class MiniAppContext:
 
 
 def _authorized_user_ids(ctx: MiniAppContext) -> set[int]:
-    """Same source of truth as the control bot: bot_authorized_users in the DB."""
+    """Same source of truth as the control bot: bot_authorized_users in DB + env seed."""
+    ids: set[int] = set()
     try:
         raw = ctx.db.get_state("bot_authorized_users", "")
-        return set(json.loads(raw)) if raw else set()
+        if raw:
+            ids.update(int(x) for x in json.loads(raw))
     except Exception:
-        return set()
+        pass
+    if ctx.bot_control and getattr(ctx.bot_control, "seed_user_ids", None):
+        ids.update(int(x) for x in ctx.bot_control.seed_user_ids)
+    if ctx.reply_manager and hasattr(ctx.reply_manager, "config") and getattr(ctx.reply_manager.config, "bot_authorized_users", None):
+        ids.update(int(x) for x in ctx.reply_manager.config.bot_authorized_users)
+    return ids
 
 
 def _is_main_user(ctx: MiniAppContext, user_id: int) -> bool:
+    if ctx.bot_control and hasattr(ctx.bot_control, "is_main_user"):
+        return ctx.bot_control.is_main_user(user_id)
+    try:
+        saved_main = ctx.db.get_state("main_owner_id", "")
+        if saved_main and int(saved_main) > 0:
+            return int(saved_main) == int(user_id)
+    except Exception:
+        pass
+    if ctx.reply_manager and hasattr(ctx.reply_manager, "config") and getattr(ctx.reply_manager.config, "bot_authorized_users", None):
+        return sorted(ctx.reply_manager.config.bot_authorized_users)[0] == int(user_id)
     users = _authorized_user_ids(ctx)
-    return bool(users) and min(users) == user_id
+    if users:
+        first_user = min(users)
+        try:
+            ctx.db.set_state("main_owner_id", str(first_user))
+        except Exception:
+            pass
+        return first_user == int(user_id)
+    return False
 
 
 class MiniAppAPI:
@@ -387,7 +428,7 @@ class MiniAppAPI:
             users.add(target)
             ctx.db.set_state("bot_authorized_users", json.dumps(sorted(users)))
             return {"ok": True, "response": f"User {target} added to authorized users."}
-        if users and target == min(users):
+        if _is_main_user(ctx, target):
             return {"ok": False, "response": "The main owner cannot be removed."}
         users.discard(target)
         ctx.db.set_state("bot_authorized_users", json.dumps(sorted(users)))
@@ -579,6 +620,13 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
 
     def _init_user(self) -> Optional[dict]:
         init_data = self.headers.get("X-Telegram-Init-Data", "")
+        if not init_data and "?" in self.path:
+            try:
+                from urllib.parse import parse_qs, urlparse
+                qs = parse_qs(urlparse(self.path).query)
+                init_data = qs.get("initData", [""])[0]
+            except Exception:
+                pass
         bot_token = self.api.ctx.bot_token if self.api else ""
         return validate_init_data(init_data, bot_token)
 
@@ -786,7 +834,7 @@ def resolve_miniapp_url() -> str:
 def set_telegram_menu_button(
     bot_token: str,
     miniapp_url: str,
-    button_text: str = "⚡ TeleAutomator",
+    button_text: str = "Open",
 ) -> bool:
     """Register the mini app as the bot's chat menu button (does NOT touch commands)."""
     if not bot_token or not miniapp_url:

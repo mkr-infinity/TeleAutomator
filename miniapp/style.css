@@ -142,11 +142,52 @@ h1.brand-name { font-size: var(--fs-title); font-weight: 600; }
   backdrop-filter: blur(10px);
   display: flex; flex-direction: column; gap: 4px;
 }
-.pay-price { font-size: 18px; font-weight: 600; }
-.pay-or { color: var(--faint); font-weight: 400; }
+.pay-price-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 6px;
+}
+.pay-curr-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(244, 239, 226, 0.06);
+  border: 1px solid rgba(244, 239, 226, 0.12);
+  color: #ffffff;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+}
+.pay-curr-icon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  display: inline-block;
+  vertical-align: middle;
+}
+.star-icon {
+  filter: drop-shadow(0 1px 3px rgba(255, 180, 0, 0.45));
+}
+.gram-icon {
+  filter: drop-shadow(0 1px 3px rgba(55, 174, 226, 0.45));
+}
+.pay-amount {
+  font-size: 18px;
+  font-weight: 700;
+}
+.pay-or { color: var(--faint); font-weight: 400; font-size: 14px; }
 .pay-term { color: var(--muted); font-size: 13px; }
 .pay-how { color: var(--muted); font-size: 13px; margin-top: 10px; }
 .pay-contact { color: var(--accent-bright); font-weight: 500; }
+.pay-actions {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
 .pay-btn {
   align-self: stretch;
   height: 44px; border-radius: var(--radius-control);
@@ -155,6 +196,18 @@ h1.brand-name { font-size: var(--fs-title); font-weight: 600; }
   display: flex; align-items: center; justify-content: center;
 }
 .pay-btn:hover { filter: brightness(1.1); }
+.pay-check-btn {
+  align-self: stretch;
+  height: 44px; border-radius: var(--radius-control);
+  background: rgba(244, 239, 226, 0.06);
+  border: 1px solid rgba(244, 239, 226, 0.14);
+  color: var(--fg);
+  font-weight: 600; font-size: 14px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.pay-check-btn:hover { background: rgba(244, 239, 226, 0.12); }
 
 /* --------------------------------------------------------- control line */
 .title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 2px 0 12px; }

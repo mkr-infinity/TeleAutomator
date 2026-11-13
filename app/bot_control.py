@@ -174,7 +174,7 @@ def quick_menu_markup(miniapp_url: Optional[str] = None) -> dict:
             miniapp_url = None
 
     if miniapp_url:
-        rows.append([{"text": "⚡ Launch TeleAutomator", "web_app": {"url": miniapp_url}}])
+        rows.append([{"text": "Open", "web_app": {"url": miniapp_url}}])
 
     rows.extend([
         [
@@ -233,21 +233,25 @@ class BotControl:
         self.db = db
         self.reply_manager = reply_manager
         self.health_file = health_file
+        self.seed_user_ids: set[int] = {int(x) for x in (seed_user_ids or ()) if int(x) > 0}
         self._offset: int = 0
         self._running = False
         self._me_cache: Optional[dict] = None
         self._watchdog_last_alert: float = 0.0
-        # Bootstrap: seed authorized users from env once (DB list owns it afterwards)
+        # Bootstrap: seed authorized users from env (DB list persists dynamic changes)
         existing = self._load_authorized()
-        if not existing and seed_user_ids:
-            self._save_authorized(seed_user_ids)
-            logger.info(f"Seeded bot authorized users from env: {sorted(seed_user_ids)}")
-        elif existing and seed_user_ids:
-            # Keep the main account (env first entry) authoritative even if DB lost it
-            main_env = sorted(seed_user_ids)[0]
-            if main_env not in existing:
-                existing.add(main_env)
-                self._save_authorized(existing)
+        if not existing and self.seed_user_ids:
+            self._save_authorized(self.seed_user_ids)
+            self.db.set_state("main_owner_id", str(sorted(self.seed_user_ids)[0]))
+            logger.info(f"Seeded bot authorized users from env: {sorted(self.seed_user_ids)}")
+        elif existing and self.seed_user_ids:
+            # Synchronize seed IDs into database so all env IDs are recognized
+            merged = existing.union(self.seed_user_ids)
+            if merged != existing:
+                self._save_authorized(merged)
+                logger.info(f"Updated bot authorized users with env seed: {sorted(merged)}")
+            if not self.db.get_state("main_owner_id", ""):
+                self.db.set_state("main_owner_id", str(sorted(self.seed_user_ids)[0]))
 
     # ------------------------------------------------------------------ state
     def _load_authorized(self) -> set[int]:
@@ -262,7 +266,15 @@ class BotControl:
 
     @property
     def main_user_id(self) -> int:
-        """Main authorized user (project owner) — first env-provided ID, lowest ID fallback."""
+        """Main authorized user (project owner) — first env-provided ID or saved main owner."""
+        if self.seed_user_ids:
+            return sorted(self.seed_user_ids)[0]
+        try:
+            saved = self.db.get_state("main_owner_id", "")
+            if saved and int(saved) > 0:
+                return int(saved)
+        except Exception:
+            pass
         users = self._load_authorized()
         if not users:
             return 0
@@ -272,7 +284,13 @@ class BotControl:
         """Read live from DB on every message so /addauth & /removeauth apply instantly."""
         if not user_id or int(user_id) <= 0:
             return False
-        return int(user_id) in self._load_authorized()
+        uid = int(user_id)
+        if uid == self.main_user_id:
+            return True
+        authorized = self._load_authorized()
+        if not authorized and self.seed_user_ids:
+            return uid in self.seed_user_ids
+        return uid in authorized
 
     def is_main_user(self, user_id: int) -> bool:
         return self.main_user_id == int(user_id)
@@ -390,7 +408,7 @@ class BotControl:
 
         now_str = datetime.now().strftime("%d %b, %H:%M:%S")
         users = sorted(self._load_authorized())
-        main_id = users[0] if users else 0
+        main_id = self.main_user_id or (users[0] if users else 0)
         extra = f" + {len(users) - 1} more" if len(users) > 1 else ""
         card = (
             "🚀 *TeleAutomator is live!*\n"

@@ -2414,6 +2414,88 @@ def test_recent_replies_persist_across_restart(tmp_path: Path):
     asyncio.run(_run())
 
 
+def test_saved_messages_completely_ignored_and_outgoing_recorded(tmp_path: Path):
+    """Saved messages events are completely dormant (no commands, no replies),
+    while genuine outgoing messages to peer chats are recorded into history."""
+    async def _run():
+        cfg = AppConfig(
+            api_id=123,
+            api_hash="dummy_hash",
+            data_dir=tmp_path,
+            reply_mode="restricted_auto",
+            allowed_private_chats={555},
+        )
+        db = Database(tmp_path / "saved_msg.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+        handlers = []
+        def mock_on(event_type):
+            def decorator(func):
+                handlers.append(func)
+                return func
+            return decorator
+
+        mock_client = AsyncMock()
+        mock_client.on = mock_on
+        mock_client.send_message = AsyncMock(return_value=MagicMock(id=999))
+        mgr.set_telegram_client(mock_client)
+
+        from app.event_handlers import register_handlers
+        from app.message_filter import MessageFilter
+        my_id = 111222
+        mf = MessageFilter(my_id, privacy, safety, my_username="testbot", database=db)
+        register_handlers(mock_client, my_id, mf, mgr)
+
+        on_msg = handlers[0]
+
+        # 1. Event in Saved Messages (chat with self): must be completely ignored
+        sm_event = MagicMock()
+        sm_event.chat_id = my_id
+        sm_event.is_private = True
+        sm_event.is_group = False
+        sm_event.is_channel = False
+        sm_event.out = True
+        sm_event.sender_id = my_id
+        sm_event.id = 101
+        sm_event.raw_text = "/status"
+        sm_event.message = MagicMock(action=None, mentioned=False)
+
+        await on_msg(sm_event)
+
+        # Zero messages sent by client
+        mock_client.send_message.assert_not_called()
+        # Saved messages not stored in chat history
+        assert db.count_chat_messages(my_id) == 0
+
+        # 2. Outgoing message to a real peer contact (Alice in chat 555)
+        out_event = MagicMock()
+        out_event.chat_id = 555
+        out_event.is_private = True
+        out_event.is_group = False
+        out_event.is_channel = False
+        out_event.out = True
+        out_event.sender_id = my_id
+        out_event.id = 102
+        out_event.raw_text = "hey Alice heading out now"
+        out_event.message = MagicMock(action=None, mentioned=False)
+
+        await on_msg(out_event)
+
+        # Client did not send any auto-reply to our own outgoing message
+        mock_client.send_message.assert_not_called()
+        # But our message was recorded in memory so the AI remembers what we said
+        history = db.get_recent_chat_messages(555)
+        assert len(history) == 1
+        assert history[0]["text"] == "hey Alice heading out now"
+        assert history[0]["sender"] == "You"
+        assert history[0]["is_outgoing"] is True
+
+    asyncio.run(_run())
+
+
 
 
 

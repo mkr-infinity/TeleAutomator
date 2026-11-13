@@ -144,7 +144,7 @@ class CommandRouterMixin:
                 "• `/showcontext <chat_id>` - View permanent background context for a group\n"
                 "• `/gencontext <chat_id>` - Rebuild AI voice profile from recent group messages\n"
                 "• `/delcontext <chat_id>` - Delete permanent context for a group\n"
-                "• `/backup` - Create database snapshot & send directly to Saved Messages\n\n"
+                "• `/backup` - Create database snapshot & save locally\n\n"
                 "*Approvals & Drafts:*\n"
                 "• `/pending` - List drafts waiting for review\n"
                 "• `/approve <id>` - Approve & send pending draft\n"
@@ -173,7 +173,7 @@ class CommandRouterMixin:
                 return "📝 Mode switched to *Draft Only*. Replies will be generated and logged, but never sent to recipients."
             elif target in ("approval", "pending", "review"):
                 self.set_mode("approval")
-                return "📋 Mode switched to *Approval Required*. Every draft will be sent to your control channel (bot / Saved Messages) for review."
+                return "📋 Mode switched to *Approval Required*. Every draft will be sent to your Telegram control bot for review."
             elif target in ("auto", "restricted_auto", "automatic"):
                 self.set_mode("restricted_auto")
                 self.safety.set_auto_authorization(True)
@@ -193,13 +193,13 @@ class CommandRouterMixin:
                     "📱 *TeleAutomator Mini App Control Panel*\n"
                     "━━━━━━━━━━━━━━━━━━━━\n"
                     f"🔗 Web App URL: {url}\n\n"
-                    "_Tap the '⚡ TeleAutomator' button in your chat menu or open the link above._"
+                    "_Tap the 'Open' button in your chat menu or open the link above._"
                 )
             return (
                 "📱 *TeleAutomator Mini App Control Panel*\n"
                 "━━━━━━━━━━━━━━━━━━━━\n"
                 "Mini app server is running on local port 8080.\n"
-                "On Railway, the '⚡ TeleAutomator' menu button is auto-registered without any extra domain setup."
+                "On Railway, the 'Open' menu button is auto-registered without any extra domain setup."
             )
 
         if cmd == "/status":
@@ -838,7 +838,13 @@ class CommandRouterMixin:
                 with self.db._get_connection() as conn:
                     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 shutil.copy2(db_path, backup_file)
-                if self._client:
+                if getattr(self, "bot_control", None) and hasattr(self.bot_control, "send_message"):
+                    await self.bot_control.send_message(
+                        self.bot_control.main_user_id,
+                        f"📦 *TeleAutomator Database Backup*\n_Created:_ `{ts}`\n_File:_ `{backup_file.name}`\n_Location:_ `{backup_file}`",
+                    )
+                    return f"✅ Database backup `{backup_file.name}` created successfully!\n_Location:_ `{backup_file}`"
+                elif self._client and not getattr(getattr(self, "config", None), "bot_api_key", None):
                     await self._client.send_file(
                         "me",
                         str(backup_file),

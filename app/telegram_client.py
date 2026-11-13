@@ -139,45 +139,9 @@ class TelegramService:
             reply_manager=self.reply_manager,
         )
 
-        # Send first-run onboarding welcome message to Saved Messages
+        # Mark first-run welcomed in DB (onboarding & controls route strictly through the control bot)
         if not self.db.get_state("first_run_welcomed"):
-            try:
-                curr_mode = self.db.get_state("reply_mode", self.config.reply_mode)
-                prov = self.db.get_state("ai_provider", self.config.ai_provider).upper()
-                mod = self.db.get_state("ai_model", self.config.ai_model or "default")
-
-                welcome_msg = (
-                    f"👋 *Welcome to TeleAutomator v{__version__}*\n"
-                    f"_Personal AI Assistant for {owner_name}_\n\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📱 *Account Connection*\n"
-                    f"• *User:* `{name}` [ID: `{user_id}`]\n"
-                    f"• *Active Mode:* `{curr_mode}`\n"
-                    f"• *AI Engine:* `{prov}` (`{mod}`)\n\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"⚡ *Quick Setup Commands*\n"
-                    f"• `/mode auto` — Direct automated replies\n"
-                    f"• `/setai` — Configure custom AI endpoint & key\n"
-                    f"• `/chats` — View or manage allowlisted chats\n"
-                    f"• `/allowchat <id>` — Allow a contact or group\n\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🛠️ *Essential Remote Controls*\n"
-                    f"• `/status` — System health, models & cooldowns\n"
-                    f"• `/aiconfig` — Inspect AI engine & reasoning effort\n"
-                    f"• `/usage` — Track daily & total token consumption\n"
-                    f"• `/help` — Full interactive command reference\n\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🛑 *Safety Kill Switches*\n"
-                    f"• `/pause 2h` — Snooze replies for 2 hours\n"
-                    f"• `/stop` — Emergency stop (halts all messages)\n"
-                    f"• `/resume` — Unpause and resume operations\n\n"
-                    f"_Send any command right here in Saved Messages to control your assistant!_ 🚀"
-                )
-                await self.client.send_message("me", welcome_msg, parse_mode="md")
-                self.db.set_state("first_run_welcomed", "1")
-                logger.info("Sent structured first-run welcome and command guide to Saved Messages.")
-            except Exception as e:
-                logger.warning(f"Could not send first-run welcome message: {e}")
+            self.db.set_state("first_run_welcomed", "1")
 
         return self.client
 

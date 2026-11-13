@@ -48,6 +48,25 @@ def test_env_seed_bootstrap_and_main_owner(tmp_path: Path) -> None:
     assert not bot.is_authorized(999)
 
 
+def test_env_seed_sync_when_db_already_exists(tmp_path: Path) -> None:
+    import json
+    cfg = _make_config(tmp_path, seed="111,222")
+    db = Database(tmp_path / "bot_preexisting.db")
+    # Pre-existing DB has a different user ID
+    db.set_state("bot_authorized_users", json.dumps([999]))
+
+    mgr = ReplyManager(cfg, db, SafetyManager(cfg, db), PrivacyManager(cfg, database=db), ReplyGenerator(cfg, database=db))
+    bot = BotControl(cfg.bot_api_key, db, mgr, seed_user_ids=cfg.bot_authorized_users)
+
+    # All seed users plus pre-existing DB user are authorized
+    assert bot.is_authorized(111) is True
+    assert bot.is_authorized(222) is True
+    assert bot.is_authorized(999) is True
+    assert bot._load_authorized() == {111, 222, 999}
+    assert bot.main_user_id == 111
+
+
+
 def test_authorization_applies_instantly_and_add_remove_flow(tmp_path: Path) -> None:
     bot, _mgr, _db = _make_bot(tmp_path)
 
