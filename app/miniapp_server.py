@@ -428,7 +428,7 @@ class MiniAppAPI:
             users.add(target)
             ctx.db.set_state("bot_authorized_users", json.dumps(sorted(users)))
             return {"ok": True, "response": f"User {target} added to authorized users."}
-        if users and target == min(users):
+        if _is_main_user(ctx, target):
             return {"ok": False, "response": "The main owner cannot be removed."}
         users.discard(target)
         ctx.db.set_state("bot_authorized_users", json.dumps(sorted(users)))

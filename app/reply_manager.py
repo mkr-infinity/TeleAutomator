@@ -861,24 +861,22 @@ class ReplyManager(CommandRouterMixin):
             logger.error(f"Failed to send approval notification via control channel: {e}")
 
     async def _send_control_alert(self, text: str, parse_markdown: bool = True) -> bool:
-        """Send a control-channel alert: to the bot's main user when the bot is active,
-        otherwise (or if bot delivery fails) to Saved Messages as fallback."""
+        """Send a control-channel alert strictly through the bot control channel."""
         if self.bot_control is not None:
             try:
-                if await self.bot_control.send_alert(text):
-                    return True
-                logger.warning("Bot alert delivery failed; falling back to Saved Messages.")
+                return await self.bot_control.send_alert(text)
             except Exception as e:
-                logger.warning(f"Bot alert delivery error ({e}); falling back to Saved Messages.")
-        if not self._client:
-            return False
-        try:
-            # 'me' in Telethon resolves to the user's private Saved Messages
-            await self._client.send_message("me", text, parse_mode="md" if parse_markdown else None)
-            return True
-        except Exception as e:
-            logger.warning(f"Could not send control alert: {e}")
-            return False
+                logger.warning(f"Bot alert delivery error: {e}")
+                return False
+        # Headless testing fallback only when running without bot credentials
+        if self._client and not getattr(self.config, "bot_api_key", None):
+            try:
+                await self._client.send_message("me", text, parse_mode="md" if parse_markdown else None)
+                return True
+            except Exception as e:
+                logger.warning(f"Could not send control alert: {e}")
+                return False
+        return False
 
     async def _notify_issue_to_saved_messages(
         self,
@@ -1624,7 +1622,10 @@ class ReplyManager(CommandRouterMixin):
                                     await asyncio.sleep(burst1)
                             else:
                                 if asyncio.iscoroutine(act1):
-                                    act1.close()
+                                    try:
+                                        await act1
+                                    except Exception:
+                                        pass
                                 await asyncio.sleep(burst1)
 
                             # Brief hesitation/thinking pause where user stops typing
@@ -1636,7 +1637,10 @@ class ReplyManager(CommandRouterMixin):
                                     await asyncio.sleep(burst2)
                             else:
                                 if asyncio.iscoroutine(act2):
-                                    act2.close()
+                                    try:
+                                        await act2
+                                    except Exception:
+                                        pass
                                 await asyncio.sleep(burst2)
                         else:
                             act = self._client.action(chat_id, "typing")
@@ -1645,7 +1649,10 @@ class ReplyManager(CommandRouterMixin):
                                     await asyncio.sleep(typing_duration)
                             else:
                                 if asyncio.iscoroutine(act):
-                                    act.close()
+                                    try:
+                                        await act
+                                    except Exception:
+                                        pass
                                 await asyncio.sleep(typing_duration)
                     else:
                         await asyncio.sleep(typing_duration)
@@ -1756,7 +1763,10 @@ class ReplyManager(CommandRouterMixin):
                                 await asyncio.sleep(followup_typing)
                         else:
                             if asyncio.iscoroutine(act):
-                                act.close()
+                                try:
+                                    await act
+                                except Exception:
+                                    pass
                             await asyncio.sleep(followup_typing)
                     else:
                         await asyncio.sleep(followup_typing)

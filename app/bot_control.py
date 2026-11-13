@@ -408,7 +408,7 @@ class BotControl:
 
         now_str = datetime.now().strftime("%d %b, %H:%M:%S")
         users = sorted(self._load_authorized())
-        main_id = users[0] if users else 0
+        main_id = self.main_user_id or (users[0] if users else 0)
         extra = f" + {len(users) - 1} more" if len(users) > 1 else ""
         card = (
             "🚀 *TeleAutomator is live!*\n"

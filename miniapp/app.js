@@ -462,7 +462,7 @@
         [{ label: "Remove", kind: "danger", onClick: () => runAction("removeauth", { user_id: btn.dataset.unauth }) }, { label: "Cancel" }])));
 
     const s = await api("/api/state");
-    if (s && !s.authorized === false) {
+    if (s && s.authorized !== false) {
       if (document.activeElement !== $("ai-model") && s.ai_model) $("ai-model").value = s.ai_model;
       if (document.activeElement !== $("ai-baseurl") && s.ai_base_url) $("ai-baseurl").value = s.ai_base_url;
     }
@@ -500,6 +500,7 @@
     haptic(res && res.ok ? "ok" : "err");
     toast(res && res.response ? res.response : (res && res.ok ? "Done" : "Failed"));
     loadView(currentView);
+    return res;
   }
 
   async function runCmd(command) {
@@ -509,6 +510,7 @@
     haptic(res && res.ok ? "ok" : "err");
     openSheet(`/${command.split(" ")[0].slice(1)}`, md(res && res.response ? res.response : "No response."), [{ label: "Close" }]);
     loadView(currentView);
+    return res;
   }
 
   // -------------------------------------------------------------- paywall & loader
