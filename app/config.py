@@ -107,6 +107,9 @@ class AppConfig:
     quiet_hours_start: str = "02:00"
     quiet_hours_end: str = "08:00"
 
+    # Privacy & Sensitive Content Filter
+    sensitive_keywords: Set[str] = field(default_factory=set)
+
     # Paths
     data_dir: Path = Path("data")
 
@@ -254,7 +257,7 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         ai_api_key=ai_api_key,
         ai_model=ai_model,
         ai_base_url=ai_base_url,
-        ai_reasoning_effort=os.getenv("AI_REASONING_EFFORT", "default").strip().lower(),
+        ai_reasoning_effort=(os.getenv("AI_REASONING_EFFORT") or os.getenv("REASONING_EFFORT") or "default").strip().lower(),
         allowed_private_chats=_parse_id_set(os.getenv("ALLOWED_PRIVATE_CHATS")),
         allowed_groups=_parse_id_set(os.getenv("ALLOWED_GROUPS")),
         blocked_chats=_parse_id_set(os.getenv("BLOCKED_CHATS")),
@@ -283,5 +286,6 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         quiet_hours_enabled=quiet_hours_enabled,
         quiet_hours_start=quiet_hours_start,
         quiet_hours_end=quiet_hours_end,
+        sensitive_keywords={k.strip().lower() for k in os.getenv("SENSITIVE_KEYWORDS", "").split(",") if k.strip()},
         data_dir=data_dir,
     )

@@ -655,8 +655,10 @@
 
           const pills = (res.results || []).map((r) => {
             const cls = r.ok ? "test-pill ok" : "test-pill fail";
-            const icon = r.ok ? "✓" : "✗";
-            return `<span class="${cls}">${icon} ${esc(r.model)}: ${esc(r.detail)}</span>`;
+            const iconSvg = r.ok
+              ? '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="display:inline-block;vertical-align:-1px;margin-right:4px;"><polyline points="3 8 7 12 13 4"/></svg>'
+              : '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="display:inline-block;vertical-align:-1px;margin-right:4px;"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>';
+            return `<span class="${cls}">${iconSvg}${esc(r.model)}: ${esc(r.detail)}</span>`;
           });
           summaryEl.innerHTML = pills.join("");
 
@@ -671,8 +673,9 @@
           modelEl.textContent = "All candidate models failed";
           replyEl.textContent = (res && res.error) || "No valid response received. Check your endpoint URL, model name, and API key.";
 
+          const failSvg = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="display:inline-block;vertical-align:-1px;margin-right:4px;"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>';
           const pills = (res && res.results ? res.results : []).map((r) => {
-            return `<span class="test-pill fail">✗ ${esc(r.model)}: ${esc(r.detail)}</span>`;
+            return `<span class="test-pill fail">${failSvg}${esc(r.model)}: ${esc(r.detail)}</span>`;
           });
           summaryEl.innerHTML = pills.join("");
           toast("Model test failed");

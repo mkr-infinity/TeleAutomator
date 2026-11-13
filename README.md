@@ -6,7 +6,7 @@
 [![MTProto Telethon](https://img.shields.io/badge/protocol-MTProto%20Telethon-informational.svg)](https://github.com/LonamiWebs/Telethon)
 [![AI Supported](https://img.shields.io/badge/AI-Gemini%20%7C%20OpenAI%20%7C%20Custom-orange.svg)](DEPLOYMENT.md)
 [![License](https://img.shields.io/badge/license-Source--Available-red.svg)](LICENSE)
-[![Tests Passing](https://img.shields.io/badge/tests-66%2F66%20passed-brightgreen.svg)](test.sh)
+[![Tests Passing](https://img.shields.io/badge/tests-181%2F181%20passed-brightgreen.svg)](test.sh)
 
 > 🚀 **Deploying to Railway, Render, or Cloud VPS 24/7?**  
 > For complete step-by-step cloud deployment walkthroughs, automated build guides, and environment variable configurations, see **[DEPLOYMENT.md](DEPLOYMENT.md)**.
@@ -103,7 +103,7 @@ Run the automated test suite locally:
 # Or via universal runner:
 python run.py --test
 ```
-**65 passing unit tests** covering configuration, safety guards, quiet hours, randomized cooldowns, permanent context caching, pinned message syncing, adaptive typing, and mock MTProto workflows.
+**181 passing unit tests** covering configuration, safety guards, quiet hours, randomized cooldowns, permanent context caching, pinned message syncing, adaptive typing, and mock MTProto workflows.
 
 ---
 

@@ -38,5 +38,7 @@ USER appuser
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD /app/healthcheck.sh
 
+EXPOSE 8080
+
 ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["python3", "-m", "app.main"]

@@ -8,7 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from app.logger import setup_logger
 

@@ -133,6 +133,12 @@ class SafetyManager:
         for pattern in SENSITIVE_CONTENT_PATTERNS:
             if pattern.search(text):
                 return True
+        sensitive_keywords = getattr(self.config, "sensitive_keywords", None)
+        if sensitive_keywords:
+            text_lower = text.lower()
+            for kw in sensitive_keywords:
+                if re.search(r"\b" + re.escape(kw) + r"\b", text_lower):
+                    return True
         return False
 
     def is_scam_or_suspicious(self, text: str) -> bool:

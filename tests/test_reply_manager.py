@@ -928,6 +928,7 @@ def test_group_unthreaded_reply_without_mention(tmp_path: Path):
     async def _run():
         cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
         db = Database(tmp_path / "test_unthreaded.db")
+        db.set_state("typo_correction_enabled", "0")
         safety = SafetyManager(cfg, db)
         privacy = PrivacyManager(cfg, database=db)
         generator = ReplyGenerator(cfg, database=db)

@@ -49,6 +49,7 @@ class Database:
                     status TEXT NOT NULL DEFAULT 'pending',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE INDEX IF NOT EXISTS idx_pending_approvals_status ON pending_approvals(status);
 
                 CREATE TABLE IF NOT EXISTS message_dedup (
                     msg_hash TEXT PRIMARY KEY,
@@ -71,6 +72,7 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp REAL NOT NULL
                 );
+                CREATE INDEX IF NOT EXISTS idx_reaction_events_timestamp ON reaction_events(timestamp);
 
                 CREATE TABLE IF NOT EXISTS reply_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,6 +80,7 @@ class Database:
                     timestamp REAL NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_reply_events_timestamp ON reply_events(timestamp);
+                CREATE INDEX IF NOT EXISTS idx_reply_events_chat_timestamp ON reply_events(chat_id, timestamp);
 
                 CREATE TABLE IF NOT EXISTS chat_messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,6 +112,7 @@ class Database:
                     total_tokens INTEGER NOT NULL DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE INDEX IF NOT EXISTS idx_token_usage_created_at ON token_usage(created_at);
 
                 CREATE TABLE IF NOT EXISTS permanent_chat_context (
                     chat_id INTEGER PRIMARY KEY,

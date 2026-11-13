@@ -1067,9 +1067,6 @@ class ReplyManager:
                 "• `/prompt` - View active system prompt\n"
                 "• `/setprompt <text>` - Update system prompt on the fly\n"
                 "• `/chatprompt <chat_id> <text>` - Custom AI persona for one chat only\n"
-                "• `/model <name>` - Switch AI model (e.g. `gemini-2.5-flash-lite`)\n"
-                "• `/baseurl <url>` - Set custom base URL for NVIDIA/Groq/Ollama\n"
-                "• `/provider <gemini|openai|nvidia|custom>` - Switch AI backend\n"
                 "• `/chatty` - Banter picker per group (inline buttons) or global %"
             )
 
@@ -1089,19 +1086,28 @@ class ReplyManager:
             sep = "=>" if "=>" in raw_args else (":" if ":" in raw_args else None)
             if not sep:
                 return (
-                    "Usage: `/addrule <keyword> => <reply>`\n"
-                    "Example: `/addrule pricing => We are updating our packages, will send details soon!`"
+                    "❌ /addrule failed\n"
+                    "Missing: Keyword separator '=>' and reply text\n"
+                    "Fix: /addrule <keyword> => <reply> (e.g. /addrule pricing => We are updating our packages, will send details soon!)"
                 )
             kw, reply = raw_args.split(sep, 1)
             kw, reply = kw.strip(), reply.strip()
             if not kw or not reply:
-                return "Error: Both keyword and reply must be non-empty."
+                return (
+                    "❌ /addrule failed\n"
+                    "Missing: Non-empty keyword or reply\n"
+                    "Fix: /addrule <keyword> => <reply> (e.g. /addrule hello => Hey there!)"
+                )
             self.db.add_keyword_rule(kw, reply)
             return f"✅ Keyword rule added!\n• When message contains: *'{kw}'*\n• Client will reply: \"{reply}\""
 
         if cmd == "/delrule":
             if len(cmd_parts) < 2:
-                return "Usage: `/delrule <keyword>`"
+                return (
+                    "❌ /delrule failed\n"
+                    "Missing: Keyword to delete\n"
+                    "Fix: /delrule <keyword> (e.g. /delrule pricing)"
+                )
             kw = " ".join(cmd_parts[1:]).strip()
             ok = self.db.delete_keyword_rule(kw)
             if ok:
@@ -1121,7 +1127,11 @@ class ReplyManager:
 
         if cmd in ("/allowchat", "/allow"):
             if len(cmd_parts) < 2:
-                return "Usage: `/allowchat <chat_id>` (e.g. `/allowchat 123456789` or `/allowchat -1001234567890`)"
+                return (
+                    "❌ /allowchat failed\n"
+                    "Missing: Chat ID\n"
+                    "Fix: /allowchat <chat_id> (e.g. /allowchat -1001234567890 or /allowchat 123456789)"
+                )
             try:
                 cid = int(cmd_parts[1])
                 self.privacy.allow_chat(cid)
@@ -1162,32 +1172,52 @@ class ReplyManager:
                     result += "\n\n🧠 _AI is now reading recent messages to learn how this group talks (voice profile). Use `/gencontext %d` to rebuild it later._" % cid
                 return result
             except ValueError:
-                return "Error: Chat ID must be an integer."
+                return (
+                    "❌ /allowchat failed\n"
+                    "Missing: Valid integer chat ID\n"
+                    "Fix: /allowchat <chat_id> (e.g. /allowchat -1001234567890)"
+                )
 
         if cmd == "/removechat":
             if len(cmd_parts) < 2:
-                return "Usage: `/removechat <chat_id>`"
+                return (
+                    "❌ /removechat failed\n"
+                    "Missing: Chat ID\n"
+                    "Fix: /removechat <chat_id> (e.g. /removechat 123456789)"
+                )
             try:
                 cid = int(cmd_parts[1])
                 self.privacy.remove_chat(cid)
                 return f"🗑️ Chat `{cid}` removed from allowlist."
             except ValueError:
-                return "Error: Chat ID must be an integer."
+                return (
+                    "❌ /removechat failed\n"
+                    "Missing: Valid integer chat ID\n"
+                    "Fix: /removechat <chat_id> (e.g. /removechat 123456789)"
+                )
 
         if cmd in ("/blockchat", "/ban"):
             if len(cmd_parts) < 2:
-                return "Usage: `/blockchat <chat_id>`"
+                return (
+                    "❌ /blockchat failed\n"
+                    "Missing: Chat ID\n"
+                    "Fix: /blockchat <chat_id> (e.g. /blockchat 123456789)"
+                )
             try:
                 cid = int(cmd_parts[1])
                 self.privacy.block_chat(cid)
                 return f"🚫 Chat `{cid}` is now blocked."
             except ValueError:
-                return "Error: Chat ID must be an integer."
+                return (
+                    "❌ /blockchat failed\n"
+                    "Missing: Valid integer chat ID\n"
+                    "Fix: /blockchat <chat_id> (e.g. /blockchat 123456789)"
+                )
 
         if cmd in ("/mentiononly", "/mentions"):
             if len(cmd_parts) < 2 or cmd_parts[1].lower() not in ("on", "off"):
                 current = "ON (strict: only replies when mentioned/replied to)" if self.db.get_state("group_mention_only", "0") == "1" else "OFF (natural human engagement: replies/reacts to relevant topics, mentions, or after 20m idle)"
-                return f"Group mention filter is currently: *{current}*\nUsage: `/mentiononly on` or `/mentiononly off`"
+                return f"Group mention filter is currently: *{current}*\nFix: Use `/mentiononly on` or `/mentiononly off`."
             val = "1" if cmd_parts[1].lower() == "on" else "0"
             self.db.set_state("group_mention_only", val)
             if val == "1":
@@ -1217,7 +1247,11 @@ class ReplyManager:
                 self.safety.set_auto_authorization(True)
                 return "⚡ Mode switched to *Restricted Auto*. Allowlisted chats will receive automated replies directly."
             else:
-                return "Invalid mode. Use `/mode draft`, `/mode approval`, or `/mode auto`."
+                return (
+                    "❌ /mode failed\n"
+                    "Missing: Valid mode (draft, approval, or auto)\n"
+                    "Fix: /mode draft | /mode approval | /mode auto"
+                )
 
         if cmd in ("/style", "/setstyle"):
             if len(cmd_parts) < 2:
@@ -1239,7 +1273,11 @@ class ReplyManager:
                 try:
                     target_cid = int(cmd_parts[1])
                 except ValueError:
-                    return "Error: First argument must be an integer chat ID. Usage: `/style <chat_id> <style>`"
+                    return (
+                        "❌ /style failed\n"
+                        "Missing: Valid integer chat ID\n"
+                        "Fix: /style <chat_id> <style> (e.g. /style 123456 formal)"
+                    )
                 target_style = cmd_parts[2].lower().strip()
                 if target_style in ("default", "clear", "reset", "none"):
                     self.db.set_state(f"chat_style_{target_cid}", "")
@@ -1247,7 +1285,11 @@ class ReplyManager:
                         self.db.sync_chat_context_file(target_cid)
                     return f"🔄 Chat `{target_cid}` reset to default global style (*{self.generator.style}*)."
                 if target_style not in ("casual", "concise", "formal", "humorous"):
-                    return "Invalid style. Available: `casual`, `concise`, `formal`, `humorous`, `default`."
+                    return (
+                        "❌ /style failed\n"
+                        "Missing: Valid style option\n"
+                        "Fix: /style <chat_id> casual|concise|formal|humorous|default"
+                    )
                 self.db.set_state(f"chat_style_{target_cid}", target_style)
                 if hasattr(self.db, "sync_chat_context_file"):
                     self.db.sync_chat_context_file(target_cid)
@@ -1258,7 +1300,11 @@ class ReplyManager:
             if ok:
                 self.db.set_state("reply_style", target_style)
                 return f"🎨 Global AI response style switched to *{target_style}*."
-            return "Invalid style. Available: `/style casual`, `/style concise`, `/style formal`, `/style humorous`."
+            return (
+                "❌ /style failed\n"
+                "Missing: Valid style option\n"
+                "Fix: /style casual|concise|formal|humorous"
+            )
 
         if cmd == "/styles":
             priv, grps = self.privacy.get_all_allowed_chats()
@@ -1301,7 +1347,11 @@ class ReplyManager:
             try:
                 target_cid = int(cmd_parts[1])
             except ValueError:
-                return "Error: First argument must be an integer chat ID. Usage: `/chatprompt <chat_id> <prompt>`"
+                return (
+                    "❌ /chatprompt failed\n"
+                    "Missing: Valid integer chat ID\n"
+                    "Fix: /chatprompt <chat_id> <prompt> (e.g. /chatprompt -1001234567890 Talk like a crypto trader)"
+                )
             persona_text = " ".join(cmd_parts[2:]).strip()
             if persona_text.lower() in ("default", "clear", "reset", "none", ""):
                 self.db.set_state(f"chat_prompt_{target_cid}", "")
@@ -1311,7 +1361,11 @@ class ReplyManager:
                 name = meta.get("title") or f"Chat {target_cid}"
                 return f"🔄 {name} (`{target_cid}`) reset to the default global persona."
             if len(persona_text) < 5:
-                return "Persona prompt is too short — write at least a few words describing how the AI should talk in that chat."
+                return (
+                    "❌ /chatprompt failed\n"
+                    "Missing: Meaningful persona description\n"
+                    "Fix: /chatprompt <chat_id> <prompt> (write at least a few words describing how the AI should talk)"
+                )
             self.db.set_state(f"chat_prompt_{target_cid}", persona_text)
             if hasattr(self.db, "sync_chat_context_file"):
                 self.db.sync_chat_context_file(target_cid)
@@ -1329,14 +1383,26 @@ class ReplyManager:
 
         if cmd in ("/gencontext", "/genvoice"):
             if not self._client:
-                return "⚠️ Telegram client not attached yet — try again after the account is connected."
+                return (
+                    "❌ /gencontext failed\n"
+                    "Missing: Active Telegram client session\n"
+                    "Fix: Authenticate session via ./authenticate.sh and restart bot."
+                )
             if len(cmd_parts) >= 2:
                 try:
                     target_cid = int(cmd_parts[1])
                 except ValueError:
-                    return "Error: Chat ID must be an integer. Usage: `/gencontext <chat_id>`"
+                    return (
+                        "❌ /gencontext failed\n"
+                        "Missing: Valid integer chat ID\n"
+                        "Fix: /gencontext <chat_id> (e.g. /gencontext -1001234567890)"
+                    )
                 if target_cid >= 0:
-                    return "Voice profiles are for groups only — private chats use the normal persona."
+                    return (
+                        "❌ /gencontext failed\n"
+                        "Missing: Negative group chat ID\n"
+                        "Fix: /gencontext <chat_id> with a group ID (e.g. /gencontext -1001234567890). Private chats use the global persona."
+                    )
                 profile = await self.generate_chat_voice_profile(target_cid)
                 if not profile:
                     return f"⚠️ Couldn't build a voice profile for `{target_cid}` — need recent text messages in that group. Try again after some chat activity."
@@ -1355,7 +1421,11 @@ class ReplyManager:
             priv, grps = self.privacy.get_all_allowed_chats()
             targets = sorted(g for g in grps if g < 0)
             if not targets:
-                return "No allowlisted groups found. Usage: `/gencontext <chat_id>`"
+                return (
+                    "❌ /gencontext failed\n"
+                    "Missing: Allowlisted groups\n"
+                    "Fix: Use /allowchat <group_id> to add a group first."
+                )
             built = 0
             for gid in targets:
                 if await self.generate_chat_voice_profile(gid):
@@ -1375,14 +1445,18 @@ class ReplyManager:
                 self.db.set_state("context_ttl_hours", str(val))
                 return f"⏳ Context aging window set to *{val} hours*. Messages older than this will expire from AI prompt memory."
             except ValueError:
-                return "Error: Hours must be a positive number."
+                return (
+                    "❌ /contextttl failed\n"
+                    "Missing: Valid positive number of hours\n"
+                    "Fix: /contextttl <hours> (e.g. /contextttl 4.0)"
+                )
 
         if cmd in ("/clearcontext", "/resetcontext"):
             if len(cmd_parts) < 2:
                 return (
-                    "Usage: `/clearcontext <chat_id>`\n"
-                    "_Safely clears local AI context cache for the chat so the next reply starts fresh._\n"
-                    "_CRITICAL SAFETY: This NEVER deletes any Telegram messages._"
+                    "❌ /clearcontext failed\n"
+                    "Missing: Chat ID\n"
+                    "Fix: /clearcontext <chat_id> (e.g. /clearcontext -1001234567890)"
                 )
             try:
                 target_cid = int(cmd_parts[1])
@@ -1393,7 +1467,11 @@ class ReplyManager:
                     "_(Zero Telegram messages were touched or deleted)._"
                 )
             except ValueError:
-                return "Error: Chat ID must be an integer."
+                return (
+                    "❌ /clearcontext failed\n"
+                    "Missing: Valid integer chat ID\n"
+                    "Fix: /clearcontext <chat_id> (e.g. /clearcontext -1001234567890)"
+                )
 
         if cmd in ("/syncpin", "/syncpins"):
             if len(cmd_parts) >= 2:
@@ -1405,10 +1483,18 @@ class ReplyManager:
                         return f"📌 *Synced pinned context for chat `{target_cid}`:*\n_{preview}_\n\nThis is saved permanently and will never be deleted."
                     return f"ℹ️ No pinned messages found or accessible for chat `{target_cid}`."
                 except ValueError:
-                    return "Error: Chat ID must be an integer."
+                    return (
+                        "❌ /syncpins failed\n"
+                        "Missing: Valid integer chat ID\n"
+                        "Fix: /syncpins <chat_id> (e.g. /syncpins -1001234567890) or bare /syncpins to sync all groups"
+                    )
             groups = list(self.privacy.get_all_allowed_chats()[1])
             if not groups:
-                return "No allowlisted groups found. Usage: `/syncpins <chat_id>`"
+                return (
+                    "❌ /syncpins failed\n"
+                    "Missing: Allowlisted groups\n"
+                    "Fix: Use /allowchat <group_id> to add a group first."
+                )
             synced_count = 0
             for gid in groups:
                 res = await self.sync_pinned_context_from_telegram(gid)
@@ -1419,9 +1505,9 @@ class ReplyManager:
         if cmd == "/setcontext":
             if len(cmd_parts) < 3:
                 return (
-                    "Usage: `/setcontext <chat_id> <important details / rules>`\n"
-                    "Example: `/setcontext -1001234567890 Solana trading group, focus on meme coins, keep replies brief.`\n"
-                    "_Permanently saves chat context and guidelines so the AI never replies with senseless answers._"
+                    "❌ /setcontext failed\n"
+                    "Missing: Chat ID and context notes\n"
+                    "Fix: /setcontext <chat_id> <important details / rules> (e.g. /setcontext -1001234567890 Solana trading group, focus on meme coins, keep replies brief)"
                 )
             try:
                 target_cid = int(cmd_parts[1])
@@ -1439,11 +1525,19 @@ class ReplyManager:
                     "_Remembered permanently across all conversations in this chat._"
                 )
             except ValueError:
-                return "Error: Chat ID must be an integer."
+                return (
+                    "❌ /setcontext failed\n"
+                    "Missing: Valid integer chat ID\n"
+                    "Fix: /setcontext <chat_id> <notes> (e.g. /setcontext -1001234567890 Solana trading group)"
+                )
 
         if cmd == "/showcontext":
             if len(cmd_parts) < 2:
-                return "Usage: `/showcontext <chat_id>`"
+                return (
+                    "❌ /showcontext failed\n"
+                    "Missing: Chat ID\n"
+                    "Fix: /showcontext <chat_id> (e.g. /showcontext -1001234567890)"
+                )
             try:
                 target_cid = int(cmd_parts[1])
                 ctx = self.db.get_permanent_context(target_cid)
@@ -1468,11 +1562,19 @@ class ReplyManager:
                     f"_Update notes: `/setcontext {target_cid} <notes>` · Refresh pins: `/syncpins {target_cid}`_"
                 )
             except ValueError:
-                return "Error: Chat ID must be an integer."
+                return (
+                    "❌ /showcontext failed\n"
+                    "Missing: Valid integer chat ID\n"
+                    "Fix: /showcontext <chat_id> (e.g. /showcontext -1001234567890)"
+                )
 
         if cmd == "/delcontext":
             if len(cmd_parts) < 2:
-                return "Usage: `/delcontext <chat_id>`"
+                return (
+                    "❌ /delcontext failed\n"
+                    "Missing: Chat ID\n"
+                    "Fix: /delcontext <chat_id> (e.g. /delcontext -1001234567890)"
+                )
             try:
                 target_cid = int(cmd_parts[1])
                 ok = self.db.delete_permanent_context(target_cid)
@@ -1480,12 +1582,20 @@ class ReplyManager:
                     return f"🗑️ Permanent context for chat `{target_cid}` has been removed."
                 return f"No permanent context found for chat `{target_cid}`."
             except ValueError:
-                return "Error: Chat ID must be an integer."
+                return (
+                    "❌ /delcontext failed\n"
+                    "Missing: Valid integer chat ID\n"
+                    "Fix: /delcontext <chat_id> (e.g. /delcontext -1001234567890)"
+                )
 
         if cmd in ("/backup", "/exportdb"):
             db_path = getattr(self.db, "db_path", None)
             if not db_path or not db_path.exists():
-                return "❌ Database file not found."
+                return (
+                    "❌ /backup failed\n"
+                    "Missing: Database file\n"
+                    "Fix: Ensure database path exists in configuration"
+                )
             backup_dir = db_path.parent / "backups"
             backup_dir.mkdir(parents=True, exist_ok=True)
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1554,7 +1664,11 @@ class ReplyManager:
                 )
             target = cmd_parts[1].lower().strip()
             if target not in ("default", "low", "medium", "high", "off", "none"):
-                return "Invalid thinking/reasoning effort. Choose `default`, `low`, `medium`, `high`, or `off`."
+                return (
+                    "❌ /thinking failed\n"
+                    "Missing: Valid reasoning effort option\n"
+                    "Fix: /thinking <default|low|medium|high|off> (e.g. /thinking medium)"
+                )
             self.db.set_state("ai_reasoning_effort", target)
             if hasattr(self.generator.provider, "reasoning_effort"):
                 self.generator.provider.reasoning_effort = target
@@ -1571,7 +1685,11 @@ class ReplyManager:
                     self.generator.provider.temperature = val
                 return f"🌡️ AI temperature set to *{val}*."
             except ValueError:
-                return "Error: Temperature must be a number between 0.0 and 1.0."
+                return (
+                    "❌ /temp failed\n"
+                    "Missing: Valid temperature between 0.0 and 1.0\n"
+                    "Fix: /temp <0.0-1.0> (e.g. /temp 0.7)"
+                )
 
         if cmd in ("/maxtokens", "/maxoutput"):
             if len(cmd_parts) < 2:
@@ -1591,7 +1709,11 @@ class ReplyManager:
                     self.generator.provider.max_tokens = val
                 return f"📝 AI max output tokens set to *{val}*."
             except ValueError:
-                return "Error: Max tokens must be a valid integer or 'default'."
+                return (
+                    "❌ /maxtokens failed\n"
+                    "Missing: Valid integer >= 10 or 'default'\n"
+                    "Fix: /maxtokens <tokens> (e.g. /maxtokens 150) or /maxtokens default"
+                )
 
         if cmd in ("/aiconfig", "/aisettings"):
             prov = self.db.get_state("ai_provider", self.config.ai_provider)
@@ -1623,8 +1745,19 @@ class ReplyManager:
             )
 
         if cmd in ("/checkmodels", "/testmodels"):
+            curr_key = self.db.get_state("ai_api_key", self.config.ai_api_key or "").strip()
+            if not curr_key:
+                return (
+                    "❌ /checkmodels needs an API key.\n"
+                    "Missing: AI_API_KEY\n"
+                    "Fix: /setai gemini <your-key> or /setai mercury <your-key>"
+                )
             if not hasattr(self.generator.provider, "check_working_models"):
-                return "Live model verification is supported on OpenAI and Inception Labs custom providers."
+                return (
+                    "❌ /checkmodels failed\n"
+                    "Missing: OpenAI or Custom compatible provider\n"
+                    "Fix: Live model verification is supported on OpenAI and Inception Labs custom providers. Use /setai mercury <key> or /provider custom."
+                )
             results = self.generator.provider.check_working_models()
             lines = ["🔍 *Model Live Health Check:*"]
             for m, ok, detail in results:
@@ -1804,7 +1937,11 @@ class ReplyManager:
                     t_start = _parse_time_str(cmd_parts[2])
                     t_end = _parse_time_str(cmd_parts[3])
                     if not t_start or not t_end:
-                        return "Error: Times must be in valid 24h format HH:MM (e.g. `23:00 07:00` or `01:00 08:00`)."
+                        return (
+                            "❌ /quiethours failed\n"
+                            "Missing: Valid 24h format times (HH:MM)\n"
+                            "Fix: /quiethours on 23:00 07:00 (e.g. start at 23:00, wake at 07:00 IST)"
+                        )
                     self.safety.set_quiet_hours(True, t_start, t_end)
                     return f"🌙 Quiet hours *ENABLED* from *{t_start}* to *{t_end}*. Automated replies & reactions will pause during this sleep window."
                 else:
@@ -1818,7 +1955,11 @@ class ReplyManager:
                 t_start = _parse_time_str(time_args[0])
                 t_end = _parse_time_str(time_args[1])
                 if not t_start or not t_end:
-                    return "Error: Times must be in valid 24h format HH:MM (e.g. `23:00 07:00` or `01:00 08:00`)."
+                    return (
+                        "❌ /quiethours failed\n"
+                        "Missing: Valid 24h format times (HH:MM)\n"
+                        "Fix: /quiethours 23:00 07:00 (e.g. 23:00 07:00)"
+                    )
                 self.safety.set_quiet_hours(True, t_start, t_end)
                 return f"🌙 Quiet hours schedule set to *{t_start}* – *{t_end}* and *ENABLED*."
 
@@ -1911,7 +2052,11 @@ class ReplyManager:
                     self.db.set_state("reaction_window_seconds", str(win_mins * 60.0))
                     return f"✅ Reaction rolling limit updated: Max *{max_cnt}* reactions per *{win_mins:.0f}* minute(s)."
                 except ValueError:
-                    return "Error: Both count and minutes must be valid numbers."
+                    return (
+                        "❌ /reactioncooldown failed\n"
+                        "Missing: Valid numbers for count and minutes\n"
+                        "Fix: /reactioncooldown limit <max_count> <window_mins> (e.g. /reactioncooldown limit 4 10)"
+                    )
 
             # Check if 2 numbers provided (e.g. /reactioncooldown 4 10 or /reactioncooldown 3 9)
             if len(cmd_parts) >= 3:
@@ -1934,7 +2079,11 @@ class ReplyManager:
                         f"(Random interval: *{int(min_sec)}s*–*{int(max_sec)}s*)."
                     )
                 except ValueError:
-                    return "Error: Cooldown values must be valid numbers."
+                    return (
+                        "❌ /reactioncooldown failed\n"
+                        "Missing: Valid numeric cooldown values\n"
+                        "Fix: /reactioncooldown <min_sec> <max_sec> (e.g. /reactioncooldown 15 60)"
+                    )
 
             return "Usage: `/reactioncooldown 3 9` (seconds) or `/reactioncooldown limit 4 10` (rolling limit)"
 
@@ -1964,7 +2113,11 @@ class ReplyManager:
                     self.db.set_state("per_chat_cooldown_seconds", str(secs))
                     return f"✅ Chat reply cooldown updated to *{secs}s*."
             except ValueError:
-                return "Error: Cooldown seconds must be valid integers."
+                return (
+                    "❌ /chatcooldown failed\n"
+                    "Missing: Valid integer seconds\n"
+                    "Fix: /chatcooldown <min> <max> (e.g. /chatcooldown 5 60) or /chatcooldown 30"
+                )
 
         if cmd in ("/globalcooldown", "/globalcd"):
             if len(cmd_parts) < 2:
@@ -1992,7 +2145,11 @@ class ReplyManager:
                     self.db.set_state("global_cooldown_seconds", str(secs))
                     return f"✅ Global cooldown updated to *{secs}s*."
             except ValueError:
-                return "Error: Cooldown seconds must be valid integers."
+                return (
+                    "❌ /globalcooldown failed\n"
+                    "Missing: Valid integer seconds\n"
+                    "Fix: /globalcooldown <min> <max> (e.g. /globalcooldown 5 60) or /globalcooldown 15"
+                )
 
         if cmd in ("/ratelimit", "/spamlimits", "/rate", "/antispam"):
             if len(cmd_parts) < 2:
@@ -2011,7 +2168,11 @@ class ReplyManager:
                 self.db.set_state("max_replies_per_minute", str(per_min))
                 return f"✅ Anti-spam base burst limit updated to *{per_min}* replies/min (dynamic range applies on top)."
             except ValueError:
-                return "Error: Rate limit must be a valid positive integer (e.g. `/ratelimit 5`)."
+                return (
+                    "❌ /ratelimit failed\n"
+                    "Missing: Valid positive integer rate limit\n"
+                    "Fix: /ratelimit <per_minute> (e.g. /ratelimit 5)"
+                )
 
         if cmd in ("/model", "/setmodel", "/custommodel"):
             if len(cmd_parts) < 2:
@@ -2066,7 +2227,11 @@ class ReplyManager:
                 self.db.set_state("ai_provider", target)
                 self.generator.reload_provider()
                 return f"🧠 AI provider switched to *{target.upper()}* (provider reloaded)."
-            return "Invalid provider. Available: custom, gemini, openai, nvidia, groq, local."
+            return (
+                "❌ /provider failed\n"
+                "Missing: Supported provider name\n"
+                "Fix: /provider <custom|gemini|openai|nvidia|local> (e.g. /provider custom)"
+            )
 
         if cmd in ("/apikey", "/setkey", "/setapikey"):
             if len(cmd_parts) < 2:
@@ -2140,9 +2305,9 @@ class ReplyManager:
                 )
             else:
                 return (
-                    "Usage:\n"
-                    "• `/setai <provider> <api_key> <endpoint_url> [models]`\n"
-                    "• Or one-step Mercury setup: `/setai mercury <api_key>`"
+                    "❌ /setai failed\n"
+                    "Missing: Required provider and API key arguments\n"
+                    "Fix: /setai mercury <api_key> OR /setai <provider> <api_key> <endpoint_url> [models]"
                 )
 
         if cmd in ("/chatty", "/banter"):
@@ -2243,10 +2408,18 @@ class ReplyManager:
 
         if cmd in ("/pause", "/off"):
             if len(cmd_parts) < 2:
-                return "Usage: `/pause <duration>` (e.g. `/pause 2h`, `/pause 30m`, `/pause 30 min`, `/pause 90s`)"
+                return (
+                    "❌ /pause failed\n"
+                    "Missing: Duration argument\n"
+                    "Fix: /pause <duration> (e.g. /pause 30m, /pause 2h, /pause 90s)"
+                )
             seconds = self._parse_duration(" ".join(cmd_parts[1:]))
             if not seconds:
-                return "Invalid duration format. Use e.g. `/pause 2h`, `/pause 30m`, `/pause 30 min`, or `/pause 90s`."
+                return (
+                    "❌ /pause failed\n"
+                    "Missing: Valid duration format\n"
+                    "Fix: /pause <duration> (e.g. /pause 30m, /pause 2h, /pause 90s)"
+                )
             self.safety.set_timed_pause(seconds)
             mins = int(seconds // 60)
             hours = round(seconds / 3600, 1)
@@ -2259,7 +2432,7 @@ class ReplyManager:
             self.safety.set_emergency_stop(True)
             return "🛑 Emergency stop ACTIVATED. All automated actions halted."
 
-        if cmd in ("/resume", "/start", "/unpause"):
+        if cmd in ("/resume", "/unpause"):
             self.safety.clear_pause()
             return "▶️ Automation RESUMED. Emergency stop and timed pauses cleared."
 
@@ -2327,7 +2500,11 @@ class ReplyManager:
 
         if cmd == "/setprompt":
             if len(cmd_parts) < 2:
-                return "Usage: `/setprompt <new prompt text>` or `/setprompt default` to reset."
+                return (
+                    "❌ /setprompt failed\n"
+                    "Missing: Prompt text\n"
+                    "Fix: /setprompt <new prompt text> or /setprompt default to reset"
+                )
             new_prompt = text[len(cmd_parts[0]):].strip()
             if new_prompt.lower() in ("default", "reset", "clear"):
                 self.generator.prompt_manager.reset_custom_prompt()
@@ -2366,15 +2543,27 @@ class ReplyManager:
 
         if cmd == "/approve":
             if len(cmd_parts) < 2:
-                return "Usage: `/approve <id>`"
+                return (
+                    "❌ /approve failed\n"
+                    "Missing: Draft ID\n"
+                    "Fix: /approve <id> (e.g. /approve 1)"
+                )
             try:
                 approval_id = int(cmd_parts[1])
             except ValueError:
-                return "Error: ID must be a number."
+                return (
+                    "❌ /approve failed\n"
+                    "Missing: Valid numeric draft ID\n"
+                    "Fix: /approve <id> (e.g. /approve 1)"
+                )
 
             item = self.db.get_pending_approval(approval_id)
             if not item:
-                return f"Draft #{approval_id} not found or already processed."
+                return (
+                    f"❌ Draft #{approval_id} no longer exists.\n"
+                    "Missing: Active pending draft\n"
+                    "Fix: /pending to see current drafts."
+                )
 
             can_send, reason = self.safety.can_reply(item["chat_id"], item["draft_text"])
             if not can_send:
@@ -2389,15 +2578,27 @@ class ReplyManager:
 
         if cmd == "/reject":
             if len(cmd_parts) < 2:
-                return "Usage: `/reject <id>`"
+                return (
+                    "❌ /reject failed\n"
+                    "Missing: Draft ID\n"
+                    "Fix: /reject <id> (e.g. /reject 1)"
+                )
             try:
                 approval_id = int(cmd_parts[1])
             except ValueError:
-                return "Error: ID must be a number."
+                return (
+                    "❌ /reject failed\n"
+                    "Missing: Valid numeric draft ID\n"
+                    "Fix: /reject <id> (e.g. /reject 1)"
+                )
 
             item = self.db.get_pending_approval(approval_id)
             if not item:
-                return f"Draft #{approval_id} not found or already processed."
+                return (
+                    f"❌ Draft #{approval_id} no longer exists.\n"
+                    "Missing: Active pending draft\n"
+                    "Fix: /pending to see current drafts."
+                )
 
             self.db.update_approval_status(approval_id, "rejected")
             return f"🗑️ Draft #{approval_id} rejected and discarded."
@@ -2941,7 +3142,7 @@ class ReplyManager:
             else:
                 total_delay = self.typing_delay
 
-            if self.typing_delay > 0 or self.min_delay > 0 or self.max_delay > 0:
+            if adaptive_delay and (self.typing_delay > 0 or self.min_delay > 0 or self.max_delay > 0):
                 # Human floor: never reply instantly — always at least a ~3-4.5s random thinking pause
                 total_delay = max(total_delay, random.uniform(3.0, 4.5))
 

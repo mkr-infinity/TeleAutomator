@@ -494,10 +494,16 @@ class BotControl:
 
         if lowered.startswith("/addauth"):
             if not self.is_main_user(user_id):
-                await self.send_message(chat_id, "👑 Only the main account owner can add authorized users.")
+                await self.send_message(
+                    chat_id,
+                    "❌ Permission denied\nMissing: Main owner privileges\nFix: Only the main account owner can add authorized users.",
+                )
                 return
             if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
-                await self.send_message(chat_id, "Usage: `/addauth <telegram_user_id>`")
+                await self.send_message(
+                    chat_id,
+                    "❌ /addauth failed\nMissing: Valid Telegram User ID\nFix: /addauth <user_id> (e.g. /addauth 123456789)",
+                )
                 return
             new_id = int(parts[1].lstrip("-"))
             users = self._load_authorized()
@@ -513,15 +519,24 @@ class BotControl:
 
         if lowered.startswith("/removeauth"):
             if not self.is_main_user(user_id):
-                await self.send_message(chat_id, "👑 Only the main account owner can remove authorized users.")
+                await self.send_message(
+                    chat_id,
+                    "❌ Permission denied\nMissing: Main owner privileges\nFix: Only the main account owner can remove authorized users.",
+                )
                 return
             if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
-                await self.send_message(chat_id, "Usage: `/removeauth <telegram_user_id>`")
+                await self.send_message(
+                    chat_id,
+                    "❌ /removeauth failed\nMissing: Valid Telegram User ID\nFix: /removeauth <user_id> (e.g. /removeauth 123456789)",
+                )
                 return
             target = int(parts[1].lstrip("-"))
             users = self._load_authorized()
             if target not in users:
-                await self.send_message(chat_id, f"User `{target}` is not in the authorized list.")
+                await self.send_message(
+                    chat_id,
+                    f"❌ /removeauth failed\nMissing: User in authorized list\nFix: User `{target}` is not in the authorized list.",
+                )
                 return
             if target == self.main_user_id:
                 await self.send_message(chat_id, "🛡️ The main account owner cannot be removed (at least one user must remain).")
@@ -540,14 +555,23 @@ class BotControl:
         # Per-command permissions (suggestion #1): main owner can restrict a secondary user
         if lowered.startswith("/grantperm"):
             if not self.is_main_user(user_id):
-                await self.send_message(chat_id, "👑 Only the main account owner can manage permissions.")
+                await self.send_message(
+                    chat_id,
+                    "❌ Permission denied\nMissing: Main owner privileges\nFix: Only the main account owner can manage permissions.",
+                )
                 return
             if len(parts) < 3 or not parts[1].lstrip("-").isdigit():
-                await self.send_message(chat_id, "Usage: `/grantperm <user_id> all` — or limit to specific commands:\n`/grantperm 555 /status,/prompt,/pause`")
+                await self.send_message(
+                    chat_id,
+                    "❌ /grantperm failed\nMissing: Target user ID and command list\nFix: /grantperm <user_id> all — or limit to specific commands:\n/grantperm 555 /status,/prompt,/pause",
+                )
                 return
             target = int(parts[1].lstrip("-"))
             if target not in self._load_authorized():
-                await self.send_message(chat_id, f"User `{target}` is not authorized yet. `/addauth` them first.")
+                await self.send_message(
+                    chat_id,
+                    f"❌ /grantperm failed\nMissing: Authorized user\nFix: User `{target}` is not authorized yet. /addauth {target} first.",
+                )
                 return
             granted = ",".join(p.strip().lower() for p in parts[2:] if p.strip())
             if granted.lower() == "all":
@@ -556,7 +580,10 @@ class BotControl:
             else:
                 cmds = granted.replace(" ", "").split(",")
                 if not cmds or not all(c.startswith("/") for c in cmds if c):
-                    await self.send_message(chat_id, "Commands must be comma-separated and start with `/` (e.g. `/status,/prompt`).")
+                    await self.send_message(
+                        chat_id,
+                        "❌ /grantperm failed\nMissing: Valid command names\nFix: Commands must be comma-separated and start with `/` (e.g. `/status,/prompt`).",
+                    )
                     return
                 self.db.set_state(f"bot_granted_cmds_{target}", ",".join(sorted(set(cmds))))
                 await self.send_message(chat_id, f"🔒 User `{target}` is now restricted to:\n{'  '.join(sorted(set(cmds)))}")
@@ -565,10 +592,16 @@ class BotControl:
 
         if lowered.startswith("/revokeperm"):
             if not self.is_main_user(user_id):
-                await self.send_message(chat_id, "👑 Only the main account owner can manage permissions.")
+                await self.send_message(
+                    chat_id,
+                    "❌ Permission denied\nMissing: Main owner privileges\nFix: Only the main account owner can manage permissions.",
+                )
                 return
             if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
-                await self.send_message(chat_id, "Usage: `/revokeperm <user_id>`")
+                await self.send_message(
+                    chat_id,
+                    "❌ /revokeperm failed\nMissing: Target user ID\nFix: /revokeperm <user_id> (e.g. /revokeperm 123456789)",
+                )
                 return
             target = int(parts[1].lstrip("-"))
             if self.db.get_state(f"bot_granted_cmds_{target}", "all") == "all":
@@ -581,11 +614,17 @@ class BotControl:
 
         if lowered.startswith("/watchdog"):
             if not self.is_main_user(user_id):
-                await self.send_message(chat_id, "👑 Only the main account owner can change watchdog settings.")
+                await self.send_message(
+                    chat_id,
+                    "❌ Permission denied\nMissing: Main owner privileges\nFix: Only the main account owner can change watchdog settings.",
+                )
                 return
             if len(parts) < 2 or not parts[1].isdigit():
                 curr = self.db.get_state("watchdog_minutes", "5")
-                await self.send_message(chat_id, f"⏱️ *Watchdog threshold:* {curr} min\nUsage: `/watchdog <minutes>` — alerts you here if the main process heartbeat goes silent that long.")
+                await self.send_message(
+                    chat_id,
+                    f"⏱️ *Watchdog threshold:* {curr} min\nUsage: `/watchdog <minutes>` — alerts you here if the main process heartbeat goes silent that long.\nExample: `/watchdog 5`",
+                )
                 return
             mins = max(2, int(parts[1]))
             self.db.set_state("watchdog_minutes", str(mins))
@@ -594,9 +633,10 @@ class BotControl:
 
         # Per-command permission enforcement (main owner always unrestricted)
         if not self.is_main_user(user_id) and not self._user_can(user_id, text.split()[0]):
+            cmd_root = text.split()[0].split('@')[0]
             await self.send_message(
                 chat_id,
-                f"⛔ `{text.split()[0].split('@')[0]}` is not permitted for your account. Ask the owner to grant it via `/grantperm`.",
+                f"❌ Permission denied\nMissing: Permission for `{cmd_root}`\nFix: `{cmd_root}` is not permitted for your account. Ask the owner to grant it via `/grantperm {user_id} {cmd_root}`.",
             )
             return
 
@@ -654,7 +694,19 @@ class BotControl:
         data = cb.get("data") or ""
         cb_id = cb.get("id")
         if not self.is_authorized(user_id):
-            await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "Not authorized 🔒"})
+            await self._call("answerCallbackQuery", {
+                "callback_query_id": cb_id,
+                "text": "❌ Access denied\nMissing: Authorized account\nFix: Contact @mkr_infinity for authorization.",
+                "show_alert": True,
+            })
+            return
+
+        if data == "noop":
+            await self._call("answerCallbackQuery", {
+                "callback_query_id": cb_id,
+                "text": "ℹ️ No allowlisted groups yet.\nFix: Use /allowchat <group_id> to add one.",
+                "show_alert": True,
+            })
             return
 
         # Quick-menu buttons: route the embedded command through the normal engine,
@@ -665,10 +717,14 @@ class BotControl:
             chat_id = message.get("chat", {}).get("id")
             msg_id = message.get("message_id")
             if not command.startswith("/") or not chat_id:
-                await self._call("answerCallbackQuery", {"callback_query_id": cb_id})
+                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "❌ Invalid command button", "show_alert": False})
                 return
             if not (self.is_main_user(user_id) or self._user_can(user_id, command)):
-                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "⛔ Not permitted for your account."})
+                await self._call("answerCallbackQuery", {
+                    "callback_query_id": cb_id,
+                    "text": f"❌ Permission denied\nMissing: Permission for {command.split()[0]}\nFix: `{command.split()[0]}` is not permitted for your account. Ask owner to grant it via /grantperm.",
+                    "show_alert": True,
+                })
                 return
             response = await self.reply_manager.handle_control_command(command) or "Done."
             await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": response[:180], "show_alert": False})
@@ -702,10 +758,14 @@ class BotControl:
             try:
                 cid = int(cid_s)
             except ValueError:
-                await self._call("answerCallbackQuery", {"callback_query_id": cb_id})
+                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "❌ Invalid chat ID", "show_alert": False})
                 return
             if not (self.is_main_user(user_id) or self._user_can(user_id, "/chatty")):
-                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "⛔ Not permitted for your account."})
+                await self._call("answerCallbackQuery", {
+                    "callback_query_id": cb_id,
+                    "text": "❌ Permission denied\nMissing: Permission for /chatty\nFix: /chatty is not permitted for your account. Ask owner to grant via /grantperm.",
+                    "show_alert": True,
+                })
                 return
             meta = self.reply_manager.db.get_chat_metadata(cid) or {}
             name = meta.get("title") or f"Chat {cid}"
@@ -727,22 +787,27 @@ class BotControl:
             try:
                 pct = max(0, min(100, int(action)))
             except ValueError:
-                await self._call("answerCallbackQuery", {"callback_query_id": cb_id})
+                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "❌ Invalid banter value", "show_alert": False})
                 return
             self.reply_manager.db.set_state(f"chat_chatty_{cid}", str(pct / 100.0))
             await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": f"✅ {name}: {pct}% banter (always respects cooldowns)", "show_alert": True})
             return
 
         if data not in ("approve", "reject") and ":" not in data:
-            await self._call("answerCallbackQuery", {"callback_query_id": cb_id})
+            await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "ℹ️ Button recognized", "show_alert": False})
             return
         action, _, target_id = data.partition(":")
         if action not in ("approve", "reject") or not target_id.isdigit():
-            await self._call("answerCallbackQuery", {"callback_query_id": cb_id})
+            await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "❌ Unknown action", "show_alert": False})
             return
         if not (self.is_main_user(user_id) or self._user_can(user_id, f"/{action}")):
-            await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "⛔ Not permitted for your account."})
+            await self._call("answerCallbackQuery", {
+                "callback_query_id": cb_id,
+                "text": f"❌ Permission denied\nMissing: Permission for /{action}\nFix: /{action} is not permitted for your account. Ask owner to grant via /grantperm.",
+                "show_alert": True,
+            })
             return
+
         response = await self.reply_manager.handle_control_command(f"/{action} {target_id}") or "Done."
         # Popup answer + update the message so the buttons disappear once handled
         await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": response[:180], "show_alert": True})
@@ -752,9 +817,12 @@ class BotControl:
                 "deleteMessage",
                 {"chat_id": message.get("chat", {}).get("id"), "message_id": message.get("message_id")},
             )
+            title_action = "sent ✅" if action == "approve" else "rejected ❌"
+            if response.startswith("❌") or response.startswith("⚠️"):
+                title_action = "status"
             await self.send_message(
                 message.get("chat", {}).get("id"),
-                f"*Draft #{target_id} — {'sent ✅' if action == 'approve' else 'rejected ❌'}*\n{response}",
+                f"*Draft #{target_id} — {title_action}*\n{response}",
             )
         except Exception as e:
             logger.debug(f"Could not refresh approval message: {e}")
