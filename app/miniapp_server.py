@@ -25,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
 
+from app import __version__ as APP_VERSION
 from app.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -119,7 +120,7 @@ class MiniAppAPI:
 
     def handle_auth(self, user: Optional[dict]) -> dict:
         if user is None:
-            return {"authorized": False, "paywall": PAYWALL}
+            return {"authorized": False, "paywall": PAYWALL, "version": APP_VERSION}
         user_id = int(user["id"])
         authorized = user_id in _authorized_user_ids(self.ctx)
         payload: dict[str, Any] = {
@@ -162,6 +163,7 @@ class MiniAppAPI:
             "pending_count": len(ctx.db.list_pending_approvals()),
             "replies_24h": ctx.db.get_recent_reply_count(86400.0),
             "tokens_today": tokens_today,
+            "version": APP_VERSION,
         }
 
     # ------------------------------------------------------------- chats
@@ -384,7 +386,7 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _unauthorized_payload(self) -> dict:
-        return {"authorized": False, "paywall": PAYWALL}
+        return {"authorized": False, "paywall": PAYWALL, "version": APP_VERSION}
 
     def log_message(self, fmt, *args):  # quiet default access logs
         logger.debug(f"miniapp http: {self.address_string()} {fmt % args}")

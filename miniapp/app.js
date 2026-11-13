@@ -34,7 +34,7 @@
       emergency: false, quiet_hours: false, safe_mode: false, chatty_global: 0.15, style: "casual",
       prompt: "Reply like a 22-year-old Delhi guy, short, lowercase, Hinglish words when natural.",
       owner_name: "Kaif", ai_engine: "Gemini", chats_allowed: 6, pending_count: 2,
-      replies_24h: 41, tokens_today: 18320,
+      replies_24h: 41, tokens_today: 18320, version: "2.9.0",
     },
     chats: [
       { id: 123456789, name: "Rohan Sharma", username: "@rohan_s", type: "Private", chatty: "", style: "", prompt: "", voice_profile: true, blocked: false },
@@ -73,7 +73,7 @@
   };
 
   async function demoApi(path, body) {
-    if (path === "/api/auth") return { authorized: true, is_main: true, user: { id: 555000111, name: "Kaif" } };
+    if (path === "/api/auth") return { authorized: true, is_main: true, version: "2.9.0", user: { id: 555000111, name: "Kaif" } };
     if (path === "/api/state") return DEMO_DATA.state;
     if (path === "/api/chats") return { chats: DEMO_DATA.chats, chatty_global: DEMO_DATA.state.chatty_global };
     if (path === "/api/pending") return { pending: DEMO_DATA.pending };
@@ -499,6 +499,7 @@
     $("paywall").classList.add("hidden");
     $("app").classList.remove("hidden");
     $("whoami").textContent = auth.user && auth.user.name ? auth.user.name : "";
+    $("app-version").textContent = auth.version ? `v${auth.version}` : "";
     wire();
     const params = new URLSearchParams(location.search);
     showView(["overview", "chats", "persona", "approvals", "more"].includes(params.get("view")) ? params.get("view") : "overview");

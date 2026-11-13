@@ -15,16 +15,17 @@
 
 <!-- Shared top bar (single h1: the product name, visible in every state) -->
 <header class="topbar">
-  <div class="brand"><span class="brandmark sm" aria-hidden="true">TA</span><h1 class="brand-name">TeleAutomator</h1></div>
+  <div class="brand"><img class="logo sm" src="logo.svg" alt=""><h1 class="brand-name">TeleAutomator</h1><span id="app-version" class="version num"></span></div>
   <span id="whoami" class="whoami"></span>
 </header>
 
 <!-- Unauthorized: paywall card (same contact + price as the bot) -->
 <section id="paywall" class="screen hidden" aria-label="Access restricted">
   <div class="paywrap">
-    <div class="brandmark" aria-hidden="true">TA</div>
+    <img class="logo" src="logo.svg" alt="TeleAutomator logo">
     <h2 class="pay-title">Access restricted</h2>
     <p class="pay-body">This control panel belongs to a private automation project. Your account isn't authorized to use it yet.</p>
+    <p class="pay-ver num" id="pay-version"></p>
     <div class="pay-card">
       <p class="pay-price">100 Telegram Stars <span class="pay-or">or</span> 1 TON</p>
       <p class="pay-term">for 1 month of access</p>
@@ -144,7 +145,7 @@
         <button class="btn primary" id="ai-baseurl-save">Save endpoint</button>
       </div>
 
-      <h3 class="section-h">All commands</h3>
+      <h3 class="section-h">All commands <span id="cmd-count" class="cmd-count num"></span></h3>
       <input type="search" id="cmd-search" placeholder="Search commands">
       <div class="chipgrid" id="cmd-chips"></div>
     </section>

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="TeleAutomator">
+  <rect width="64" height="64" rx="16" fill="#0E2316"/>
+  <path d="M32 12c-11.6 0-21 8-21 18 0 6 3.4 11.3 8.7 14.7L17.4 53l10.4-5.2c1.4.3 2.8.4 4.2.4 11.6 0 21-8 21-18S43.6 12 32 12z" fill="#A855F7"/>
+  <path d="M18 32h10l4-8 6 14 4-6h6" fill="none" stroke="#07150C" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M18 32h10l4-8 6 14 4-6h6" fill="none" stroke="#F4EFE2" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
