@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application source code, scripts, and prompt configuration
 COPY app/ ./app/
+COPY miniapp/ ./miniapp/
 COPY scripts/ ./scripts/
 COPY system_prompt.txt* ./
 COPY entrypoint.sh ./entrypoint.sh

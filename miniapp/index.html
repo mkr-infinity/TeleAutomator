@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>TeleAutomator Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+
+<!-- Shared top bar (single h1: the product name, visible in every state) -->
+<header class="topbar">
+  <div class="brand"><span class="brandmark sm" aria-hidden="true">TA</span><h1 class="brand-name">TeleAutomator</h1></div>
+  <span id="whoami" class="whoami"></span>
+</header>
+
+<!-- Unauthorized: paywall card (same contact + price as the bot) -->
+<section id="paywall" class="screen hidden" aria-label="Access restricted">
+  <div class="paywrap">
+    <div class="brandmark" aria-hidden="true">TA</div>
+    <h2 class="pay-title">Access restricted</h2>
+    <p class="pay-body">This control panel belongs to a private automation project. Your account isn't authorized to use it yet.</p>
+    <div class="pay-card">
+      <p class="pay-price">100 Telegram Stars <span class="pay-or">or</span> 1 TON</p>
+      <p class="pay-term">for 1 month of access</p>
+      <p class="pay-how">Pay to <a class="pay-contact" href="https://t.me/mkr_infinity" target="_blank" rel="noopener">@mkr_infinity</a> on Telegram, mention TeleAutomator, and your account will be authorized.</p>
+    </div>
+    <a class="pay-btn" href="https://t.me/mkr_infinity" target="_blank" rel="noopener">Contact @mkr_infinity</a>
+  </div>
+</section>
+
+<!-- Authorized app -->
+<div id="app" class="hidden">
+  <main class="canvas">
+
+    <!-- Overview -->
+    <section id="view-overview" class="view" aria-label="Overview">
+      <div class="title-row">
+        <p class="page-title">Overview</p>
+        <span id="state-pill" class="pill pill-neutral">Loading</span>
+      </div>
+      <div class="control-line">
+        <div class="control-left">
+          <div class="control-meta">
+            <p class="control-mode" id="ov-mode">—</p>
+            <p class="control-sub" id="ov-sub">Connecting to your account…</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="kpi-strip" id="kpi-strip">
+        <div class="kpi"><p class="kpi-label">Chats allowed</p><p class="kpi-value" id="kpi-chats">—</p></div>
+        <div class="kpi"><p class="kpi-label">Pending drafts</p><p class="kpi-value" id="kpi-pending">—</p></div>
+        <div class="kpi"><p class="kpi-label">Replies 24h</p><p class="kpi-value" id="kpi-replies">—</p></div>
+        <div class="kpi"><p class="kpi-label">Tokens today</p><p class="kpi-value" id="kpi-tokens">—</p></div>
+      </div>
+
+      <h2 class="section-h">Quick actions</h2>
+      <div class="actions">
+        <button class="btn primary" id="act-pause">Pause 30m</button>
+        <button class="btn" id="act-resume">Resume</button>
+        <button class="btn danger" id="act-stop">Stop</button>
+        <button class="btn" id="act-mode">Mode</button>
+      </div>
+      <p class="field-hint" id="act-hint">Pause holds every automated reply. Stop halts all activity until you resume.</p>
+
+      <h2 class="section-h">Recent replies <button class="linklike" id="goto-activity">View all</button></h2>
+      <div class="card list" id="ov-activity"></div>
+    </section>
+
+    <!-- Chats -->
+    <section id="view-chats" class="view hidden" aria-label="Chats">
+      <h2 class="view-title">Chats</h2>
+      <p class="view-sub">Where the account talks, and how much in each one.</p>
+      <div class="allow-row">
+        <input type="text" id="allow-id" inputmode="numeric" placeholder="Chat ID, e.g. -1001234567890">
+        <button class="btn primary" id="allow-btn">Allow</button>
+      </div>
+      <div class="card list" id="chat-list"></div>
+    </section>
+
+    <!-- Persona -->
+    <section id="view-persona" class="view hidden" aria-label="Persona">
+      <h2 class="view-title">Persona</h2>
+      <p class="view-sub">How the account texts, everywhere and per chat.</p>
+
+      <div class="card form">
+        <label for="pf-prompt">Global prompt</label>
+        <textarea id="pf-prompt" rows="4" placeholder="Leave empty to use the built-in persona"></textarea>
+        <button class="btn primary" id="pf-save">Save prompt</button>
+      </div>
+
+      <div class="card form">
+        <label for="pf-name">Your name (identity the AI texts as)</label>
+        <input type="text" id="pf-name" placeholder="Kaif">
+        <button class="btn primary" id="pf-name-save">Save name</button>
+      </div>
+
+      <div class="card form">
+        <label>Reply style</label>
+        <div class="segrow" id="pf-style"></div>
+      </div>
+
+      <h2 class="section-h">Per-chat prompts</h2>
+      <div class="card list" id="pf-chats"></div>
+    </section>
+
+    <!-- Approvals -->
+    <section id="view-approvals" class="view hidden" aria-label="Approvals">
+      <h2 class="view-title">Approvals</h2>
+      <p class="view-sub">Drafts waiting for your yes or no.</p>
+      <div class="card list" id="approval-list"></div>
+    </section>
+
+    <!-- More -->
+    <section id="view-more" class="view hidden" aria-label="More">
+      <h2 class="view-title">More</h2>
+
+      <h3 class="section-h">Access</h3>
+      <div class="allow-row">
+        <input type="text" id="auth-id" inputmode="numeric" placeholder="Telegram user ID">
+        <button class="btn primary" id="auth-add">Add user</button>
+      </div>
+      <div class="card list" id="access-list"></div>
+
+      <h3 class="section-h">AI engine</h3>
+      <div class="card form">
+        <label for="ai-model">Model</label>
+        <input type="text" id="ai-model" placeholder="gemini-2.5-flash-lite">
+        <div class="inline-save">
+          <button class="btn primary" id="ai-model-save">Save model</button>
+          <button class="btn" id="ai-check">Check models</button>
+        </div>
+        <label for="ai-key">API key</label>
+        <input type="password" id="ai-key" placeholder="Paste a new key to replace">
+        <button class="btn primary" id="ai-key-save">Save key</button>
+        <label for="ai-baseurl">Custom endpoint</label>
+        <input type="text" id="ai-baseurl" placeholder="https://integrate.api.nvidia.com/v1">
+        <button class="btn primary" id="ai-baseurl-save">Save endpoint</button>
+      </div>
+
+      <h3 class="section-h">All commands</h3>
+      <input type="search" id="cmd-search" placeholder="Search commands">
+      <div class="chipgrid" id="cmd-chips"></div>
+    </section>
+
+  </main>
+
+  <nav class="tabbar" aria-label="Sections">
+    <button class="tab active" data-view="overview">Overview</button>
+    <button class="tab" data-view="chats">Chats</button>
+    <button class="tab" data-view="persona">Persona</button>
+    <button class="tab" data-view="approvals">Approvals<span id="tab-approvals" class="tabcount hidden">0</span></button>
+    <button class="tab" data-view="more">More</button>
+  </nav>
+</div>
+
+<!-- Bottom sheet -->
+<div id="sheet-backdrop" class="hidden"></div>
+<div id="sheet" class="sheet hidden" role="dialog" aria-modal="true">
+  <div class="sheet-grip" aria-hidden="true"></div>
+  <h3 class="sheet-title" id="sheet-title">Sheet</h3>
+  <div class="sheet-body" id="sheet-body"></div>
+  <div class="sheet-actions" id="sheet-actions"></div>
+</div>
+
+<div id="toast" class="toast hidden" role="status"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
