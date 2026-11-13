@@ -302,3 +302,27 @@ def test_http_unauthorized_user_gets_paywall(http_server):
     assert status == 401 and body["paywall"]["contact"] == "@mkr_infinity"
     status, auth = _post(f"{base}/api/auth", {}, {"X-Telegram-Init-Data": stranger})
     assert status == 200 and auth["authorized"] is False and "paywall" in auth
+
+
+def test_http_version_endpoint_public(http_server):
+    httpd, _, _ = http_server
+    base = f"http://127.0.0.1:{httpd.server_port}"
+    status, body = _get(f"{base}/api/version")
+    assert status == 200 and "version" in body and body["service"] == "teleautomator"
+
+
+def test_map_action_to_command_preserves_multiline_prompt():
+    ctx, _ = make_ctx(tmp_path=Path("/tmp"), authorized=())
+    api = MiniAppAPI(ctx)
+    res = api.map_action_to_command("prompt", {"value": "Line 1\n\nLine 2"})
+    assert res == "/prompt Line 1\n\nLine 2"
+
+
+def test_handle_state_includes_ai_engine_fields(tmp_path):
+    ctx, _ = make_ctx(tmp_path)
+    api = MiniAppAPI(ctx)
+    ctx.db.set_state("ai_model", "test-model-4")
+    ctx.db.set_state("ai_base_url", "https://api.example.com/v1")
+    state = api.handle_state()
+    assert state["ai_model"] == "test-model-4"
+    assert state["ai_base_url"] == "https://api.example.com/v1"

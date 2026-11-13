@@ -142,11 +142,16 @@ class MiniAppAPI:
         emergency = ctx.safety.is_emergency_stopped
         in_quiet, _ = ctx.safety.is_in_quiet_hours()
         safe_mode = ctx.db.get_state("safe_mode_active", "0") == "1"
-        chatty_global = float(ctx.db.get_state("chatty_probability", "0.15") or 0.15)
+        try:
+            chatty_global = float(ctx.db.get_state("chatty_probability", "0.15") or 0.15)
+        except (ValueError, TypeError):
+            chatty_global = 0.15
         try:
             tokens_today = int(ctx.db.get_daily_token_usage())
         except Exception:
             tokens_today = 0
+        ai_model = ctx.db.get_state("ai_model", getattr(getattr(ctx, "reply_manager", None), "config", None) and getattr(ctx.reply_manager.config, "ai_model", "") or "")
+        ai_base_url = ctx.db.get_state("ai_base_url", getattr(getattr(ctx, "reply_manager", None), "config", None) and getattr(ctx.reply_manager.config, "ai_base_url", "") or "")
         return {
             "mode": mode,
             "state": "stopped" if emergency else ("paused" if paused > 0 else "active"),
@@ -159,6 +164,8 @@ class MiniAppAPI:
             "prompt": ctx.generator.prompt_manager.custom_prompt,
             "owner_name": ctx.generator.prompt_manager.owner_name,
             "ai_engine": type(ctx.generator.provider).__name__.replace("Provider", ""),
+            "ai_model": ai_model or "",
+            "ai_base_url": ai_base_url or "",
             "chats_allowed": len(priv | grps),
             "pending_count": len(ctx.db.list_pending_approvals()),
             "replies_24h": ctx.db.get_recent_reply_count(86400.0),
@@ -175,7 +182,8 @@ class MiniAppAPI:
         if hasattr(ctx.privacy, "_get_dynamic_set"):
             blocked = set(ctx.privacy._get_dynamic_set("dynamic_blocked_chats"))
         chats = []
-        for cid in sorted(priv | grps):
+        all_cids = sorted((priv | grps) | blocked)
+        for cid in all_cids:
             meta = ctx.db.get_chat_metadata(cid) or {}
             chats.append({
                 "id": cid,
@@ -296,8 +304,11 @@ class MiniAppAPI:
             provider=params.get("provider", ""),
             id=params.get("id", ""),
         ).strip()
-        # Drop empty placeholders so single-arg commands don't send trailing spaces
-        return " ".join(part for part in filled.split() if part and not part.startswith("{"))
+        # Drop unpopulated placeholders while preserving multi-line user content
+        import re
+        cleaned = re.sub(r"\{[a-zA-Z0-9_]+\}", "", filled)
+        cmd_name, _, rest = cleaned.partition(" ")
+        return f"{cmd_name} {rest.strip()}".strip()
 
     def handle_action(self, user_id: int, action: str, params: dict) -> dict:
         """GUI buttons become real bot commands run through the same engine."""
@@ -401,6 +412,9 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
                 self._json(503, {"status": "error", "service": "teleautomator", "reason": hs.get("error") or "unhealthy"})
             else:
                 self._json(200, {"status": "healthy", "service": "teleautomator"})
+            return
+        if path == "/api/version":
+            self._json(200, {"version": APP_VERSION, "service": "teleautomator"})
             return
         # Static assets (index.html, style.css, app.js) are public: they carry no
         # data. Every /api/* route gates on initData; the page shows the paywall

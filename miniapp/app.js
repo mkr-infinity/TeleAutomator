@@ -21,7 +21,7 @@
     if (body) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
     const res = await fetch(path, opts);
     const data = await res.json().catch(() => ({}));
-    if (res.status === 401) return { authorized: false, paywall: data.paywall };
+    if (res.status === 401) return { authorized: false, paywall: data.paywall, version: data.version };
     return data;
   }
 
@@ -33,8 +33,8 @@
       authorized: true, is_main: true, mode: "restricted_auto", state: "active", paused_remaining_sec: 0,
       emergency: false, quiet_hours: false, safe_mode: false, chatty_global: 0.15, style: "casual",
       prompt: "Reply like a 22-year-old Delhi guy, short, lowercase, Hinglish words when natural.",
-      owner_name: "Kaif", ai_engine: "Gemini", chats_allowed: 6, pending_count: 2,
-      replies_24h: 41, tokens_today: 18320, version: "2.9.0",
+      owner_name: "Kaif", ai_engine: "Gemini", ai_model: "gemini-2.5-flash-lite", ai_base_url: "",
+      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "2.9.0",
     },
     chats: [
       { id: 123456789, name: "Rohan Sharma", username: "@rohan_s", type: "Private", chatty: "", style: "", prompt: "", voice_profile: true, blocked: false },
@@ -103,6 +103,7 @@
   function md(s) {
     let h = esc(s);
     h = h.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+    h = h.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
     h = h.replace(/\*([^*\n]+)\*/g, "<strong>$1</strong>");
     h = h.replace(/_([^_\n]+)_/g, "<em>$1</em>");
     h = h.replace(/\n/g, "<br>");
@@ -150,6 +151,28 @@
       btn.addEventListener("click", () => { closeSheet(); b.onClick && b.onClick(); });
       actions.appendChild(btn);
     });
+    const inp = $("sheet-body").querySelector("input");
+    if (inp) {
+      inp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          const primaryBtn = actions.querySelector(".btn.primary") || actions.querySelector(".btn");
+          if (primaryBtn) primaryBtn.click();
+        }
+      });
+      setTimeout(() => inp.focus(), 60);
+    }
+    const ta = $("sheet-body").querySelector("textarea");
+    if (ta) {
+      ta.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+          e.preventDefault();
+          const primaryBtn = actions.querySelector(".btn.primary") || actions.querySelector(".btn");
+          if (primaryBtn) primaryBtn.click();
+        }
+      });
+      setTimeout(() => ta.focus(), 60);
+    }
     $("sheet-backdrop").classList.remove("hidden");
     $("sheet").classList.remove("hidden");
   }
@@ -275,9 +298,10 @@
 
   function chattySheet(c) {
     const opts = [0, 10, 25, 40, 60, 80, 100];
+    const curVal = c.chatty !== "" && c.chatty !== null && c.chatty !== undefined ? Math.round(parseFloat(c.chatty) * 100) : null;
     const buttons = opts.map((p) => ({
       label: `${p}%`,
-      kind: String(parseFloat(c.chatty || "") * 100) === String(p) ? "primary" : "",
+      kind: curVal !== null && curVal === p ? "primary" : "",
       onClick: () => runAction("chat_chatty", { chat_id: c.id, value: String(p) }),
     }));
     buttons.push({ label: "Default", onClick: () => runAction("chat_chatty", { chat_id: c.id, value: "def" }) });
@@ -334,7 +358,10 @@
     const data = await api("/api/pending");
     if (!data || data.authorized === false) return maybePaywall(data);
     const rows = data.pending || [];
-    $("approval-list").innerHTML = rows.length
+    const count = rows.length;
+    $("tab-approvals").textContent = String(count);
+    $("tab-approvals").classList.toggle("hidden", !count);
+    $("approval-list").innerHTML = count
       ? rows.map((p) => `<div class="row" style="min-height:0;align-items:flex-start;flex-direction:column;gap:10px;">
           <div class="row-main" style="width:100%">
             <p class="row-sub">${esc(p.chat_title || String(p.chat_id))} · ${esc(String(p.created || "").slice(0, 16))}</p>
@@ -350,6 +377,8 @@
 
   // ----------------------------------------------------------------- more
 
+  let commandCache = [];
+
   async function refreshMore() {
     const data = await api("/api/access");
     if (!data || data.authorized === false) return maybePaywall(data);
@@ -363,13 +392,25 @@
       btn.addEventListener("click", () => openSheet("Remove user", `<p>Revoke panel access for user <span class="num">${esc(btn.dataset.unauth)}</span>?</p>`,
         [{ label: "Remove", kind: "danger", onClick: () => runAction("removeauth", { user_id: btn.dataset.unauth }) }, { label: "Cancel" }])));
 
-    const cmds = await api("/api/commands");
-    renderCommandChips((cmds.commands || []));
+    const s = await api("/api/state");
+    if (s && !s.authorized === false) {
+      if (document.activeElement !== $("ai-model") && s.ai_model) $("ai-model").value = s.ai_model;
+      if (document.activeElement !== $("ai-baseurl") && s.ai_base_url) $("ai-baseurl").value = s.ai_base_url;
+    }
+
+    if (!commandCache.length) {
+      const cmds = await api("/api/commands");
+      commandCache = cmds.commands || [];
+    }
+    renderCommandChips(commandCache);
   }
 
   function renderCommandChips(commands) {
+    const src = commands && commands.length ? commands : commandCache;
     const q = ($("cmd-search").value || "").toLowerCase();
-    const list = commands.filter((c) => !q || c.command.includes(q) || c.description.toLowerCase().includes(q));
+    const list = src.filter((c) => !q || c.command.includes(q) || c.description.toLowerCase().includes(q));
+    const countEl = $("cmd-count");
+    if (countEl) countEl.textContent = `(${list.length})`;
     $("cmd-chips").innerHTML = list.map((c) =>
       `<button class="chip" data-cmd="${esc(c.command)}"><strong>/${esc(c.command)}</strong>${esc(plain(c.description))}</button>`).join("")
       || `<div class="empty">No matching command.</div>`;
@@ -407,6 +448,7 @@
     if (!res || res.authorized === false) {
       $("app").classList.add("hidden");
       $("paywall").classList.remove("hidden");
+      if (res && res.version) $("pay-version").textContent = `v${res.version}`;
       return true;
     }
     return false;
@@ -442,6 +484,7 @@
       $("allow-id").value = "";
       runAction("allow", { chat_id: v });
     });
+    $("allow-id").addEventListener("keydown", (e) => { if (e.key === "Enter") $("allow-btn").click(); });
 
     $("pf-save").addEventListener("click", () => {
       const v = $("pf-prompt").value.trim();
@@ -453,6 +496,7 @@
       if (!v) return toast("Enter a name");
       runAction("name", { value: v });
     });
+    $("pf-name").addEventListener("keydown", (e) => { if (e.key === "Enter") $("pf-name-save").click(); });
 
     $("auth-add").addEventListener("click", () => {
       const v = $("auth-id").value.trim();
@@ -460,12 +504,14 @@
       $("auth-id").value = "";
       runAction("addauth", { user_id: v });
     });
+    $("auth-id").addEventListener("keydown", (e) => { if (e.key === "Enter") $("auth-add").click(); });
 
     $("ai-model-save").addEventListener("click", () => {
       const v = $("ai-model").value.trim();
       if (!v) return toast("Enter a model name");
       runAction("model", { value: v });
     });
+    $("ai-model").addEventListener("keydown", (e) => { if (e.key === "Enter") $("ai-model-save").click(); });
     $("ai-check").addEventListener("click", () => runCmd("/checkmodels"));
     $("ai-key-save").addEventListener("click", () => {
       const v = $("ai-key").value.trim();
@@ -473,28 +519,25 @@
       $("ai-key").value = "";
       runAction("apikey", { value: v });
     });
+    $("ai-key").addEventListener("keydown", (e) => { if (e.key === "Enter") $("ai-key-save").click(); });
     $("ai-baseurl-save").addEventListener("click", () => {
       const v = $("ai-baseurl").value.trim();
       if (!v) return toast("Enter an endpoint URL");
       runAction("baseurl", { value: v });
     });
+    $("ai-baseurl").addEventListener("keydown", (e) => { if (e.key === "Enter") $("ai-baseurl-save").click(); });
 
-    let searchTimer = null;
     $("cmd-search").addEventListener("input", () => {
-      clearTimeout(searchTimer);
-      searchTimer = setTimeout(async () => {
-        const cmds = await api("/api/commands");
-        renderCommandChips(cmds.commands || []);
-      }, 200);
+      renderCommandChips(commandCache);
     });
   }
 
   async function init() {
-    if (tg) { try { tg.ready(); tg.expand(); tg.setHeaderColor("#000000"); tg.setBackgroundColor("#000000"); } catch { /* older clients */ } }
+    if (tg) { try { tg.ready(); tg.expand(); tg.setHeaderColor("#07150C"); tg.setBackgroundColor("#07150C"); } catch { /* older clients */ } }
 
     let auth = null;
     try { auth = await api("/api/auth"); } catch { /* no server (plain browser / file) → paywall */ }
-    if (!auth || auth.authorized !== true) { maybePaywall(null); return; }
+    if (!auth || auth.authorized !== true) { maybePaywall(auth); return; }
 
     $("paywall").classList.add("hidden");
     $("app").classList.remove("hidden");
