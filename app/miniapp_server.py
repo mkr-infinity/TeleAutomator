@@ -133,8 +133,23 @@ def _authorized_user_ids(ctx: MiniAppContext) -> set[int]:
 def _is_main_user(ctx: MiniAppContext, user_id: int) -> bool:
     if ctx.bot_control and hasattr(ctx.bot_control, "is_main_user"):
         return ctx.bot_control.is_main_user(user_id)
+    try:
+        saved_main = ctx.db.get_state("main_owner_id", "")
+        if saved_main and int(saved_main) > 0:
+            return int(saved_main) == int(user_id)
+    except Exception:
+        pass
+    if ctx.reply_manager and hasattr(ctx.reply_manager, "config") and getattr(ctx.reply_manager.config, "bot_authorized_users", None):
+        return sorted(ctx.reply_manager.config.bot_authorized_users)[0] == int(user_id)
     users = _authorized_user_ids(ctx)
-    return bool(users) and min(users) == int(user_id)
+    if users:
+        first_user = min(users)
+        try:
+            ctx.db.set_state("main_owner_id", str(first_user))
+        except Exception:
+            pass
+        return first_user == int(user_id)
+    return False
 
 
 class MiniAppAPI:
@@ -819,7 +834,7 @@ def resolve_miniapp_url() -> str:
 def set_telegram_menu_button(
     bot_token: str,
     miniapp_url: str,
-    button_text: str = "⚡ TeleAutomator",
+    button_text: str = "Open",
 ) -> bool:
     """Register the mini app as the bot's chat menu button (does NOT touch commands)."""
     if not bot_token or not miniapp_url:

@@ -182,6 +182,12 @@ h1.brand-name { font-size: var(--fs-title); font-weight: 600; }
 .pay-term { color: var(--muted); font-size: 13px; }
 .pay-how { color: var(--muted); font-size: 13px; margin-top: 10px; }
 .pay-contact { color: var(--accent-bright); font-weight: 500; }
+.pay-actions {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
 .pay-btn {
   align-self: stretch;
   height: 44px; border-radius: var(--radius-control);
@@ -190,6 +196,18 @@ h1.brand-name { font-size: var(--fs-title); font-weight: 600; }
   display: flex; align-items: center; justify-content: center;
 }
 .pay-btn:hover { filter: brightness(1.1); }
+.pay-check-btn {
+  align-self: stretch;
+  height: 44px; border-radius: var(--radius-control);
+  background: rgba(244, 239, 226, 0.06);
+  border: 1px solid rgba(244, 239, 226, 0.14);
+  color: var(--fg);
+  font-weight: 600; font-size: 14px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.pay-check-btn:hover { background: rgba(244, 239, 226, 0.12); }
 
 /* --------------------------------------------------------- control line */
 .title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 2px 0 12px; }

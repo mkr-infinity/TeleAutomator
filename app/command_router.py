@@ -193,13 +193,13 @@ class CommandRouterMixin:
                     "📱 *TeleAutomator Mini App Control Panel*\n"
                     "━━━━━━━━━━━━━━━━━━━━\n"
                     f"🔗 Web App URL: {url}\n\n"
-                    "_Tap the '⚡ TeleAutomator' button in your chat menu or open the link above._"
+                    "_Tap the 'Open' button in your chat menu or open the link above._"
                 )
             return (
                 "📱 *TeleAutomator Mini App Control Panel*\n"
                 "━━━━━━━━━━━━━━━━━━━━\n"
                 "Mini app server is running on local port 8080.\n"
-                "On Railway, the '⚡ TeleAutomator' menu button is auto-registered without any extra domain setup."
+                "On Railway, the 'Open' menu button is auto-registered without any extra domain setup."
             )
 
         if cmd == "/status":

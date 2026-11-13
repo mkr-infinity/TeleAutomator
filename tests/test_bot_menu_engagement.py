@@ -53,7 +53,7 @@ def test_quick_menu_markup_with_miniapp():
     markup = quick_menu_markup("https://teleautomator.up.railway.app")
     rows = markup["inline_keyboard"]
     first_btn = rows[0][0]
-    assert first_btn["text"] == "⚡ Launch TeleAutomator"
+    assert first_btn["text"] == "Open"
     assert first_btn["web_app"]["url"] == "https://teleautomator.up.railway.app"
 
 

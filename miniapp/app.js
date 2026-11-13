@@ -513,6 +513,9 @@
 
   // -------------------------------------------------------------- paywall & loader
 
+  let paywallPoll = null;
+  let wired = false;
+
   function hideLoading() {
     const loader = $("loading-screen");
     if (loader && !loader.classList.contains("hidden")) {
@@ -521,15 +524,73 @@
     }
   }
 
+  function wirePaywall() {
+    const btn = $("pay-check-btn");
+    if (!btn || btn.dataset.wired) return;
+    btn.dataset.wired = "1";
+    btn.addEventListener("click", async () => {
+      haptic();
+      btn.textContent = "Checking…";
+      btn.disabled = true;
+      try {
+        const fresh = await api("/api/auth");
+        if (fresh && fresh.authorized === true) {
+          unlockApp(fresh);
+          toast("Access granted! Welcome.");
+          return;
+        }
+        haptic("err");
+        toast("Account not authorized yet.");
+      } catch {
+        toast("Could not connect to server.");
+      } finally {
+        btn.textContent = "Check access";
+        btn.disabled = false;
+      }
+    });
+  }
+
   function maybePaywall(res) {
     hideLoading();
     if (!res || res.authorized === false) {
       $("app").classList.add("hidden");
       $("paywall").classList.remove("hidden");
       if (res && res.version) $("pay-version").textContent = `v${res.version}`;
+      wirePaywall();
+      if (!paywallPoll) {
+        paywallPoll = setInterval(async () => {
+          try {
+            const fresh = await api("/api/auth");
+            if (fresh && fresh.authorized === true) {
+              clearInterval(paywallPoll);
+              paywallPoll = null;
+              unlockApp(fresh);
+              toast("Access granted! Welcome.");
+            }
+          } catch (_) {}
+        }, 8000);
+      }
       return true;
     }
+    if (paywallPoll) { clearInterval(paywallPoll); paywallPoll = null; }
     return false;
+  }
+
+  function unlockApp(auth) {
+    if (paywallPoll) { clearInterval(paywallPoll); paywallPoll = null; }
+    hideLoading();
+    $("paywall").classList.add("hidden");
+    $("app").classList.remove("hidden");
+    $("whoami").textContent = auth.user && auth.user.name ? auth.user.name : "";
+    $("app-version").textContent = auth.version ? `v${auth.version}` : "";
+    if (!wired) {
+      wired = true;
+      wire();
+      initEventSource();
+      const params = new URLSearchParams(location.search);
+      showView(["overview", "chats", "persona", "approvals", "more"].includes(params.get("view")) ? params.get("view") : "overview");
+      setInterval(() => { if (currentView === "overview") refreshOverview(); }, 12000);
+    }
   }
 
   // ---------------------------------------------------------------- init
@@ -757,23 +818,14 @@
     try { auth = await api("/api/auth"); } catch { /* no server (plain browser / file) → paywall */ }
     if (!auth || auth.authorized !== true) { maybePaywall(auth); return; }
 
-    hideLoading();
-    $("paywall").classList.add("hidden");
-    $("app").classList.remove("hidden");
-    $("whoami").textContent = auth.user && auth.user.name ? auth.user.name : "";
-    $("app-version").textContent = auth.version ? `v${auth.version}` : "";
-    wire();
-    initEventSource();
-    const params = new URLSearchParams(location.search);
-    showView(["overview", "chats", "persona", "approvals", "more"].includes(params.get("view")) ? params.get("view") : "overview");
-    // Adaptive fallback polling
-    setInterval(() => { if (currentView === "overview") refreshOverview(); }, 12000);
+    unlockApp(auth);
   }
 
   function initEventSource() {
     if (!window.EventSource) return;
     try {
-      const q = window.__tgInitData ? `?initData=${encodeURIComponent(window.__tgInitData)}` : "";
+      const raw = initDataHeader();
+      const q = raw ? `?initData=${encodeURIComponent(raw)}` : "";
       const es = new EventSource(`/api/events${q}`);
       es.addEventListener("state", (e) => {
         try {

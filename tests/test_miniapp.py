@@ -68,6 +68,7 @@ def make_ctx(tmp_path, authorized=(555000111,), token=TEST_TOKEN):
     db = Database(tmp_path / "miniapp_test.db")
     if authorized:
         db.set_state("bot_authorized_users", json.dumps(list(authorized)))
+        db.set_state("main_owner_id", str(authorized[0]))
     reply_mgr = FakeReplyManager()
     ctx = MiniAppContext(
         db=db, safety=FakeSafety(), privacy=FakePrivacy(),
@@ -479,6 +480,52 @@ def test_miniapp_paywall_svg_icons():
     assert 'viewBox="0 0 240 240"' in index_html  # authentic Gram SVG
     assert '100 Telegram Stars' not in index_html
     assert '1 TON' not in index_html
+    assert 'id="pay-check-btn"' in index_html
+
+
+def test_menu_button_text_is_open():
+    import inspect
+    from app.miniapp_server import set_telegram_menu_button
+    sig = inspect.signature(set_telegram_menu_button)
+    assert sig.parameters["button_text"].default == "Open"
+
+
+def test_dynamic_authorization_lifecycle(tmp_path):
+    ctx, _ = make_ctx(tmp_path, authorized=(555000111,))
+    api = MiniAppAPI(ctx)
+
+    # 1. User 999999 is NOT authorized initially
+    auth_unauth = api.handle_auth({"id": 999999, "first_name": "Stranger"})
+    assert auth_unauth["authorized"] is False
+    assert "paywall" in auth_unauth
+
+    # 2. Main owner adds user 999999 via GUI action
+    res_add = api.handle_action(555000111, "addauth", {"user_id": 999999})
+    assert res_add["ok"] is True
+
+    # 3. User 999999 is NOW authorized - paywall screen is NOT shown
+    auth_now = api.handle_auth({"id": 999999, "first_name": "Stranger"})
+    assert auth_now["authorized"] is True
+    assert "paywall" not in auth_now
+
+    # 4. Main owner removes user 999999
+    res_rem = api.handle_action(555000111, "removeauth", {"user_id": 999999})
+    assert res_rem["ok"] is True
+
+    # 5. User 999999 is unauthorized again
+    auth_again = api.handle_auth({"id": 999999, "first_name": "Stranger"})
+    assert auth_again["authorized"] is False
+
+
+def test_data_sync_actions_immediate_persistence(tmp_path):
+    ctx, _ = make_ctx(tmp_path, authorized=(555000111,))
+    api = MiniAppAPI(ctx)
+
+    # Chatty action writes directly to DB without any command line
+    res = api.handle_action(555000111, "chat_chatty", {"chat_id": -222, "value": "45"})
+    assert res["ok"] is True
+    assert ctx.db.get_state("chat_chatty_-222") == "0.45"
+
 
 
 

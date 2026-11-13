@@ -174,7 +174,7 @@ def quick_menu_markup(miniapp_url: Optional[str] = None) -> dict:
             miniapp_url = None
 
     if miniapp_url:
-        rows.append([{"text": "⚡ Launch TeleAutomator", "web_app": {"url": miniapp_url}}])
+        rows.append([{"text": "Open", "web_app": {"url": miniapp_url}}])
 
     rows.extend([
         [
@@ -242,6 +242,7 @@ class BotControl:
         existing = self._load_authorized()
         if not existing and self.seed_user_ids:
             self._save_authorized(self.seed_user_ids)
+            self.db.set_state("main_owner_id", str(sorted(self.seed_user_ids)[0]))
             logger.info(f"Seeded bot authorized users from env: {sorted(self.seed_user_ids)}")
         elif existing and self.seed_user_ids:
             # Synchronize seed IDs into database so all env IDs are recognized
@@ -249,6 +250,8 @@ class BotControl:
             if merged != existing:
                 self._save_authorized(merged)
                 logger.info(f"Updated bot authorized users with env seed: {sorted(merged)}")
+            if not self.db.get_state("main_owner_id", ""):
+                self.db.set_state("main_owner_id", str(sorted(self.seed_user_ids)[0]))
 
     # ------------------------------------------------------------------ state
     def _load_authorized(self) -> set[int]:
@@ -263,9 +266,15 @@ class BotControl:
 
     @property
     def main_user_id(self) -> int:
-        """Main authorized user (project owner) — first env-provided ID, lowest ID fallback."""
+        """Main authorized user (project owner) — first env-provided ID or saved main owner."""
         if self.seed_user_ids:
-            return min(self.seed_user_ids)
+            return sorted(self.seed_user_ids)[0]
+        try:
+            saved = self.db.get_state("main_owner_id", "")
+            if saved and int(saved) > 0:
+                return int(saved)
+        except Exception:
+            pass
         users = self._load_authorized()
         if not users:
             return 0
@@ -276,9 +285,12 @@ class BotControl:
         if not user_id or int(user_id) <= 0:
             return False
         uid = int(user_id)
-        if self.seed_user_ids and uid in self.seed_user_ids:
+        if uid == self.main_user_id:
             return True
-        return uid in self._load_authorized()
+        authorized = self._load_authorized()
+        if not authorized and self.seed_user_ids:
+            return uid in self.seed_user_ids
+        return uid in authorized
 
     def is_main_user(self, user_id: int) -> bool:
         return self.main_user_id == int(user_id)
