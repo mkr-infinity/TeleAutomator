@@ -405,3 +405,23 @@ def test_handle_test_model_prunes_dead_and_saves_working(tmp_path, monkeypatch):
     assert ctx.db.get_state("ai_model") == "working-1,working-2"
     assert "Hello from working-1!" in res["reply"]
 
+
+def test_resolve_miniapp_url_railway_and_custom(monkeypatch):
+    from app.miniapp_server import resolve_miniapp_url
+
+    # 1. No env vars -> empty
+    monkeypatch.delenv("MINIAPP_URL", raising=False)
+    monkeypatch.delenv("CUSTOM_DOMAIN", raising=False)
+    monkeypatch.delenv("RAILWAY_PUBLIC_DOMAIN", raising=False)
+    monkeypatch.delenv("RAILWAY_STATIC_URL", raising=False)
+    assert resolve_miniapp_url() == ""
+
+    # 2. Railway auto-provided domain (zero extra domain needed!)
+    monkeypatch.setenv("RAILWAY_PUBLIC_DOMAIN", "teleautomator-prod.up.railway.app")
+    assert resolve_miniapp_url() == "https://teleautomator-prod.up.railway.app"
+
+    # 3. Custom domain overrides Railway domain
+    monkeypatch.setenv("CUSTOM_DOMAIN", "panel.mycustomdomain.com")
+    assert resolve_miniapp_url() == "https://panel.mycustomdomain.com"
+
+

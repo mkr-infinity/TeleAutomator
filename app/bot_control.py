@@ -154,32 +154,43 @@ BOT_COMMAND_MENU: list[dict] = [
     {"command": "removeauth", "description": "👋 Remove authorized user — /removeauth <user_id>"},
     {"command": "grantperm", "description": "🔑 Restrict user to commands — /grantperm <user_id> all|/status,/prompt"},
     {"command": "revokeperm", "description": "🔓 Remove user command restrictions — /revokeperm <user_id>"},
+    {"command": "miniapp", "description": "📱 Launch TeleAutomator Mini App — /miniapp"},
 ]
 
 
-def quick_menu_markup() -> dict:
+def quick_menu_markup(miniapp_url: Optional[str] = None) -> dict:
     """Inline quick-action keyboard attached to key cards (welcome, /start, /status, /help).
     Callbacks arrive as 'cmd:<command>' and are routed through the normal command engine."""
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "📊 Status", "callback_data": "cmd:/status"},
-                {"text": "📝 Pending", "callback_data": "cmd:/pending"},
-            ],
-            [
-                {"text": "⏸ Pause 30m", "callback_data": "cmd:/pause 30"},
-                {"text": "▶️ Resume", "callback_data": "cmd:/resume"},
-            ],
-            [
-                {"text": "🛡 Safe-mode", "callback_data": "cmd:/safemode"},
-                {"text": "🤖 AI Config", "callback_data": "cmd:/aiconfig"},
-            ],
-            [
-                {"text": "📋 Chats", "callback_data": "cmd:/chats"},
-                {"text": "📖 Help", "callback_data": "cmd:/help"},
-            ],
-        ]
-    }
+    rows = []
+    if not miniapp_url:
+        try:
+            from app.miniapp_server import resolve_miniapp_url
+            miniapp_url = resolve_miniapp_url()
+        except Exception:
+            miniapp_url = None
+
+    if miniapp_url:
+        rows.append([{"text": "⚡ Launch TeleAutomator", "web_app": {"url": miniapp_url}}])
+
+    rows.extend([
+        [
+            {"text": "📊 Status", "callback_data": "cmd:/status"},
+            {"text": "📝 Pending", "callback_data": "cmd:/pending"},
+        ],
+        [
+            {"text": "⏸ Pause 30m", "callback_data": "cmd:/pause 30"},
+            {"text": "▶️ Resume", "callback_data": "cmd:/resume"},
+        ],
+        [
+            {"text": "🛡 Safe-mode", "callback_data": "cmd:/safemode"},
+            {"text": "🤖 AI Config", "callback_data": "cmd:/aiconfig"},
+        ],
+        [
+            {"text": "📋 Chats", "callback_data": "cmd:/chats"},
+            {"text": "📖 Help", "callback_data": "cmd:/help"},
+        ],
+    ])
+    return {"inline_keyboard": rows}
 
 
 def chatty_picker_markup(chats: list[tuple[int, str]]) -> dict:

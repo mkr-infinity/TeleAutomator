@@ -687,10 +687,53 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def set_telegram_menu_button(bot_token: str, miniapp_url: str) -> None:
+def resolve_miniapp_url() -> str:
+    """Resolve the public HTTPS URL for the Telegram Mini App.
+    Auto-detects Railway (RAILWAY_PUBLIC_DOMAIN / RAILWAY_STATIC_URL), Render,
+    or user-configured MINIAPP_URL / CUSTOM_DOMAIN.
+    """
+    import os
+    # 1. Explicit user override (for custom domain in future)
+    custom = (
+        os.getenv("MINIAPP_URL")
+        or os.getenv("CUSTOM_DOMAIN")
+        or os.getenv("APP_URL")
+        or ""
+    ).strip()
+    if custom:
+        if not custom.startswith("http://") and not custom.startswith("https://"):
+            custom = f"https://{custom}"
+        return custom.rstrip("/")
+
+    # 2. Railway auto-generated domain (all-in-one Railway style, zero extra domain needed)
+    railway = (
+        os.getenv("RAILWAY_PUBLIC_DOMAIN")
+        or os.getenv("RAILWAY_STATIC_URL")
+        or ""
+    ).strip()
+    if railway:
+        if not railway.startswith("http://") and not railway.startswith("https://"):
+            railway = f"https://{railway}"
+        return railway.rstrip("/")
+
+    # 3. Render auto-generated domain
+    render = (os.getenv("RENDER_EXTERNAL_HOSTNAME") or "").strip()
+    if render:
+        return f"https://{render}".rstrip("/")
+
+    return ""
+
+
+def set_telegram_menu_button(
+    bot_token: str,
+    miniapp_url: str,
+    button_text: str = "⚡ TeleAutomator",
+) -> bool:
     """Register the mini app as the bot's chat menu button (does NOT touch commands)."""
+    if not bot_token or not miniapp_url:
+        return False
     payload = json.dumps({
-        "menu_button": {"type": "web_app", "text": "Open Control Panel", "web_app": {"url": miniapp_url}},
+        "menu_button": {"type": "web_app", "text": button_text, "web_app": {"url": miniapp_url}},
     }).encode()
     req = urllib.request.Request(
         f"https://api.telegram.org/bot{bot_token}/setChatMenuButton",
@@ -702,11 +745,14 @@ def set_telegram_menu_button(bot_token: str, miniapp_url: str) -> None:
         with urllib.request.urlopen(req, timeout=15) as resp:
             result = json.loads(resp.read())
             if result.get("ok"):
-                logger.info(f"Mini app registered as the bot's menu button: {miniapp_url}")
+                logger.info(f"Mini app registered as the bot's menu button ('{button_text}'): {miniapp_url}")
+                return True
             else:
                 logger.warning(f"setChatMenuButton failed: {result}")
+                return False
     except Exception as e:
         logger.warning(f"Could not set chat menu button ({miniapp_url}): {e}")
+        return False
 
 
 class MiniAppServer:

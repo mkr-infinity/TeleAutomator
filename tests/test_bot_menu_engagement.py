@@ -45,8 +45,16 @@ def test_quick_menu_markup_structure():
     assert len(rows) >= 3
     for row in rows:
         for btn in row:
-            assert btn["callback_data"].startswith("cmd:/")
+            assert btn.get("callback_data", "").startswith("cmd:/") or btn.get("web_app")
             assert btn["text"].strip()
+
+
+def test_quick_menu_markup_with_miniapp():
+    markup = quick_menu_markup("https://teleautomator.up.railway.app")
+    rows = markup["inline_keyboard"]
+    first_btn = rows[0][0]
+    assert first_btn["text"] == "⚡ Launch TeleAutomator"
+    assert first_btn["web_app"]["url"] == "https://teleautomator.up.railway.app"
 
 
 # --------------------------------------------------------------------- engagement

@@ -30,7 +30,7 @@ _BOT_COMMAND_NAMES = (
     "/addrule", "/delrule", "/rules", "/chats", "/allowchat", "/removechat",
     "/blockchat", "/mentiononly", "/contextttl", "/clearcontext", "/syncpins", "/setcontext", "/showcontext",
     "/delcontext", "/backup", "/pending", "/approve", "/reject", "/name", "/prompt", "/setprompt", "/chatty",
-    "/chatprompt", "/gencontext", "/safemode",
+    "/chatprompt", "/gencontext", "/safemode", "/miniapp",
 )
 
 try:
@@ -1606,6 +1606,23 @@ class ReplyManager:
             lines.append(f"\n🎯 Active working model set to: *{active}*")
             self.db.set_state("ai_model", active)
             return "\n".join(lines)
+
+        if cmd in ("/miniapp", "/panel", "/gui", "/app"):
+            from app.miniapp_server import resolve_miniapp_url
+            url = resolve_miniapp_url()
+            if url:
+                return (
+                    "📱 *TeleAutomator Mini App Control Panel*\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔗 Web App URL: {url}\n\n"
+                    "_Tap the '⚡ TeleAutomator' button in your chat menu or open the link above._"
+                )
+            return (
+                "📱 *TeleAutomator Mini App Control Panel*\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "Mini app server is running on local port 8080.\n"
+                "On Railway, the '⚡ TeleAutomator' menu button is auto-registered without any extra domain setup."
+            )
 
         if cmd == "/status":
             stop_status = "ACTIVE" if self.safety.is_emergency_stopped else "NORMAL"
