@@ -118,6 +118,48 @@
     return `<span class="md">${h}</span>`;
   }
 
+  function formatStructuredAppResponse(raw) {
+    if (!raw) return '<div class="empty">No response received.</div>';
+    const lines = String(raw).split("\n").map((l) => l.trim()).filter(Boolean);
+    const elements = [];
+
+    let startIndex = 0;
+    if (lines.length > 0 && /^[✅❌⚠️❓🚀⚡⏸️▶️🛑🤖]/.test(lines[0])) {
+      const icon = lines[0].slice(0, 2);
+      const title = lines[0].slice(2).trim();
+      elements.push(`<div class="app-callout">
+        <span class="app-callout-icon">${esc(icon)}</span>
+        <div class="app-callout-body"><strong>${esc(plain(title))}</strong></div>
+      </div>`);
+      startIndex = 1;
+    }
+
+    for (let i = startIndex; i < lines.length; i++) {
+      const line = lines[i];
+      if (/^[•\-\*]\s/.test(line)) {
+        const content = line.replace(/^[•\-\*]\s/, "");
+        const cmdMatch = content.match(/^`?(\/[a-zA-Z0-9_]+)`?\s*[-–—:]?\s*(.*)$/);
+        if (cmdMatch) {
+          elements.push(`<div class="app-response-item">
+            <span class="cmd-pill">${esc(cmdMatch[1])}</span>
+            <span>${esc(plain(cmdMatch[2]))}</span>
+          </div>`);
+        } else {
+          elements.push(`<div class="app-response-item">
+            <span class="app-item-bullet">•</span>
+            <span>${esc(plain(content))}</span>
+          </div>`);
+        }
+      } else if (/^(\*|\*\*)[^*]+(\*|\*\*):?$/.test(line)) {
+        elements.push(`<div class="app-response-header">${esc(plain(line))}</div>`);
+      } else {
+        elements.push(`<p class="app-response-text">${esc(plain(line))}</p>`);
+      }
+    }
+
+    return `<div class="app-response-card">${elements.join("")}</div>`;
+  }
+
   function plain(s) {
     return String(s ?? "").replace(/[*_`]/g, "");
   }
@@ -548,7 +590,7 @@
     const res = await api("/api/cmd", { command });
     if (res && res.authorized === false) return maybePaywall(res);
     haptic(res && res.ok ? "ok" : "err");
-    openSheet(`/${command.split(" ")[0].slice(1)}`, md(res && res.response ? res.response : "No response."), [{ label: "Close" }]);
+    openSheet(`/${command.split(" ")[0].slice(1)}`, formatStructuredAppResponse(res && res.response ? res.response : "No response."), [{ label: "Close" }]);
     loadView(currentView);
     return res;
   }
@@ -647,10 +689,11 @@
     const toastEl = $("toast");
     if (toastEl) toastEl.addEventListener("click", () => toastEl.classList.add("hidden"));
 
-    // Android Material 3 Expressive Fluid Wave Touch Ripple
+    // Android Material 3 Expressive Fluid Wave Touch Ripple + Instant Tactile Haptic
     document.addEventListener("pointerdown", (e) => {
-      const target = e.target.closest(".btn, .pay-btn, .pay-check-btn, .chip, .seg, .model-chip, .m3-nav-item, .sheet-close-btn");
+      const target = e.target.closest(".btn, .pay-btn, .pay-check-btn, .chip, .seg, .model-chip, .m3-nav-item, .sheet-close-btn, .linklike");
       if (!target) return;
+      haptic("light");
       const rect = target.getBoundingClientRect();
       const size = Math.max(rect.width, rect.height) * 2;
       const x = e.clientX - rect.left - size / 2;
@@ -662,7 +705,7 @@
       ripple.style.left = `${x}px`;
       ripple.style.top = `${y}px`;
       target.appendChild(ripple);
-      setTimeout(() => ripple.remove(), 580);
+      setTimeout(() => ripple.remove(), 550);
     }, { passive: true });
 
     // Swipe down on bottom sheet to dismiss

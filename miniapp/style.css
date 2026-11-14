@@ -1394,6 +1394,92 @@ h1.brand-name {
 .md code { font-family: ui-monospace, Menlo, monospace; font-size: 13px; background: rgba(255, 255, 255, 0.08); border-radius: 6px; padding: 2px 6px; }
 .md .md-h { font-weight: 700; color: var(--text); display: block; margin: 8px 0 3px; }
 
+/* ---------------------------------- Structured Mini App Command Output */
+.app-response-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.app-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-inner);
+  background: var(--surface-inset);
+  border: 1px solid var(--border);
+  box-shadow: var(--clay-input-shadow);
+}
+
+.app-callout-icon {
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.app-callout-body {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.app-response-header {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  margin-top: 4px;
+  margin-bottom: 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.app-response-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.app-item-bullet {
+  color: var(--accent-bright);
+  font-size: 16px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.cmd-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(99, 102, 241, 0.2);
+  border: 1px solid rgba(129, 140, 248, 0.35);
+  color: #FFFFFF;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
+.app-response-text {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
 /* -------------------------------------------- Model Picker & Playground */
 .model-picker-wrap {
   margin-top: 6px;
