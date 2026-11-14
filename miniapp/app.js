@@ -555,15 +555,20 @@
     el.className = `toast toast-${statusKind}`;
     const iconEl = $("toast-icon");
     const msgEl = $("toast-msg");
+    const closeBtn = $("toast-close");
     if (iconEl) iconEl.innerHTML = statusKind === "ok" ? SVGS.check : (statusKind === "err" ? SVGS.alert : SVGS.info);
     if (msgEl) msgEl.textContent = plainText;
     else el.textContent = plainText;
 
     el.classList.remove("hidden");
-    el.onclick = () => { el.classList.add("hidden"); clearTimeout(toastTimer); };
+    const dismiss = () => { el.classList.add("hidden"); clearTimeout(toastTimer); };
+    el.onclick = dismiss;
+    if (closeBtn) closeBtn.onclick = (e) => { e.stopPropagation(); dismiss(); };
     haptic(statusKind === "err" ? "err" : (statusKind === "ok" ? "ok" : "light"));
     clearTimeout(toastTimer);
-    const duration = plainText.length > 50 ? Math.min(6000, 3200 + (plainText.length - 50) * 35) : 3400;
+    const duration = statusKind === "err"
+      ? Math.min(9000, 4500 + plainText.length * 40)
+      : Math.min(7000, 3600 + plainText.length * 30);
     toastTimer = setTimeout(() => el.classList.add("hidden"), duration);
   }
 
@@ -1444,24 +1449,28 @@
           const initials = u.initials || (u.name || "U").slice(0, 2).toUpperCase();
           const cleanUser = u.username ? u.username.replace(/^@/, "").trim() : "";
           const userLink = cleanUser
-            ? `<a href="https://t.me/${encodeURIComponent(cleanUser)}" target="_blank" rel="noopener noreferrer" class="pill pill-neutral chat-user-link" title="Open in Telegram">@${esc(cleanUser)} ${SVGS.externalLink}</a>`
+            ? `<a href="https://t.me/${encodeURIComponent(cleanUser)}" target="_blank" rel="noopener noreferrer" class="pill pill-compact pill-neutral chat-user-link" title="Open @${esc(cleanUser)} in Telegram">@${esc(cleanUser)} ${SVGS.externalLink}</a>`
             : "";
           const avatarBg = u.avatar_bg || "linear-gradient(135deg, #1E293B 0%, #334155 100%)";
-          return `<div class="user-capsule">
-            <div class="user-avatar-wrap">
-              ${u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="${esc(u.name)}" class="user-avatar-img" loading="lazy" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />` : ""}
-              <div class="user-avatar-circle" style="${u.avatar_url ? 'display:none;' : ''}background:${avatarBg};">${esc(initials)}</div>
-            </div>
-            <div class="capsule-main">
-              <div class="capsule-head">
-                <span class="capsule-title">${esc(u.name)}</span>
-                ${userLink}
-                ${u.main ? '<span class="pill pill-positive">Owner</span>' : '<span class="pill pill-neutral">Authorized</span>'}
+          return `<div class="owner-capsule-card">
+            <div class="owner-capsule-left">
+              <div class="chat-avatar-wrap">
+                ${u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="${esc(u.name)}" class="chat-avatar-img" loading="lazy" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />` : ""}
+                <div class="chat-avatar fallback" style="background:${avatarBg}; ${u.avatar_url ? 'display:none;' : ''}">${esc(initials)}</div>
               </div>
-              <p class="capsule-sub num">ID: ${esc(String(u.id))}</p>
+              <div class="owner-capsule-info">
+                <div class="owner-capsule-name-row">
+                  <span class="owner-capsule-name">${esc(u.name)}</span>
+                  ${userLink}
+                  ${u.main ? '<span class="pill pill-compact pill-positive">Owner</span>' : '<span class="pill pill-compact pill-neutral">Authorized</span>'}
+                </div>
+                <div class="owner-capsule-sub-row">
+                  <span class="num">ID: ${esc(String(u.id))}</span>
+                </div>
+              </div>
             </div>
             <div class="capsule-side">
-              ${u.main ? "" : `<button class="btn small danger" data-unauth="${u.id}">Remove</button>`}
+              ${u.main ? "" : `<button type="button" class="btn small danger" data-unauth="${u.id}">Remove</button>`}
             </div>
           </div>`;
         }).join("")
@@ -2276,14 +2285,32 @@
           if (res && res.results) {
             showHealthResultsPopup(res);
           } else {
-            toast("Health check found 0 working models");
+            const errMsg = (res && res.error) || "Health check found 0 working models";
+            openSheet(
+              "Health Check Failed",
+              `<div class="health-summary-banner negative">
+                <span class="pill pill-negative">0 Working Models</span>
+                <p style="margin-top:8px;font-size:13px;line-height:1.45;word-break:break-word;">${esc(errMsg)}</p>
+              </div>
+              <p class="field-hint">Check your API key, endpoint URL, or quota, then try again.</p>`,
+              [{ label: "Retry", kind: "primary", onClick: () => checkModelsHealth() }, { label: "Close" }]
+            );
+            toast(errMsg, "err");
           }
         }
       } catch (e) {
         badge.className = "pill pill-negative";
         badge.textContent = "Error";
         replyEl.textContent = "Health check request failed: " + e.message;
-        toast("Health check error: " + e.message);
+        openSheet(
+          "Health Check Request Error",
+          `<div class="health-summary-banner negative">
+            <span class="pill pill-negative">Connection Error</span>
+            <p style="margin-top:8px;font-size:13px;line-height:1.45;">${esc(e.message)}</p>
+          </div>`,
+          [{ label: "Close" }]
+        );
+        toast("Health check error: " + e.message, "err");
       } finally {
         btn.disabled = false;
         btn.textContent = "Check health";
@@ -2301,17 +2328,48 @@
       try {
         const res = await api("/api/fetch_models", { base_url: baseurl, api_key: apikey });
         if (!res || !res.ok) {
-          toast(res && res.error ? res.error : "Failed to load models from endpoint");
+          const errDetail = (res && res.error) || "Failed to load models from endpoint";
+          const errUrl = (res && res.url) || baseurl || "https://generativelanguage.googleapis.com/v1beta/models";
+          openSheet(
+            "Fetch Models Failed",
+            `<div class="health-summary-banner negative">
+              <span class="pill pill-negative">Endpoint Error</span>
+              <p style="margin-top:8px;font-size:13px;line-height:1.45;word-break:break-word;">${esc(errDetail)}</p>
+              <p class="faint sm" style="margin-top:6px;word-break:break-all;">Target URL: ${esc(errUrl)}</p>
+            </div>
+            <p class="field-hint">Verify your Base URL, API key, and network connectivity, then try again.</p>`,
+            [
+              { label: "Retry", kind: "primary", onClick: () => fetchModels() },
+              { label: "Close" }
+            ]
+          );
+          toast(errDetail, "err");
           return;
         }
         const models = res.models || [];
         if (!models.length) {
-          toast("Endpoint returned 0 models.");
+          openSheet(
+            "Fetch Models",
+            `<div class="health-summary-banner negative">
+              <span class="pill pill-negative">0 Models Returned</span>
+              <p style="margin-top:8px;font-size:13px;line-height:1.45;">The endpoint answered successfully but reported 0 generative text models.</p>
+            </div>`,
+            [{ label: "Close" }]
+          );
+          toast("Endpoint returned 0 models.", "info");
           return;
         }
         showFetchModelsPopup(models);
       } catch (e) {
-        toast("Error fetching models: " + e.message);
+        openSheet(
+          "Fetch Models Error",
+          `<div class="health-summary-banner negative">
+            <span class="pill pill-negative">Network Error</span>
+            <p style="margin-top:8px;font-size:13px;line-height:1.45;">${esc(e.message)}</p>
+          </div>`,
+          [{ label: "Close" }]
+        );
+        toast("Error fetching models: " + e.message, "err");
       } finally {
         btn.disabled = false;
         btn.textContent = "Fetch models";

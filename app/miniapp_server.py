@@ -461,6 +461,14 @@ class MiniAppAPI:
         for uid in ids:
             meta = self.ctx.db.get_chat_metadata(uid) or {} if hasattr(self.ctx.db, "get_chat_metadata") else {}
             username = meta.get("username") or ""
+            if not username:
+                try:
+                    _, resolved_meta, _ = self._resolve_user_target(str(uid))
+                    if resolved_meta and resolved_meta.get("username"):
+                        meta = resolved_meta
+                        username = meta.get("username") or ""
+                except Exception:
+                    pass
             clean_user = username.lstrip("@").strip()
             avatar_url = f"https://t.me/i/userpic/320/{clean_user}.jpg" if clean_user else ""
             title = meta.get("title") or ("Main Owner" if uid == main_id else f"User {uid}")
@@ -664,6 +672,13 @@ class MiniAppAPI:
                 return {"ok": False, "response": err or f"Could not resolve '{raw_target}'."}
             target = resolved_id
             meta = resolved_meta
+        else:
+            if self.ctx.db and hasattr(self.ctx.db, "get_chat_metadata"):
+                meta = self.ctx.db.get_chat_metadata(target)
+            if not meta or not meta.get("username"):
+                _, resolved_meta, _ = self._resolve_user_target(str(target))
+                if resolved_meta:
+                    meta = resolved_meta
 
         if target <= 0:
             return {"ok": False, "response": "Authorized owners must be Telegram user accounts, not groups or channels."}
@@ -1252,7 +1267,9 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         if file_path.name == "sw.js":
             self.send_header("Service-Worker-Allowed", "/")
         self.end_headers()

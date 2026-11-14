@@ -612,7 +612,7 @@ def test_service_worker_asset_and_registration():
     sw_file = miniapp_dir / "sw.js"
     assert sw_file.is_file()
     sw_content = sw_file.read_text(encoding="utf-8")
-    assert "teleautomator-v3.0.2" in sw_content
+    assert "teleautomator-v3.0.3" in sw_content
     assert "caches.open" in sw_content
     assert "self.skipWaiting" in sw_content
     assert "self.clients.claim" in sw_content

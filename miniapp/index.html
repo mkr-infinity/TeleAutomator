@@ -51,7 +51,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=3.0.3">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -244,9 +244,7 @@
         <input type="text" id="allow-id" placeholder="Telegram ID or @username (e.g. -100... or @group)">
         <button type="button" class="btn primary" id="allow-btn">Allow</button>
       </div>
-      <div class="card list" id="chat-list"></div>
-    </section>
-      <div class="card list" id="chat-list"></div>
+      <div class="chat-capsules-container" id="chat-list"></div>
     </section>
 
     <!-- Persona -->
@@ -300,10 +298,10 @@
 
       <h3 class="section-h">Owners &amp; Access</h3>
       <div class="allow-row">
-        <input type="text" id="auth-id" placeholder="Telegram user ID or @username">
+        <input type="text" id="auth-id" placeholder="Telegram user ID or @username (e.g. 123456789 or @alice)">
         <button type="button" class="btn primary" id="auth-add">Add owner</button>
       </div>
-      <div class="card list" id="access-list"></div>
+      <div class="owner-capsules-container" id="access-list"></div>
 
       <h3 class="section-h">AI engine</h3>
       <div class="card form">
@@ -593,9 +591,10 @@
 
 <div id="toast" class="toast hidden" role="status">
   <span class="toast-icon" id="toast-icon"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></span>
-  <span class="toast-msg" id="toast-msg"></span>
+  <div class="toast-msg" id="toast-msg"></div>
+  <button type="button" class="toast-close-btn" id="toast-close" aria-label="Dismiss toast"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
 </div>
 
-<script src="app.js"></script>
+<script src="app.js?v=3.0.3"></script>
 </body>
 </html>
