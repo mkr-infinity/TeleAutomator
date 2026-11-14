@@ -430,6 +430,76 @@ def test_resolve_miniapp_url_railway_and_custom(monkeypatch):
     assert resolve_miniapp_url() == "https://panel.mycustomdomain.com"
 
 
+def test_handle_fetch_models_gemini(tmp_path, monkeypatch):
+    ctx, _ = make_ctx(tmp_path)
+    api = MiniAppAPI(ctx)
+
+    class MockGeminiResponse:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def read(self):
+            return json.dumps({
+                "models": [
+                    {"name": "models/gemini-2.5-flash", "supportedGenerationMethods": ["generateContent"]},
+                    {"name": "models/gemini-2.5-flash-lite", "supportedGenerationMethods": ["generateContent"]},
+                    {"name": "models/text-embedding-004", "supportedGenerationMethods": ["embedContent"]},
+                ]
+            }).encode("utf-8")
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=10.0: MockGeminiResponse())
+    res = api.handle_fetch_models(api_key="AIzaSyTestKey")
+    assert res["ok"] is True
+    assert "gemini-2.5-flash-lite" in res["models"]
+    assert "gemini-2.5-flash" in res["models"]
+    assert "text-embedding-004" not in res["models"]
+
+
+def test_handle_test_model_gemini_custom_message(tmp_path, monkeypatch):
+    ctx, _ = make_ctx(tmp_path)
+    api = MiniAppAPI(ctx)
+
+    sent_prompt = None
+
+    class MockGeminiTestResp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def read(self):
+            return json.dumps({
+                "candidates": [
+                    {"content": {"parts": [{"text": f"Echo: {sent_prompt}"}]}}
+                ]
+            }).encode("utf-8")
+
+    def mock_gemini_open(req, timeout=12.0):
+        nonlocal sent_prompt
+        body = json.loads(req.data.decode("utf-8"))
+        sent_prompt = body["contents"][0]["parts"][0]["text"]
+        return MockGeminiTestResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_gemini_open)
+    res = api.handle_test_model(
+        message="custom test question 123",
+        model="gemini-2.5-flash",
+        api_key="AIzaSyTestKey",
+    )
+    assert res["ok"] is True
+    assert "custom test question 123" in res["reply"]
+    assert res["working_models"] == ["gemini-2.5-flash"]
+
+
+def test_map_action_allow_supports_username(tmp_path):
+    ctx, _ = make_ctx(tmp_path)
+    api = MiniAppAPI(ctx)
+    cmd = api.map_action_to_command("allow", {"chat_id": "@mygroup"})
+    assert cmd == "/allowchat @mygroup"
+    cmd_remove = api.map_action_to_command("remove", {"chat_id": "@mygroup"})
+    assert cmd_remove == "/removechat @mygroup"
+
+
 def test_validate_init_data_real_telegram_url_encoded():
     import urllib.parse
     token = TEST_TOKEN

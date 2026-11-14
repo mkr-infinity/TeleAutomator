@@ -9,6 +9,26 @@
   const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
   const DEMO = new URLSearchParams(location.search).has("demo");
 
+  const SVGS = {
+    check: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>',
+    close: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+    alert: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+    info: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
+    edit: '<svg class="btn-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
+    brain: '<svg class="btn-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04z"/></svg>',
+    msg: '<svg class="btn-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    trash: '<svg class="btn-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+    bolt: '<svg class="preset-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+    handshake: '<svg class="preset-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M11 17a2.5 2.5 0 0 0 4 0l4-4a2.5 2.5 0 0 0-3.5-3.5L14 11l-3-3-4 4a2.5 2.5 0 0 0 3.5 3.5Z"/><path d="m14 11 3.5-3.5a2.5 2.5 0 0 1 3.5 3.5l-4 4"/></svg>',
+    rocket: '<svg class="preset-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4.5c1.62-1.63 5-2.5 5-2.5"/><path d="M12 15v5s3.03-.55 4.5-2c1.63-1.62 2.5-5 2.5-5"/></svg>',
+    theater: '<svg class="preset-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M2 10s3-3 10-3 10 3 10 3-3 8-10 8-10-8-10-8Z"/><circle cx="8" cy="11" r="1.5"/><circle cx="16" cy="11" r="1.5"/></svg>',
+    refresh: '<svg class="preset-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>',
+    mic: '<svg class="voice-badge-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>',
+    camera: '<svg class="media-badge-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>',
+  };
+
+  let cachedEndpointModels = [];
+
   // ------------------------------------------------------------ api layer
 
   function initDataHeader() {
@@ -58,13 +78,13 @@
     ],
     pending: [
       { id: 41, chat_id: -1001987654321, chat_title: "Startup India Founders", username: "startupindia", avatar_url: "https://t.me/i/userpic/320/startupindia.jpg", initials: "SI", sender_id: 11223344, incoming_text: "btw are you joining the demo day on friday? wanted to show you the pitch deck before we send it out", text: "yeah definitely planning to join! send the deck over, will review it tonight.", created: "2026-11-13 14:22" },
-      { id: 40, chat_id: 987654321, chat_title: "Aarav", username: "aaravv", avatar_url: "https://t.me/i/userpic/320/aaravv.jpg", initials: "AA", sender_id: 987654321, incoming_text: "Reached home! Call me when free, need to ask about the weekend plan.", text: "🎙️ Reached home! Call me when free, need to ask about the weekend plan.", created: "2026-11-13 13:05", is_voice: true, voice_dur: "0:21" },
+      { id: 40, chat_id: 987654321, chat_title: "Aarav", username: "aaravv", avatar_url: "https://t.me/i/userpic/320/aaravv.jpg", initials: "AA", sender_id: 987654321, incoming_text: "Reached home! Call me when free, need to ask about the weekend plan.", text: "[Voice Note] Reached home! Call me when free, need to ask about the weekend plan.", created: "2026-11-13 13:05", is_voice: true, voice_dur: "0:21" },
     ],
     activity: [
       { chat: "Delhi Tech Meetup", chat_id: -1001765432109, sender: "TeleAutomator", text: "yeah the venue shifted to Hauz Khas this month, same 7pm slot", ts: "2026-11-13 14:18" },
-      { chat: "Rohan Sharma", chat_id: 123456789, sender: "TeleAutomator", text: "🎙️ Haan bhai venue pahunch gaya, 2nd floor hall booked hai", ts: "2026-11-13 13:52", is_voice: true, voice_dur: "0:14" },
+      { chat: "Rohan Sharma", chat_id: 123456789, sender: "TeleAutomator", text: "[Voice Note] Haan bhai venue pahunch gaya, 2nd floor hall booked hai", ts: "2026-11-13 13:52", is_voice: true, voice_dur: "0:14" },
       { chat: "Startup India Founders", chat_id: -1001987654321, sender: "TeleAutomator", text: "pricing page looks solid, maybe add a monthly option", ts: "2026-11-13 12:30" },
-      { chat: "Mom", chat_id: 876543210, sender: "TeleAutomator", text: "📷 [photo] Lunch pic sent, looks great!", ts: "2026-11-13 11:04", is_media: true },
+      { chat: "Mom", chat_id: 876543210, sender: "TeleAutomator", text: "[Photo] Lunch pic sent, looks great!", ts: "2026-11-13 11:04", is_media: true },
     ],
     access: [
       { id: 555000111, name: "Kaif", username: "@mkr_infinity", avatar_url: "https://t.me/i/userpic/320/mkr_infinity.jpg", main: true, perms: "all" },
@@ -106,14 +126,17 @@
     }
     if (path === "/api/test_model") {
       const model = (body && body.model) || "gemini-2.5-flash-lite";
+      const userMsg = (body && body.message) || "hello";
+      const candidates = model.split(/[,;]/).map((m) => m.trim()).filter(Boolean);
+      const used = candidates[0] || "gemini-2.5-flash-lite";
       return {
         ok: true,
-        model,
-        response: "Hello! TeleAutomator AI engine is online and responding quickly in test mode.",
-        results: [
-          { model, status: "ok", latency: 142 }
-        ],
-        pruned_count: 0
+        model_used: used,
+        reply: `TeleAutomator AI (${used}): Received "${userMsg}". AI pipeline responsive!`,
+        results: candidates.map((m) => ({ model: m, ok: true, detail: "Working (118ms)" })),
+        working_models: candidates,
+        failed_models: [],
+        active_model: model,
       };
     }
     if (path === "/api/cmd") {
@@ -121,7 +144,7 @@
       if (cmd.includes("checkmodels")) {
         return {
           ok: true,
-          response: "✅ *Model Health Check*\n\n• `gemini-2.5-flash-lite`: Available (112ms)\n• `gemini-2.5-flash`: Available (148ms)\n• `gpt-4o-mini`: Available (195ms)\n\nAll candidate models healthy and rotating properly."
+          response: "*Model Health Check*\n\n• `gemini-2.5-flash-lite`: Available (112ms)\n• `gemini-2.5-flash`: Available (148ms)\n• `gpt-4o-mini`: Available (195ms)\n\nAll candidate models healthy and rotating properly."
         };
       }
       return { ok: true, response: `*Demo* command \`${esc(cmd || "/demo")}\` ran against fixture data.\n\n• Changes persisted locally for preview.` };
@@ -302,14 +325,21 @@
     const elements = [];
 
     let startIndex = 0;
-    if (lines.length > 0 && /^[✅❌⚠️❓🚀⚡⏸️▶️🛑🤖]/.test(lines[0])) {
-      const icon = lines[0].slice(0, 2);
-      const title = lines[0].slice(2).trim();
-      elements.push(`<div class="app-callout">
-        <span class="app-callout-icon">${esc(icon)}</span>
-        <div class="app-callout-body"><strong>${esc(plain(title))}</strong></div>
-      </div>`);
-      startIndex = 1;
+    if (lines.length > 0) {
+      const first = lines[0];
+      const isErr = /^(\u274c|\[error\]|error|fail)/i.test(first);
+      const isOk = /^(\u2705|\[ok\]|success)/i.test(first);
+      const isWarning = /^(\u26a0|warning|alert)/i.test(first);
+      const isInfo = /^(\u2139|\ud83d\udd0d|info)/i.test(first);
+      if (isErr || isOk || isWarning || isInfo) {
+        const title = first.replace(/^[^a-zA-Z0-9*_\s]+/, "").trim();
+        const iconSvg = isErr ? SVGS.alert : (isOk ? SVGS.check : SVGS.info);
+        elements.push(`<div class="app-callout">
+          <span class="app-callout-icon">${iconSvg}</span>
+          <div class="app-callout-body"><strong>${esc(plain(title))}</strong></div>
+        </div>`);
+        startIndex = 1;
+      }
     }
 
     for (let i = startIndex; i < lines.length; i++) {
@@ -423,7 +453,7 @@
     el.className = `toast toast-${statusKind}`;
     const iconEl = $("toast-icon");
     const msgEl = $("toast-msg");
-    if (iconEl) iconEl.textContent = statusKind === "ok" ? "✓" : (statusKind === "err" ? "!" : "ℹ");
+    if (iconEl) iconEl.innerHTML = statusKind === "ok" ? SVGS.check : (statusKind === "err" ? SVGS.alert : SVGS.info);
     if (msgEl) msgEl.textContent = plainText;
     else el.textContent = plainText;
 
@@ -553,9 +583,6 @@
   }
 
   function renderSparkline(activityList, replies24h) {
-    const container = $("sparkline-bars");
-    if (!container) return;
-
     const totalBadge = $("activity-total-badge");
     if (totalBadge) {
       totalBadge.textContent = `${replies24h || 0} in 24h`;
@@ -583,24 +610,73 @@
 
     const maxVal = Math.max(1, ...buckets);
 
-    container.innerHTML = buckets.map((count, idx) => {
-      const isCurrent = idx === 23;
-      const heightPx = count > 0 ? Math.round(6 + (count / maxVal) * 44) : 6;
-      const cls = ["spark-bar"];
-      if (count > 0) cls.push("active");
-      if (isCurrent) cls.push("current");
-      const hourLabel = idx === 23 ? "Current hour" : `${23 - idx}h ago`;
-      const tip = `${count} ${count === 1 ? "reply" : "replies"} (${hourLabel})`;
+    const svg = $("pulse-graph-svg");
+    const areaPathEl = $("pulse-area-path");
+    const linePathEl = $("pulse-line-path");
+    const pointsGroup = $("pulse-points-group");
+    const tooltip = $("pulse-graph-tooltip");
 
-      return `<div class="${cls.join(" ")}" style="height: ${heightPx}px" title="${tip}" data-tip="${tip}"></div>`;
-    }).join("");
+    if (svg && areaPathEl && linePathEl) {
+      const padX = 16;
+      const width = 500;
+      const usableW = width - (padX * 2);
+      const baselineY = 104;
+      const maxH = 80;
 
-    container.querySelectorAll(".spark-bar").forEach((bar) => {
-      bar.addEventListener("click", () => {
-        haptic("light");
-        toast(bar.dataset.tip, "info");
+      const pts = buckets.map((count, idx) => {
+        const x = padX + idx * (usableW / 23);
+        const y = count > 0 ? baselineY - ((count / maxVal) * maxH) : baselineY;
+        return { x, y, count, idx };
       });
-    });
+
+      // Smooth spline interpolation using cubic bezier
+      let d = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const p0 = pts[i === 0 ? 0 : i - 1];
+        const p1 = pts[i];
+        const p2 = pts[i + 1];
+        const p3 = pts[i + 2 < pts.length ? i + 2 : i + 1];
+
+        const cp1x = p1.x + (p2.x - p0.x) / 6;
+        const cp1y = p1.y + (p2.y - p0.y) / 6;
+        const cp2x = p2.x - (p3.x - p1.x) / 6;
+        const cp2y = p2.y - (p3.y - p1.y) / 6;
+
+        d += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+      }
+
+      linePathEl.setAttribute("d", d);
+      const areaD = `${d} L ${pts[pts.length - 1].x.toFixed(1)} 116 L ${pts[0].x.toFixed(1)} 116 Z`;
+      areaPathEl.setAttribute("d", areaD);
+
+      if (pointsGroup) {
+        let dotsHtml = "";
+        pts.forEach((p) => {
+          const isCurrent = p.idx === 23;
+          const showDot = p.count > 0 || isCurrent;
+          if (!showDot) return;
+          const hourLabel = isCurrent ? "Current hour" : `${23 - p.idx}h ago`;
+          const tip = `${p.count} ${p.count === 1 ? "reply" : "replies"} (${hourLabel})`;
+          const r = isCurrent ? 4.5 : 3.5;
+          const cls = isCurrent ? "pulse-dot current" : "pulse-dot";
+          dotsHtml += `<circle class="${cls}" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${r}" data-tip="${esc(tip)}" tabindex="0" role="button" aria-label="${esc(tip)}"></circle>`;
+        });
+        pointsGroup.innerHTML = dotsHtml;
+
+        pointsGroup.querySelectorAll(".pulse-dot").forEach((dot) => {
+          const showTip = () => {
+            haptic("light");
+            if (tooltip) {
+              tooltip.textContent = dot.dataset.tip;
+              tooltip.classList.remove("hidden");
+            }
+          };
+          dot.addEventListener("mouseenter", showTip);
+          dot.addEventListener("click", showTip);
+          dot.addEventListener("touchstart", showTip, { passive: true });
+        });
+      }
+    }
   }
 
   function formatMode(m) {
@@ -655,16 +731,17 @@
   }
 
   function feedRowHtml(a) {
-    const isVoice = Boolean(a.is_voice || /\[voice|\[audio|🎤|🎙️|\(voice\)/i.test(a.text || "") || a.voice_dur);
-    const isMedia = Boolean(a.is_media || /\[photo|\[image|\[video|\[document|📷|📹|📎|\(media\)/i.test(a.text || ""));
+    const isVoice = Boolean(a.is_voice || /\[voice|\[audio|\(voice\)/i.test(a.text || "") || a.voice_dur);
+    const isMedia = Boolean(a.is_media || /\[photo|\[image|\[video|\[document|\(media\)/i.test(a.text || ""));
     const voiceBadge = isVoice
       ? `<div class="voice-badge">
+          ${SVGS.mic}
           <span class="voice-wave"><span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span></span>
           <span>Voice Note ${esc(a.voice_dur ? `(${a.voice_dur})` : "")}</span>
         </div>`
       : "";
     const mediaBadge = isMedia && !isVoice
-      ? `<div class="media-badge"><span>📷 Media Reply</span></div>`
+      ? `<div class="media-badge">${SVGS.camera} <span>Media Reply</span></div>`
       : "";
 
     return `<div class="feed-row">
@@ -720,10 +797,10 @@
         </div>
       </div>
       <div class="chat-actions chat-actions-grid">
-        <button type="button" class="btn small action-btn-prompt" data-op="prompt"><span class="btn-icon">✏️</span> Prompt</button>
-        <button type="button" class="btn small action-btn-context" data-op="context"><span class="btn-icon">🧠</span> Context</button>
-        <button type="button" class="btn small action-btn-chatty" data-op="chatty"><span class="btn-icon">💬</span> Chatty</button>
-        <button type="button" class="btn small danger action-btn-remove" data-op="remove"><span class="btn-icon">🗑️</span> Remove</button>
+        <button type="button" class="btn small action-btn-prompt" data-op="prompt">${SVGS.edit} Prompt</button>
+        <button type="button" class="btn small action-btn-context" data-op="context">${SVGS.brain} Context</button>
+        <button type="button" class="btn small action-btn-chatty" data-op="chatty">${SVGS.msg} Chatty</button>
+        <button type="button" class="btn small danger action-btn-remove" data-op="remove">${SVGS.trash} Remove</button>
       </div>
     </div>`;
   }
@@ -796,37 +873,37 @@
     {
       id: "casual",
       name: "Casual Friend",
-      icon: "💬",
+      icon: SVGS.msg,
       prompt: "Be casual, natural, concise, and friendly. Speak like a close peer on Telegram, avoid corporate jargon, and keep messages under 2-3 sentences."
     },
     {
       id: "exec",
       name: "Executive & Crisp",
-      icon: "⚡",
+      icon: SVGS.bolt,
       prompt: "Be extremely concise, professional, and high-signal. Answer directly in 1-2 clear sentences with crisp facts. No fluff or filler."
     },
     {
       id: "support",
       name: "Support Specialist",
-      icon: "🤝",
+      icon: SVGS.handshake,
       prompt: "Be warm, helpful, empathetic, and solution-oriented. Clarify issues politely, guide step-by-step, and provide reassuring, reliable answers."
     },
     {
       id: "tech",
       name: "Tech & Automation",
-      icon: "🚀",
+      icon: SVGS.rocket,
       prompt: "Speak in natural tech community tone. Sharp, knowledgeable about systems and automation, helpful without being overly formal."
     },
     {
       id: "witty",
       name: "Witty & Fun",
-      icon: "🎭",
+      icon: SVGS.theater,
       prompt: "Be playful, lightly humorous, cheerful, and witty. Keep it engaging, upbeat, and fun while still answering questions accurately."
     },
     {
       id: "reset",
       name: "Built-in Default",
-      icon: "🔄",
+      icon: SVGS.refresh,
       prompt: ""
     }
   ];
@@ -919,16 +996,17 @@
   }
 
   function approvalCardHtml(p) {
-    const isVoice = Boolean(p.is_voice || /\[voice|\[audio|🎤|🎙️|\(voice\)/i.test(p.text || "") || p.voice_dur);
-    const isMedia = Boolean(p.is_media || /\[photo|\[image|\[video|\[document|📷|📹|📎|\(media\)/i.test(p.text || ""));
+    const isVoice = Boolean(p.is_voice || /\[voice|\[audio|\(voice\)/i.test(p.text || "") || p.voice_dur);
+    const isMedia = Boolean(p.is_media || /\[photo|\[image|\[video|\[document|\(media\)/i.test(p.text || ""));
     const voiceBadge = isVoice
       ? `<div class="voice-badge">
+          ${SVGS.mic}
           <span class="voice-wave"><span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span></span>
           <span>Voice Note ${esc(p.voice_dur ? `(${p.voice_dur})` : "")}</span>
         </div>`
       : "";
     const mediaBadge = isMedia && !isVoice
-      ? `<div class="media-badge"><span>📷 Media Draft</span></div>`
+      ? `<div class="media-badge">${SVGS.camera} <span>Media Draft</span></div>`
       : "";
 
     const cleanUser = p.username ? p.username.replace(/^@/, "").trim() : "";
@@ -937,12 +1015,12 @@
     return `<div class="approval-card-wrap" data-id="${p.id}">
       <div class="approval-swipe-underlay">
         <div class="swipe-hint swipe-hint-approve">
-          <span class="swipe-icon">✓</span>
+          <span class="swipe-icon">${SVGS.check}</span>
           <span>Approve</span>
         </div>
         <div class="swipe-hint swipe-hint-reject">
           <span>Reject</span>
-          <span class="swipe-icon">✕</span>
+          <span class="swipe-icon">${SVGS.close}</span>
         </div>
       </div>
       <div class="approval-card-content">
@@ -979,8 +1057,8 @@
         </div>
 
         <div class="approval-actions">
-          <button class="btn small primary" data-ap="approve" data-id="${p.id}">✓ Approve</button>
-          <button class="btn small danger" data-ap="reject" data-id="${p.id}">✕ Reject</button>
+          <button class="btn small primary" data-ap="approve" data-id="${p.id}">${SVGS.check} Approve</button>
+          <button class="btn small danger" data-ap="reject" data-id="${p.id}">${SVGS.close} Reject</button>
           <span class="swipe-hint-pill">Swipe right to approve · left to reject</span>
         </div>
       </div>
@@ -1143,6 +1221,15 @@
     setSegActive("seg-lang", s.lang || "english");
     setSegActive("seg-maxtokens", s.max_tokens || "512");
 
+    if (!cachedEndpointModels.length && s.ai_model) {
+      const curModels = s.ai_model.split(/[,;]/).map((x) => x.trim().replace(/^models\//, "")).filter(Boolean);
+      if (curModels.length > 0) {
+        renderModelChips(curModels);
+      }
+    } else if (cachedEndpointModels.length > 0) {
+      renderModelChips(cachedEndpointModels);
+    }
+
     // 4. Keyword Rules
     const rulesList = $("rules-list");
     if (rulesList) {
@@ -1250,7 +1337,7 @@
     isFlushingQueue = false;
     if (synced > 0) {
       haptic("ok");
-      toast(`Synced ${synced} offline action${synced > 1 ? "s" : ""} ⚡`, "ok");
+      toast(`Synced ${synced} offline action${synced > 1 ? "s" : ""}`, "ok");
       loadView(currentView);
     }
   }
@@ -1286,7 +1373,7 @@
       // Offline fallback: queue action for automatic sync upon reconnection
       enqueueAction(action, params);
       haptic("light");
-      toast("Action queued offline ⚡ Will auto-sync when connected", "info");
+      toast("Action queued offline. Will auto-sync when connected", "info");
       return { ok: true, queued: true };
     }
 
@@ -1413,7 +1500,7 @@
     if (syncBadge) {
       syncBadge.addEventListener("click", () => {
         const count = loadOfflineQueue().length;
-        toast(count ? `${count} action(s) pending sync ⚡ Reconnecting will auto-sync.` : "Offline queue empty ⚡", "info");
+        toast(count ? `${count} action(s) pending sync. Reconnecting will auto-sync.` : "Offline queue empty", "info");
         flushOfflineQueue();
       });
     }
@@ -1569,20 +1656,140 @@
       runAction("model", { value: v });
     });
     $("ai-model").addEventListener("keydown", (e) => { if (e.key === "Enter") $("ai-model-save").click(); });
-    $("ai-check").addEventListener("click", () => runCmd("/checkmodels"));
-    $("ai-key-save").addEventListener("click", () => {
-      const v = $("ai-key").value.trim();
-      if (!v) return toast("Paste a key first");
-      $("ai-key").value = "";
-      runAction("apikey", { value: v });
-    });
-    $("ai-key").addEventListener("keydown", (e) => { if (e.key === "Enter") $("ai-key-save").click(); });
-    $("ai-baseurl-save").addEventListener("click", () => {
-      const v = $("ai-baseurl").value.trim();
-      if (!v) return toast("Enter an endpoint URL");
-      runAction("baseurl", { value: v });
-    });
-    $("ai-baseurl").addEventListener("keydown", (e) => { if (e.key === "Enter") $("ai-baseurl-save").click(); });
+    // Model Fallback Multi-Select Chips
+    function renderModelChips(modelsList, selectedOverride) {
+      const container = $("ai-model-chips");
+      if (!container) return;
+      if (!modelsList || !modelsList.length) {
+        container.innerHTML = '<div class="empty sm">No models found. Tap &ldquo;Fetch models&rdquo; or type manually.</div>';
+        return;
+      }
+
+      let selectedList;
+      if (Array.isArray(selectedOverride)) {
+        selectedList = selectedOverride.map((s) => String(s).trim().replace(/^models\//, "")).filter(Boolean);
+      } else {
+        selectedList = ($("ai-model").value || "")
+          .split(/[,;]/)
+          .map((s) => s.trim().replace(/^models\//, ""))
+          .filter(Boolean);
+      }
+
+      container.innerHTML = modelsList.map((m) => {
+        const cleanM = String(m).replace(/^models\//, "").trim();
+        const idx = selectedList.indexOf(cleanM);
+        const isActive = idx !== -1;
+        const badgeHtml = isActive ? `<span class="chip-order-badge">${idx + 1}</span>` : "";
+        return `<button class="model-chip ${isActive ? "active" : ""}" data-model="${esc(cleanM)}" type="button">${badgeHtml}${esc(cleanM)}</button>`;
+      }).join("");
+
+      container.querySelectorAll(".model-chip").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          haptic("light");
+          const modelName = chip.dataset.model;
+          let currentSelected = ($("ai-model").value || "")
+            .split(/[,;]/)
+            .map((s) => s.trim().replace(/^models\//, ""))
+            .filter(Boolean);
+
+          const existingIdx = currentSelected.indexOf(modelName);
+          if (existingIdx !== -1) {
+            currentSelected.splice(existingIdx, 1);
+            toast(`Removed ${modelName} from fallback chain (${currentSelected.length} active)`);
+          } else {
+            currentSelected.push(modelName);
+            toast(`Added ${modelName} as fallback #${currentSelected.length}`);
+          }
+
+          const newChain = currentSelected.join(",");
+          $("ai-model").value = newChain;
+          runAction("model", { value: newChain });
+          renderModelChips(modelsList, currentSelected);
+        });
+      });
+    }
+
+    // Health check candidate models and auto-add healthy models
+    async function checkModelsHealth() {
+      const btn = $("ai-check");
+      const baseurl = $("ai-baseurl").value.trim();
+      const apikey = $("ai-key").value.trim();
+      const prompt = ($("test-prompt").value || "").trim() || "hi";
+      const candidateModels = cachedEndpointModels.length
+        ? cachedEndpointModels.join(",")
+        : ($("ai-model").value.trim() || "gemini-2.5-flash-lite,gemini-2.5-flash");
+
+      btn.disabled = true;
+      btn.textContent = "Checking...";
+      toast("Pinging candidate models for live health...");
+
+      const box = $("test-results-box");
+      const badge = $("test-badge");
+      const modelEl = $("test-model-name");
+      const replyEl = $("test-reply-content");
+      const summaryEl = $("test-models-summary");
+
+      box.classList.remove("hidden");
+      badge.className = "pill pill-warning";
+      badge.textContent = "Testing...";
+      modelEl.textContent = "Verifying live endpoint health...";
+      replyEl.textContent = "Running health verification...";
+
+      try {
+        const res = await api("/api/test_model", {
+          message: prompt,
+          model: candidateModels,
+          base_url: baseurl,
+          api_key: apikey,
+        });
+
+        if (res && res.ok && res.working_models && res.working_models.length > 0) {
+          badge.className = "pill pill-positive";
+          badge.textContent = `${res.working_models.length} Healthy`;
+          modelEl.textContent = `Active rotation: ${res.active_model}`;
+          replyEl.textContent = `"${res.reply}"`;
+
+          $("ai-model").value = res.active_model;
+          if (!cachedEndpointModels.length && res.results) {
+            cachedEndpointModels = res.results.map((r) => r.model);
+            $("models-fetched-count").textContent = `(${cachedEndpointModels.length})`;
+          }
+          renderModelChips(cachedEndpointModels.length ? cachedEndpointModels : res.working_models, res.working_models);
+
+          const pills = (res.results || []).map((r) => {
+            const cls = r.ok ? "test-pill ok" : "test-pill fail";
+            const iconSvg = r.ok
+              ? '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="display:inline-block;vertical-align:-1px;margin-right:4px;"><polyline points="3 8 7 12 13 4"/></svg>'
+              : '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="display:inline-block;vertical-align:-1px;margin-right:4px;"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>';
+            return `<span class="${cls}">${iconSvg}${esc(r.model)}: ${esc(r.detail)}</span>`;
+          });
+          summaryEl.innerHTML = pills.join("");
+
+          toast(`Auto-configured ${res.working_models.length} healthy model(s): ${res.active_model}`);
+        } else {
+          badge.className = "pill pill-negative";
+          badge.textContent = "Failed";
+          modelEl.textContent = "Candidate models unavailable";
+          replyEl.textContent = (res && res.error) || "Health check failed. Check your API key, endpoint URL, or quota.";
+
+          const failSvg = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" style="display:inline-block;vertical-align:-1px;margin-right:4px;"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>';
+          const pills = (res && res.results ? res.results : []).map((r) => {
+            return `<span class="test-pill fail">${failSvg}${esc(r.model)}: ${esc(r.detail)}</span>`;
+          });
+          summaryEl.innerHTML = pills.join("");
+          toast("Health check found 0 working models");
+        }
+      } catch (e) {
+        badge.className = "pill pill-negative";
+        badge.textContent = "Error";
+        replyEl.textContent = "Health check request failed: " + e.message;
+        toast("Health check error: " + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Check health";
+      }
+    }
+    $("ai-check").addEventListener("click", checkModelsHealth);
 
     // Fetch models from endpoint
     async function fetchModels() {
@@ -1598,33 +1805,14 @@
           return;
         }
         const models = res.models || [];
+        cachedEndpointModels = models;
         $("models-fetched-count").textContent = `(${models.length})`;
         if (!models.length) {
           $("ai-model-chips").innerHTML = `<div class="empty sm">Endpoint returned 0 models.</div>`;
           return;
         }
 
-        const curActive = new Set(($("ai-model").value || "").split(/[,;]/).map((s) => s.trim()).filter(Boolean));
-        $("ai-model-chips").innerHTML = models.map((m) => {
-          const isAct = curActive.has(m);
-          return `<button class="model-chip ${isAct ? "active" : ""}" data-model="${esc(m)}">${esc(m)}</button>`;
-        }).join("");
-
-        $("ai-model-chips").querySelectorAll(".model-chip").forEach((chip) => {
-          chip.addEventListener("click", () => {
-            chip.classList.toggle("active");
-            const activeChips = Array.from($("ai-model-chips").querySelectorAll(".model-chip.active"));
-            const selectedModels = activeChips.map((c) => c.dataset.model);
-            $("ai-model").value = selectedModels.join(",");
-            if (selectedModels.length > 1) {
-              toast(`Multi-rotation active (${selectedModels.length} models selected)`);
-            } else if (selectedModels.length === 1) {
-              toast(`Selected: ${selectedModels[0]}`);
-            } else {
-              toast("No models selected");
-            }
-          });
-        });
+        renderModelChips(cachedEndpointModels);
         toast(`Loaded ${models.length} models from endpoint`);
       } catch (e) {
         toast("Error fetching models: " + e.message);
@@ -1675,10 +1863,12 @@
 
           if (res.active_model) {
             $("ai-model").value = res.active_model;
-            const activeSet = new Set(res.active_model.split(","));
-            document.querySelectorAll("#ai-model-chips .model-chip").forEach((c) => {
-              c.classList.toggle("active", activeSet.has(c.dataset.model));
-            });
+            const workingArr = res.working_models || res.active_model.split(",");
+            if (cachedEndpointModels.length) {
+              renderModelChips(cachedEndpointModels, workingArr);
+            } else {
+              renderModelChips(workingArr, workingArr);
+            }
           }
 
           const pills = (res.results || []).map((r) => {

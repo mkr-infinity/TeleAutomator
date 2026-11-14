@@ -496,6 +496,88 @@ class CommandRouterMixin:
 
         return None
 
+    async def _resolve_chat_id(self, raw_target: str) -> tuple[Optional[int], Optional[dict], Optional[str]]:
+        """Resolve a chat ID, @username, or link to (chat_id, metadata, error_msg)."""
+        target = str(raw_target or "").strip()
+        if not target:
+            return (
+                None,
+                None,
+                "❌ Missing chat ID or @username\n"
+                "Fix: Provide an integer chat ID or @username (e.g. /allowchat -1001234567890 or /allowchat @mygroup)",
+            )
+
+        # Case 1: Numeric ID
+        try:
+            cid = int(target)
+            meta = {}
+            if self.db:
+                meta = self.db.get_chat_metadata(cid) or {}
+            return cid, meta, None
+        except ValueError:
+            pass
+
+        # Case 2: Username or link
+        clean = target
+        for prefix in ("https://t.me/", "http://t.me/", "t.me/", "@"):
+            if clean.startswith(prefix):
+                clean = clean[len(prefix):]
+        clean = clean.strip("/").strip()
+
+        if not clean:
+            return (
+                None,
+                None,
+                f"❌ Invalid username '{target}'\n"
+                f"Fix: Enter a valid username without invalid symbols (e.g. @groupname or -1001234567890)",
+            )
+
+        # Try resolving via live Telethon MTProto client
+        if self._client:
+            try:
+                from telethon import utils
+                entity = await self._client.get_entity(clean)
+                cid = utils.get_peer_id(entity)
+                title = ""
+                if hasattr(entity, "title") and entity.title:
+                    title = entity.title
+                elif hasattr(entity, "first_name") and entity.first_name:
+                    title = f"{entity.first_name} {getattr(entity, 'last_name', '') or ''}".strip()
+                username = getattr(entity, "username", "") or clean
+                target_type = "Group" if cid < 0 else "Private contact"
+                meta = {
+                    "chat_id": cid,
+                    "title": title or clean,
+                    "username": username.lstrip("@"),
+                    "chat_type": target_type,
+                }
+                if self.db:
+                    self.db.record_chat_metadata(
+                        cid,
+                        title=meta["title"],
+                        username=meta["username"],
+                        chat_type=target_type,
+                    )
+                return cid, meta, None
+            except Exception as e:
+                logger.debug(f"Telethon get_entity failed for '{clean}': {e}")
+
+        # Try resolving via known_chats in DB
+        if self.db and hasattr(self.db, "find_chat_by_username"):
+            meta = self.db.find_chat_by_username(clean)
+            if meta:
+                return meta["chat_id"], meta, None
+
+        err_msg = (
+            f"❌ Unable to resolve '{target}'\n\n"
+            f"• Issue: Telegram cannot locate a chat, channel, or user with handle '{clean}'.\n"
+            f"• How to fix:\n"
+            f"  1. Verify the username is spelled correctly (case-insensitive).\n"
+            f"  2. For private groups without an @handle, use the numeric Chat ID (e.g. -1001234567890).\n"
+            f"  3. Ensure your Telegram account has joined or interacted with this chat at least once."
+        )
+        return None, None, err_msg
+
     async def _route_chat_context(self, cmd: str, cmd_parts: list[str], text: str) -> Optional[str]:
         if cmd in ("/chats", "/allowlist", "/listchats"):
             chats_df = await self.get_allowed_chats_dataframe()
@@ -512,103 +594,90 @@ class CommandRouterMixin:
             if len(cmd_parts) < 2:
                 return (
                     "❌ /allowchat failed\n"
-                    "Missing: Chat ID\n"
-                    "Fix: /allowchat <chat_id> (e.g. /allowchat -1001234567890 or /allowchat 123456789)"
+                    "Missing: Chat ID or @username\n"
+                    "Fix: /allowchat <chat_id|@username> (e.g. /allowchat -1001234567890 or /allowchat @mygroup)"
                 )
-            try:
-                cid = int(cmd_parts[1])
-                self.privacy.allow_chat(cid)
+            cid, meta, err = await self._resolve_chat_id(cmd_parts[1])
+            if err or cid is None:
+                return err
 
-                title = ""
-                username = ""
-                if self._client:
-                    try:
-                        entity = await self._client.get_entity(cid)
-                        if hasattr(entity, "title") and entity.title:
-                            title = entity.title
-                        elif hasattr(entity, "first_name") and entity.first_name:
-                            title = f"{entity.first_name} {getattr(entity, 'last_name', '') or ''}".strip()
-                        if hasattr(entity, "username") and entity.username:
-                            username = f"@{entity.username}"
-                    except Exception:
-                        pass
+            self.privacy.allow_chat(cid)
+            meta = meta or {}
+            title = meta.get("title", "")
+            username = meta.get("username", "")
 
-                if not title and self.db:
-                    meta = self.db.get_chat_metadata(cid)
-                    if meta:
-                        title = meta.get("title", "")
-                        if meta.get("username"):
-                            username = f"@{meta.get('username')}"
+            if (not title or not username) and self._client:
+                try:
+                    entity = await self._client.get_entity(cid)
+                    if hasattr(entity, "title") and entity.title:
+                        title = entity.title
+                    elif hasattr(entity, "first_name") and entity.first_name:
+                        title = f"{entity.first_name} {getattr(entity, 'last_name', '') or ''}".strip()
+                    if hasattr(entity, "username") and entity.username:
+                        username = f"@{entity.username}"
+                except Exception:
+                    pass
 
-                target = "Group" if cid < 0 else "Private contact"
-                if (title or username) and self.db:
-                    self.db.record_chat_metadata(
-                        cid,
-                        title=title,
-                        username=username.lstrip("@"),
-                        chat_type=target,
-                    )
-                info_parts = []
-                if title:
-                    info_parts.append(f"*{title}*")
-                if username:
-                    info_parts.append(f"({username})")
-                info_str = f" {' '.join(info_parts)}" if info_parts else ""
+            if not title and self.db:
+                stored = self.db.get_chat_metadata(cid)
+                if stored:
+                    title = stored.get("title", "")
+                    if stored.get("username"):
+                        username = f"@{stored.get('username')}"
 
-                result = f"✅ {target}{info_str} [ID: `{cid}`] has been added to the allowlist!"
-                # Immediately initialize isolated context file, pins, and history for this chat/group
-                if hasattr(self, "init_chat_context"):
-                    asyncio.create_task(self.init_chat_context(cid))
-                elif cid < 0 and self._client:
-                    asyncio.create_task(self.generate_chat_voice_profile(cid))
-
-                if cid < 0:
-                    result += "\n\n🧠 _AI is initializing context, reading pinned announcements, and learning how this group talks. Isolated context saved to disk._"
-                else:
-                    result += "\n\n🧠 _AI initialized permanent context for this private chat._"
-                return result
-            except ValueError:
-                return (
-                    "❌ /allowchat failed\n"
-                    "Missing: Valid integer chat ID\n"
-                    "Fix: /allowchat <chat_id> (e.g. /allowchat -1001234567890)"
+            target = "Group" if cid < 0 else "Private contact"
+            if (title or username) and self.db:
+                self.db.record_chat_metadata(
+                    cid,
+                    title=title,
+                    username=username.lstrip("@"),
+                    chat_type=target,
                 )
+            info_parts = []
+            if title:
+                info_parts.append(f"*{title}*")
+            if username:
+                info_parts.append(f"({username if username.startswith('@') else '@' + username})")
+            info_str = f" {' '.join(info_parts)}" if info_parts else ""
+
+            result = f"✅ {target}{info_str} [ID: `{cid}`] has been added to the allowlist!"
+            # Immediately initialize isolated context file, pins, and history for this chat/group
+            if hasattr(self, "init_chat_context"):
+                asyncio.create_task(self.init_chat_context(cid))
+            elif cid < 0 and self._client:
+                asyncio.create_task(self.generate_chat_voice_profile(cid))
+
+            if cid < 0:
+                result += "\n\n🧠 _AI is initializing context, reading pinned announcements, and learning how this group talks. Isolated context saved to disk._"
+            else:
+                result += "\n\n🧠 _AI initialized permanent context for this private chat._"
+            return result
 
         if cmd == "/removechat":
             if len(cmd_parts) < 2:
                 return (
                     "❌ /removechat failed\n"
-                    "Missing: Chat ID\n"
-                    "Fix: /removechat <chat_id> (e.g. /removechat 123456789)"
+                    "Missing: Chat ID or @username\n"
+                    "Fix: /removechat <chat_id|@username> (e.g. /removechat 123456789 or /removechat @mygroup)"
                 )
-            try:
-                cid = int(cmd_parts[1])
-                self.privacy.remove_chat(cid)
-                return f"🗑️ Chat `{cid}` removed from allowlist."
-            except ValueError:
-                return (
-                    "❌ /removechat failed\n"
-                    "Missing: Valid integer chat ID\n"
-                    "Fix: /removechat <chat_id> (e.g. /removechat 123456789)"
-                )
+            cid, _, err = await self._resolve_chat_id(cmd_parts[1])
+            if err or cid is None:
+                return err
+            self.privacy.remove_chat(cid)
+            return f"🗑️ Chat `{cid}` removed from allowlist."
 
         if cmd in ("/blockchat", "/ban"):
             if len(cmd_parts) < 2:
                 return (
                     "❌ /blockchat failed\n"
-                    "Missing: Chat ID\n"
-                    "Fix: /blockchat <chat_id> (e.g. /blockchat 123456789)"
+                    "Missing: Chat ID or @username\n"
+                    "Fix: /blockchat <chat_id|@username> (e.g. /blockchat 123456789 or /blockchat @spammer)"
                 )
-            try:
-                cid = int(cmd_parts[1])
-                self.privacy.block_chat(cid)
-                return f"🚫 Chat `{cid}` is now blocked."
-            except ValueError:
-                return (
-                    "❌ /blockchat failed\n"
-                    "Missing: Valid integer chat ID\n"
-                    "Fix: /blockchat <chat_id> (e.g. /blockchat 123456789)"
-                )
+            cid, _, err = await self._resolve_chat_id(cmd_parts[1])
+            if err or cid is None:
+                return err
+            self.privacy.block_chat(cid)
+            return f"🚫 Chat `{cid}` is now blocked."
 
         if cmd in ("/mentiononly", "/mentions"):
             if len(cmd_parts) < 2 or cmd_parts[1].lower() not in ("on", "off"):
@@ -1644,17 +1713,25 @@ class CommandRouterMixin:
             if not hasattr(self.generator.provider, "check_working_models"):
                 return (
                     "❌ /checkmodels failed\n"
-                    "Missing: OpenAI or Custom compatible provider\n"
-                    "Fix: Live model verification is supported on OpenAI and Inception Labs custom providers. Use /setai mercury <key> or /provider custom."
+                    "Missing: Active provider supporting live model verification\n"
+                    "Fix: Live model verification is supported on Gemini, OpenAI, and Inception custom providers."
                 )
             results = self.generator.provider.check_working_models()
             lines = ["🔍 *Model Live Health Check:*"]
+            healthy_models: list[str] = []
             for m, ok, detail in results:
                 icon = "✅" if ok else "❌"
                 lines.append(f"{icon} `{m}`: {detail}")
+                if ok:
+                    healthy_models.append(m)
             active = getattr(self.generator.provider, "model", "")
-            lines.append(f"\n🎯 Active working model set to: *{active}*")
-            self.db.set_state("ai_model", active)
+            if healthy_models:
+                active = ",".join(healthy_models)
+                self.generator.provider.model = active
+                self.db.set_state("ai_model", active)
+                lines.append(f"\n🎯 Active working models updated to: *{active}*")
+            else:
+                lines.append(f"\n⚠️ No healthy models found.")
             return "\n".join(lines)
 
         if cmd in ("/baseurl", "/setbaseurl", "/endpoint"):

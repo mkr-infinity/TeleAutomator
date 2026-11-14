@@ -1614,6 +1614,17 @@ def test_allowchat_details_with_name_and_username(tmp_path: Path):
         assert "(@cryptoalpha)" in res1
         assert "-100123456" in res1
 
+        # 1b. Allow by @username directly via stored metadata
+        res1b = await mgr.handle_control_command("/allowchat @cryptoalpha")
+        assert "Group" in res1b
+        assert "-100123456" in res1b
+        assert privacy.is_chat_allowed(-100123456, is_group=True) is True
+
+        # 1c. Allow unknown username returns structured guidance
+        res1c = await mgr.handle_control_command("/allowchat @unknown_channel_xyz")
+        assert "Unable to resolve" in res1c
+        assert "How to fix:" in res1c
+
         # 2. Resolving via client entity mock
         class MockEntity:
             title = "Design Guild"
@@ -1627,6 +1638,11 @@ def test_allowchat_details_with_name_and_username(tmp_path: Path):
         assert "*Design Guild*" in res2
         assert "(@designguild)" in res2
         assert "-100987654" in res2
+
+        # 2b. Remove chat by username
+        res2b = await mgr.handle_control_command("/removechat @cryptoalpha")
+        assert "-100123456" in res2b
+        assert privacy.is_chat_allowed(-100123456, is_group=True) is False
 
     asyncio.run(_run())
 

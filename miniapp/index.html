@@ -58,7 +58,7 @@
 
 <!-- Shared top bar (single h1: the product name, visible in every state) -->
 <header class="topbar">
-  <div class="brand"><img class="logo sm" src="logo.svg" alt=""><h1 class="brand-name">TeleAutomator</h1><span id="live-beacon" class="live-beacon live" title="Real-time engine connected" aria-label="Real-time engine connected"><span class="beacon-dot"></span></span><span id="offline-sync-badge" class="sync-badge hidden" title="Offline action queued" aria-label="Offline actions queued"><span class="sync-icon">⚡</span><span id="offline-sync-count" class="num">0</span></span><span id="app-version" class="version num"></span></div>
+  <div class="brand"><img class="logo sm" src="logo.svg" alt=""><h1 class="brand-name">TeleAutomator</h1><span id="live-beacon" class="live-beacon live" title="Real-time engine connected" aria-label="Real-time engine connected"><span class="beacon-dot"></span></span><span id="offline-sync-badge" class="sync-badge hidden" title="Offline action queued" aria-label="Offline actions queued"><span class="sync-icon"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span><span id="offline-sync-count" class="num">0</span></span><span id="app-version" class="version num"></span></div>
   <span id="whoami" class="whoami"></span>
 </header>
 
@@ -142,28 +142,28 @@
         <div class="kpi-strip" id="kpi-strip">
           <div class="kpi" data-goto="chats" role="button" tabindex="0" aria-label="Go to allowed chats">
             <div class="kpi-top">
-              <span class="kpi-icon">💬</span>
+              <span class="kpi-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
               <span class="kpi-value num" id="kpi-chats">—</span>
             </div>
             <p class="kpi-label">Allowed Chats</p>
           </div>
           <div class="kpi" data-goto="approvals" role="button" tabindex="0" aria-label="Go to pending drafts">
             <div class="kpi-top">
-              <span class="kpi-icon">⏳</span>
+              <span class="kpi-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
               <span class="kpi-value num" id="kpi-pending">—</span>
             </div>
             <p class="kpi-label">Pending Drafts</p>
           </div>
           <div class="kpi" data-goto="activity" role="button" tabindex="0" aria-label="View recent replies">
             <div class="kpi-top">
-              <span class="kpi-icon">⚡</span>
+              <span class="kpi-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
               <span class="kpi-value num" id="kpi-replies">—</span>
             </div>
             <p class="kpi-label">Replies 24h</p>
           </div>
           <div class="kpi" data-goto="more" role="button" tabindex="0" aria-label="Go to AI engine settings">
             <div class="kpi-top">
-              <span class="kpi-icon">🤖</span>
+              <span class="kpi-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16"/><line x1="16" y1="16" x2="16" y2="16"/></svg></span>
               <span class="kpi-value" id="kpi-engine">—</span>
             </div>
             <p class="kpi-label">AI Engine</p>
@@ -194,24 +194,36 @@
 
         <!-- Embedded Quick Actions -->
         <div class="actions hub-actions" id="hub-actions">
-          <button type="button" class="btn primary flex-1" id="act-pause">⏸️ Pause 30m</button>
-          <button type="button" class="btn flex-1 hidden" id="act-resume">▶️ Resume</button>
-          <button type="button" class="btn danger flex-1" id="act-stop">🛑 Stop</button>
-          <button type="button" class="btn flex-1" id="act-mode">🔄 Mode</button>
+          <button type="button" class="btn primary flex-1" id="act-pause"><svg class="btn-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg> Pause 30m</button>
+          <button type="button" class="btn flex-1 hidden" id="act-resume"><svg class="btn-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="5 3 19 12 5 21 5 3"/></svg> Resume</button>
+          <button type="button" class="btn danger flex-1" id="act-stop"><svg class="btn-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="5" y="5" width="14" height="14" rx="2"/></svg> Stop</button>
+          <button type="button" class="btn flex-1" id="act-mode"><svg class="btn-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Mode</button>
         </div>
       </div>
 
-      <!-- 24-Hour Activity Pulse & Sparkline (Phase 4) -->
+      <!-- 24-Hour Activity Pulse Wave Graph -->
       <div class="card activity-card" id="ov-activity-card">
         <div class="activity-card-head">
           <div class="activity-title-group">
             <span class="activity-card-title">Activity Pulse (24h)</span>
-            <span class="activity-sub" id="activity-chart-sub">Hourly reply distribution</span>
+            <span class="activity-sub" id="activity-chart-sub">Smooth wave reply distribution</span>
           </div>
           <span class="pill pill-positive" id="activity-total-badge">0 in 24h</span>
         </div>
-        <div class="sparkline-container" id="sparkline-bars">
-          <!-- 24 hourly volumetric clay bars -->
+        <div class="pulse-graph-box" id="pulse-graph-box">
+          <svg class="pulse-graph-svg" id="pulse-graph-svg" viewBox="0 0 500 120" preserveAspectRatio="none" aria-label="24h activity wave chart">
+            <defs>
+              <linearGradient id="pulse-area-gradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.32"/>
+                <stop offset="65%" stop-color="var(--accent)" stop-opacity="0.06"/>
+                <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <path id="pulse-area-path" class="pulse-area-path" d="" fill="url(#pulse-area-gradient)"/>
+            <path id="pulse-line-path" class="pulse-line-path" d="" fill="none"/>
+            <g id="pulse-points-group"></g>
+          </svg>
+          <div id="pulse-graph-tooltip" class="pulse-graph-tooltip hidden"></div>
         </div>
         <div class="sparkline-time-row">
           <span>24h ago</span>
@@ -229,9 +241,11 @@
       <h2 class="view-title">Chats</h2>
       <p class="view-sub">Where the account talks, and how much in each one.</p>
       <div class="allow-row">
-        <input type="text" id="allow-id" inputmode="numeric" placeholder="Chat ID, e.g. -1001234567890">
+        <input type="text" id="allow-id" placeholder="Telegram ID or @username (e.g. -100... or @group)">
         <button type="button" class="btn primary" id="allow-btn">Allow</button>
       </div>
+      <div class="card list" id="chat-list"></div>
+    </section>
       <div class="card list" id="chat-list"></div>
     </section>
 
@@ -273,8 +287,8 @@
           <p class="view-sub">Drafts waiting for your yes or no.</p>
         </div>
         <div class="approval-batch-actions hidden" id="approval-batch-bar">
-          <button type="button" class="btn small primary" id="btn-approve-all">✓ Approve All</button>
-          <button type="button" class="btn small danger" id="btn-reject-all">✕ Reject All</button>
+          <button type="button" class="btn small primary" id="btn-approve-all"><svg class="btn-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Approve All</button>
+          <button type="button" class="btn small danger" id="btn-reject-all"><svg class="btn-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Reject All</button>
         </div>
       </div>
       <div class="card list" id="approval-list"></div>
@@ -346,7 +360,7 @@
       <div class="card form qh-card">
         <div class="qh-head">
           <div class="qh-title-group">
-            <span class="qh-title">🌙 Daily Quiet Window</span>
+            <span class="qh-title"><svg class="section-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg> Daily Quiet Window</span>
             <span class="qh-sub">Pauses automated replies overnight (IST)</span>
           </div>
           <span class="pill pill-positive" id="qh-status-pill">Active</span>
@@ -370,7 +384,7 @@
         </div>
         <div class="inline-save">
           <button type="button" class="btn primary" id="qh-save-btn">Save Schedule</button>
-          <button type="button" class="btn" id="btn-quick-sleep">😴 Sleep Until Morning</button>
+          <button type="button" class="btn" id="btn-quick-sleep"><svg class="btn-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg> Sleep Until Morning</button>
         </div>
       </div>
 
@@ -379,42 +393,42 @@
       <div class="card list behavior-card" id="behavior-toggles">
         <div class="setting-toggle-row">
           <div class="toggle-info">
-            <span class="toggle-title">❤️ Auto-Reactions</span>
+            <span class="toggle-title"><svg class="toggle-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> Auto-Reactions</span>
             <span class="toggle-sub">Naturally react to incoming messages with emojis</span>
           </div>
           <button type="button" class="clay-switch on" id="sw-reaction" data-action="reaction" data-state="on">ON</button>
         </div>
         <div class="setting-toggle-row">
           <div class="toggle-info">
-            <span class="toggle-title">🫧 Multi-Bubble Splitting</span>
+            <span class="toggle-title"><svg class="toggle-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="16" cy="7" r="4"/><circle cx="8.5" cy="14.5" r="5.5"/><circle cx="18" cy="18" r="2.5"/></svg> Multi-Bubble Splitting</span>
             <span class="toggle-sub">Split long thoughts into natural consecutive bubbles</span>
           </div>
           <button type="button" class="clay-switch on" id="sw-multibubble" data-action="multibubble" data-state="on">ON</button>
         </div>
         <div class="setting-toggle-row">
           <div class="toggle-info">
-            <span class="toggle-title">✏️ Typo &amp; Self-Correction</span>
+            <span class="toggle-title"><svg class="toggle-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Typo &amp; Self-Correction</span>
             <span class="toggle-sub">Simulate natural typos and edit-fix seconds later</span>
           </div>
           <button type="button" class="clay-switch on" id="sw-typo" data-action="typo" data-state="on">ON</button>
         </div>
         <div class="setting-toggle-row">
           <div class="toggle-info">
-            <span class="toggle-title">🧵 Message Burst Debounce</span>
+            <span class="toggle-title"><svg class="toggle-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg> Message Burst Debounce</span>
             <span class="toggle-sub">Stitch rapid fragmented messages before replying</span>
           </div>
           <button type="button" class="clay-switch on" id="sw-debounce" data-action="debounce" data-state="on">ON</button>
         </div>
         <div class="setting-toggle-row">
           <div class="toggle-info">
-            <span class="toggle-title">💬 Spontaneous Follow-ups</span>
+            <span class="toggle-title"><svg class="toggle-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Spontaneous Follow-ups</span>
             <span class="toggle-sub">Occasional natural delayed follow-ups for short replies</span>
           </div>
           <button type="button" class="clay-switch off" id="sw-followup" data-action="followup" data-state="off">OFF</button>
         </div>
         <div class="setting-toggle-row">
           <div class="toggle-info">
-            <span class="toggle-title">🎯 Mention-Only in Groups</span>
+            <span class="toggle-title"><svg class="toggle-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg> Mention-Only in Groups</span>
             <span class="toggle-sub">Respond only when explicitly @mentioned or replied to</span>
           </div>
           <button type="button" class="clay-switch off" id="sw-mentiononly" data-action="mentiononly" data-state="off">OFF</button>
@@ -470,14 +484,14 @@
       <div class="card form">
         <div class="maintenance-row">
           <div class="maintenance-info">
-            <span class="maintenance-title">🛡️ Crash-Loop Guard (Safe Mode)</span>
+            <span class="maintenance-title"><svg class="section-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Crash-Loop Guard (Safe Mode)</span>
             <span class="maintenance-sub">Automatically protects account if rapid errors occur</span>
           </div>
           <span class="pill pill-positive" id="safemode-badge">Protected</span>
         </div>
         <div class="inline-save">
-          <button type="button" class="btn" id="btn-backup-db">💾 Backup Database</button>
-          <button type="button" class="btn danger" id="btn-clear-context">🧹 Clear AI Memory</button>
+          <button type="button" class="btn" id="btn-backup-db"><svg class="btn-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Backup Database</button>
+          <button type="button" class="btn danger" id="btn-clear-context"><svg class="btn-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="m18 15-6-6M4 20l7.5-7.5M14 6l4 4M10 2l12 12M2 22l6-1 5-5-5-5-5 5-1 6z"/></svg> Clear AI Memory</button>
         </div>
       </div>
     </section>
@@ -547,14 +561,14 @@
   <div class="sheet-grip" aria-hidden="true"></div>
   <div class="sheet-head">
     <h3 class="sheet-title" id="sheet-title">Sheet</h3>
-    <button type="button" class="sheet-close-btn" id="sheet-close" aria-label="Close sheet">✕</button>
+    <button type="button" class="sheet-close-btn" id="sheet-close" aria-label="Close sheet"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
   </div>
   <div class="sheet-body" id="sheet-body"></div>
   <div class="sheet-actions" id="sheet-actions"></div>
 </div>
 
 <div id="toast" class="toast hidden" role="status">
-  <span class="toast-icon" id="toast-icon">✓</span>
+  <span class="toast-icon" id="toast-icon"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></span>
   <span class="toast-msg" id="toast-msg"></span>
 </div>
 
