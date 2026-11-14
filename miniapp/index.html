@@ -130,6 +130,25 @@
         </div>
       </div>
 
+      <!-- 24-Hour Activity Pulse & Sparkline (Phase 4) -->
+      <div class="card activity-card" id="ov-activity-card">
+        <div class="activity-card-head">
+          <div class="activity-title-group">
+            <span class="activity-card-title">Activity Pulse (24h)</span>
+            <span class="activity-sub" id="activity-chart-sub">Hourly reply distribution</span>
+          </div>
+          <span class="pill pill-positive" id="activity-total-badge">0 in 24h</span>
+        </div>
+        <div class="sparkline-container" id="sparkline-bars">
+          <!-- 24 hourly volumetric clay bars -->
+        </div>
+        <div class="sparkline-time-row">
+          <span>24h ago</span>
+          <span>12h ago</span>
+          <span>Just now</span>
+        </div>
+      </div>
+
       <h2 class="section-h">Quick actions</h2>
       <div class="actions">
         <button class="btn primary" id="act-pause">Pause 30m</button>
@@ -160,7 +179,11 @@
       <p class="view-sub">How the account texts, everywhere and per chat.</p>
 
       <div class="card form">
-        <label for="pf-prompt">Global prompt</label>
+        <div class="preset-section-head">
+          <label for="pf-prompt" style="margin-bottom:0">Global prompt</label>
+          <span class="preset-tag">1-Tap Presets</span>
+        </div>
+        <div class="preset-carousel" id="preset-carousel" role="region" aria-label="Prompt Presets"></div>
         <textarea id="pf-prompt" rows="4" placeholder="Leave empty to use the built-in persona"></textarea>
         <button class="btn primary" id="pf-save">Save prompt</button>
       </div>

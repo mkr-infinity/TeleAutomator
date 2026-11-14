@@ -809,6 +809,93 @@ h1.brand-name {
   }
 }
 
+/* ------------------------------------- Activity Sparkline (Phase 4) */
+.activity-card {
+  background: var(--surface-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--clay-card-shadow);
+  padding: var(--pad);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.activity-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.activity-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.activity-card-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.activity-sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sparkline-container {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 4px;
+  height: 64px;
+  padding: 8px 8px 6px;
+  background: var(--surface-inset);
+  border-radius: var(--radius-inner);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--clay-input-shadow);
+}
+
+.spark-bar {
+  flex: 1;
+  min-width: 4px;
+  max-width: 14px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  transition: height 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.3s ease;
+  position: relative;
+  cursor: pointer;
+}
+
+.spark-bar.active {
+  background: linear-gradient(180deg, #34D399 0%, #10B981 60%, #059669 100%);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.45);
+}
+
+.spark-bar.current {
+  background: linear-gradient(180deg, #818CF8 0%, #6366F1 60%, #4F46E5 100%);
+  box-shadow: 0 0 8px rgba(99, 102, 241, 0.55);
+  animation: spark-pulse 2s infinite ease-in-out;
+}
+
+@keyframes spark-pulse {
+  0% { filter: brightness(1); }
+  50% { filter: brightness(1.35); }
+  100% { filter: brightness(1); }
+}
+
+.sparkline-time-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--faint);
+  padding: 0 4px;
+}
+
 /* ------------------------------------------------ Expressive Wavy Motion Keyframes */
 @keyframes m3-wavy-sheen {
   0% { background-position: 0% 50%; }
@@ -1120,7 +1207,7 @@ h1.brand-name {
   border-top: 1px solid var(--rule);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -1131,13 +1218,15 @@ h1.brand-name {
 .feed-top {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 10px;
   min-width: 0;
 }
 
 .feed-chat {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 13px;
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1150,11 +1239,18 @@ h1.brand-name {
 }
 
 .feed-text {
-  color: var(--muted);
+  color: #D1D5DB;
   font-size: 13px;
+  line-height: 1.45;
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  padding: 8px 12px;
+  box-shadow: var(--clay-input-shadow);
   overflow: hidden;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   word-break: break-word;
 }
@@ -1280,6 +1376,138 @@ h1.brand-name {
 }
 
 /* ------------------------------------------------------------ Persona */
+.preset-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.preset-tag {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent-bright);
+}
+
+.preset-carousel {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 2px 8px;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.preset-carousel::-webkit-scrollbar {
+  display: none;
+}
+
+.preset-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  box-shadow: var(--clay-btn-neutral-shadow);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.2s ease, border-color 0.2s ease;
+}
+
+.preset-chip:active {
+  transform: scale(0.94);
+}
+
+.preset-chip.active {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.3) 0%, rgba(79, 70, 229, 0.45) 100%);
+  border-color: var(--accent-bright);
+  color: #FFFFFF;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35), inset 1px 1px 2px rgba(255, 255, 255, 0.2);
+}
+
+.preset-chip .preset-icon {
+  font-size: 14px;
+}
+
+/* ------------------------------------------- Persona & User Capsules */
+.persona-chat-card, .user-capsule {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  min-height: 64px;
+  border-top: 1px solid var(--rule);
+}
+
+.persona-chat-card:first-child, .user-capsule:first-child {
+  border-top: 0;
+}
+
+.capsule-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.capsule-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.capsule-title {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capsule-sub {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capsule-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.user-avatar-circle {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 13px;
+  color: #FFFFFF;
+  background: linear-gradient(135deg, #1E293B 0%, #334155 100%);
+  border: 1px solid var(--border-highlight);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  flex-shrink: 0;
+}
+
 .segrow {
   display: flex;
   flex-wrap: wrap;
