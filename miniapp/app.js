@@ -131,10 +131,30 @@
   // ------------------------------------------------------------ chrome ui
 
   let toastTimer = null;
-  function toast(text) {
+  function toast(text, kind = "info") {
     const el = $("toast");
-    el.textContent = plain(text) || "Done";
+    if (!el) return;
+    const plainText = plain(text) || "Done";
+
+    let statusKind = kind;
+    if (kind === "info") {
+      const lower = plainText.toLowerCase();
+      if (lower.includes("fail") || lower.includes("error") || lower.includes("halt") || lower.includes("stop")) {
+        statusKind = "err";
+      } else if (lower.includes("ok") || lower.includes("saved") || lower.includes("verified") || lower.includes("resumed") || lower.includes("allowed") || lower.includes("done")) {
+        statusKind = "ok";
+      }
+    }
+
+    el.className = `toast toast-${statusKind}`;
+    const iconEl = $("toast-icon");
+    const msgEl = $("toast-msg");
+    if (iconEl) iconEl.textContent = statusKind === "ok" ? "✓" : (statusKind === "err" ? "!" : "ℹ");
+    if (msgEl) msgEl.textContent = plainText;
+    else el.textContent = plainText;
+
     el.classList.remove("hidden");
+    haptic(statusKind === "err" ? "err" : (statusKind === "ok" ? "ok" : "light"));
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => el.classList.add("hidden"), 3200);
   }
@@ -183,11 +203,29 @@
     }
     $("sheet-backdrop").classList.remove("hidden");
     $("sheet").classList.remove("hidden");
+
+    // Telegram TMA native BackButton support
+    try {
+      if (tg && tg.BackButton) {
+        tg.BackButton.show();
+        tg.BackButton.onClick(closeSheet);
+      }
+    } catch (_) {}
+    haptic("light");
   }
 
   function closeSheet() {
     $("sheet-backdrop").classList.add("hidden");
     $("sheet").classList.add("hidden");
+
+    // Revert Telegram TMA native BackButton
+    try {
+      if (tg && tg.BackButton) {
+        tg.BackButton.hide();
+        tg.BackButton.offClick(closeSheet);
+      }
+    } catch (_) {}
+    haptic("light");
   }
 
   // -------------------------------------------------------------- views
@@ -601,6 +639,29 @@
     document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.view)));
     $("sheet-backdrop").addEventListener("click", closeSheet);
 
+    const sheetCloseBtn = $("sheet-close");
+    if (sheetCloseBtn) sheetCloseBtn.addEventListener("click", closeSheet);
+
+    const toastEl = $("toast");
+    if (toastEl) toastEl.addEventListener("click", () => toastEl.classList.add("hidden"));
+
+    // Swipe down on bottom sheet to dismiss
+    const sheetEl = $("sheet");
+    if (sheetEl) {
+      let touchStartY = 0;
+      sheetEl.addEventListener("touchstart", (e) => {
+        if (e.touches && e.touches[0]) touchStartY = e.touches[0].clientY;
+      }, { passive: true });
+      sheetEl.addEventListener("touchmove", (e) => {
+        if (e.touches && e.touches[0]) {
+          const currentY = e.touches[0].clientY;
+          if (currentY - touchStartY > 60 && sheetEl.scrollTop <= 0) {
+            closeSheet();
+          }
+        }
+      }, { passive: true });
+    }
+
     $("act-pause").addEventListener("click", () => runAction("pause", { minutes: 30 }));
     $("act-resume").addEventListener("click", () => runAction("resume", {}));
     $("act-stop").addEventListener("click", () => openSheet("Stop everything", "<p>Halts all replies and reactions until you resume.</p>",
@@ -813,8 +874,24 @@
     });
   }
 
+  function syncTelegramTheme() {
+    if (!tg) return;
+    try {
+      const darkBg = (tg.themeParams && tg.themeParams.bg_color) || "#0B0E14";
+      if (tg.setHeaderColor) tg.setHeaderColor(darkBg);
+      if (tg.setBackgroundColor) tg.setBackgroundColor(darkBg);
+    } catch (_) {}
+  }
+
   async function init() {
-    if (tg) { try { tg.ready(); tg.expand(); tg.setHeaderColor("#07150C"); tg.setBackgroundColor("#07150C"); } catch { /* older clients */ } }
+    if (tg) {
+      try {
+        tg.ready();
+        tg.expand();
+        syncTelegramTheme();
+        tg.onEvent("themeChanged", syncTelegramTheme);
+      } catch { /* older clients */ }
+    }
 
     let auth = null;
     try { auth = await api("/api/auth"); } catch { /* no server (plain browser / file) → paywall */ }
