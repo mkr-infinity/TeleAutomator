@@ -880,6 +880,33 @@ def test_handle_action_ownreact_toggle(tmp_path):
     assert api.handle_state()["ownreact"] is True
 
 
+def test_dynamic_half_and_full_sheet_popups():
+    miniapp_dir = Path(__file__).resolve().parent.parent / "miniapp"
+    index_html = (miniapp_dir / "index.html").read_text(encoding="utf-8")
+    style_css = (miniapp_dir / "style.css").read_text(encoding="utf-8")
+    app_js = (miniapp_dir / "app.js").read_text(encoding="utf-8")
+
+    # Verify sheet expand/collapse button in markup
+    assert 'id="sheet-expand"' in index_html
+    assert 'icon-expand' in index_html
+    assert 'icon-collapse' in index_html
+
+    # Verify responsive dynamic viewport units and expanded state in CSS
+    assert "max-height: 56dvh;" in style_css
+    assert ".sheet.is-expanded" in style_css
+    assert "max-height: 92dvh;" in style_css
+    assert "transition: max-height" in style_css
+    assert ".sheet-grip" in style_css
+
+    # Verify gesture and toggle functions in JS
+    assert "initSheetGestures" in app_js
+    assert "toggleSheetExpanded" in app_js
+    assert "expandSheet" in app_js
+    assert "collapseSheet" in app_js
+    assert 'sheet.classList.remove("is-expanded")' in app_js
+
+
+
 
 
 

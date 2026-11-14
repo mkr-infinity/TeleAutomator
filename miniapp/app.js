@@ -677,7 +677,38 @@
     } catch { /* haptics are best-effort */ }
   }
 
+  function toggleSheetExpanded() {
+    const sheet = $("sheet");
+    if (!sheet) return;
+    const isExp = sheet.classList.toggle("is-expanded");
+    const expBtn = $("sheet-expand");
+    if (expBtn) expBtn.setAttribute("aria-expanded", isExp ? "true" : "false");
+    haptic("light");
+  }
+
+  function expandSheet() {
+    const sheet = $("sheet");
+    if (!sheet || sheet.classList.contains("is-expanded")) return;
+    sheet.classList.add("is-expanded");
+    const expBtn = $("sheet-expand");
+    if (expBtn) expBtn.setAttribute("aria-expanded", "true");
+    haptic("light");
+  }
+
+  function collapseSheet() {
+    const sheet = $("sheet");
+    if (!sheet || !sheet.classList.contains("is-expanded")) return;
+    sheet.classList.remove("is-expanded");
+    const expBtn = $("sheet-expand");
+    if (expBtn) expBtn.setAttribute("aria-expanded", "false");
+    haptic("light");
+  }
+
   function openSheet(title, bodyHtml, buttons) {
+    const sheet = $("sheet");
+    if (sheet) sheet.classList.remove("is-expanded");
+    const expBtn = $("sheet-expand");
+    if (expBtn) expBtn.setAttribute("aria-expanded", "false");
     $("sheet-title").textContent = title;
     $("sheet-body").innerHTML = bodyHtml;
     const actions = $("sheet-actions");
@@ -712,14 +743,18 @@
       setTimeout(() => ta.focus(), 60);
     }
     $("sheet-backdrop").classList.remove("hidden");
-    $("sheet").classList.remove("hidden");
+    if (sheet) sheet.classList.remove("hidden");
     updateTmaBackButton();
     haptic("light");
   }
 
   function closeSheet() {
+    const sheet = $("sheet");
+    if (sheet) sheet.classList.remove("is-expanded");
+    const expBtn = $("sheet-expand");
+    if (expBtn) expBtn.setAttribute("aria-expanded", "false");
     $("sheet-backdrop").classList.add("hidden");
-    $("sheet").classList.add("hidden");
+    if (sheet) sheet.classList.add("hidden");
     updateTmaBackButton();
     haptic("light");
   }
@@ -1915,6 +1950,94 @@
     }
   }
 
+  function initSheetGestures() {
+    const sheet = $("sheet");
+    if (!sheet) return;
+
+    const grip = sheet.querySelector(".sheet-grip");
+    const head = sheet.querySelector(".sheet-head");
+    const expandBtn = $("sheet-expand");
+    const body = $("sheet-body");
+
+    if (expandBtn) {
+      expandBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleSheetExpanded();
+      });
+    }
+
+    if (grip) {
+      grip.addEventListener("click", () => {
+        toggleSheetExpanded();
+      });
+    }
+
+    let startY = 0;
+    let startX = 0;
+    let lastY = 0;
+    let lastX = 0;
+    let tracking = false;
+    let touchArea = null;
+
+    const onTouchStart = (e) => {
+      if (!e.touches || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      startY = t.clientY;
+      startX = t.clientX;
+      lastY = startY;
+      lastX = startX;
+
+      if (grip && (e.target === grip || grip.contains(e.target))) {
+        touchArea = "grip";
+        tracking = true;
+      } else if (head && (e.target === head || head.contains(e.target))) {
+        if (e.target.closest("#sheet-close, #sheet-expand")) return;
+        touchArea = "head";
+        tracking = true;
+      } else if (body && (e.target === body || body.contains(e.target))) {
+        if (body.scrollTop <= 0) {
+          touchArea = "body";
+          tracking = true;
+        }
+      }
+    };
+
+    const onTouchMove = (e) => {
+      if (!tracking || !e.touches || e.touches.length !== 1) return;
+      lastY = e.touches[0].clientY;
+      lastX = e.touches[0].clientX;
+    };
+
+    const onTouchEnd = () => {
+      if (!tracking) return;
+      tracking = false;
+      const diffY = lastY - startY;
+      const diffX = lastX - startX;
+
+      if (Math.abs(diffY) > 28 && Math.abs(diffY) > Math.abs(diffX) * 1.1) {
+        if (diffY < 0) {
+          // Swiped UP on grip or header -> expand to full screen
+          if (touchArea === "grip" || touchArea === "head") {
+            expandSheet();
+          }
+        } else {
+          // Swiped DOWN
+          if (sheet.classList.contains("is-expanded")) {
+            collapseSheet();
+          } else if (diffY > 65) {
+            closeSheet();
+          }
+        }
+      }
+      touchArea = null;
+    };
+
+    sheet.addEventListener("touchstart", onTouchStart, { passive: true });
+    sheet.addEventListener("touchmove", onTouchMove, { passive: true });
+    sheet.addEventListener("touchend", onTouchEnd, { passive: true });
+    sheet.addEventListener("touchcancel", () => { tracking = false; touchArea = null; }, { passive: true });
+  }
+
   // ---------------------------------------------------------------- init
 
   function wire() {
@@ -1923,6 +2046,8 @@
 
     const sheetCloseBtn = $("sheet-close");
     if (sheetCloseBtn) sheetCloseBtn.addEventListener("click", closeSheet);
+
+    initSheetGestures();
 
     const toastEl = $("toast");
     if (toastEl) toastEl.addEventListener("click", () => toastEl.classList.add("hidden"));
@@ -1972,7 +2097,7 @@
 
     // Instant Tactile Haptic on buttons
     document.addEventListener("pointerdown", (e) => {
-      const target = e.target.closest(".btn, .pay-btn, .pay-check-btn, .chip, .seg, .model-chip, .preset-chip, .clay-switch, .m3-nav-item, .sheet-close-btn, .linklike, .kpi[data-goto], .usage-cell[data-goto], .help-btn, .clay-action-btn, .chat-capsule-card, .feed-clickable");
+      const target = e.target.closest(".btn, .pay-btn, .pay-check-btn, .chip, .seg, .model-chip, .preset-chip, .clay-switch, .m3-nav-item, .sheet-close-btn, .sheet-icon-btn, .sheet-grip, .linklike, .kpi[data-goto], .usage-cell[data-goto], .help-btn, .clay-action-btn, .chat-capsule-card, .feed-clickable");
       if (!target) return;
       haptic("light");
     }, { passive: true });

@@ -1984,42 +1984,65 @@ h1.brand-name {
   bottom: 0;
   z-index: 41;
   background: #141724;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 28px 28px 0 0;
-  padding: 12px 20px calc(24px + env(safe-area-inset-bottom, 16px));
-  max-height: 84dvh;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
+  padding: 8px 18px calc(20px + env(safe-area-inset-bottom, 16px));
+  /* Dynamic natural half-height on mobile screen by default */
+  max-height: 56vh;
+  max-height: 56dvh;
+  height: auto;
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
   max-width: 600px;
   margin: 0 auto;
   box-shadow: 
-    0 -12px 36px rgba(0, 0, 0, 0.65),
-    inset 0 1px 1.5px rgba(255, 255, 255, 0.15);
-  transform: translateZ(0);
-  will-change: transform;
+    0 -14px 40px rgba(0, 0, 0, 0.72),
+    inset 0 1px 1.5px rgba(255, 255, 255, 0.18);
+  transform: translate3d(0, 0, 0);
+  will-change: height, max-height, transform;
   contain: content;
+  transition: max-height 0.28s cubic-bezier(0.16, 1, 0.3, 1), height 0.28s cubic-bezier(0.16, 1, 0.3, 1);
   animation: sheet-slide-up 0.24s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+.sheet.is-expanded {
+  max-height: 92vh;
+  max-height: 92dvh;
+  height: 92vh;
+  height: 92dvh;
+}
+
 @keyframes sheet-slide-up {
-  from { transform: translateY(100%); }
-  to { transform: translateY(0); }
+  from { transform: translate3d(0, 100%, 0); }
+  to { transform: translate3d(0, 0, 0); }
 }
 
 .sheet-grip {
-  width: 40px;
+  width: 44px;
   height: 5px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.2);
-  margin: 4px auto 14px;
+  background: rgba(255, 255, 255, 0.24);
+  margin: 2px auto 10px;
+  cursor: pointer;
+  touch-action: none;
+  transition: background 0.15s ease, transform 0.15s ease;
+  padding: 6px 0;
+  background-clip: content-box;
+}
+
+.sheet-grip:hover,
+.sheet-grip:active {
+  background-color: rgba(255, 255, 255, 0.45);
 }
 
 .sheet-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
+  gap: 10px;
+  margin-bottom: 12px;
+  flex: 0 0 auto;
 }
 
 .sheet-title {
@@ -2027,28 +2050,51 @@ h1.brand-name {
   color: var(--text);
   font-weight: 700;
   flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+.sheet-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.sheet-icon-btn,
 .sheet-close-btn {
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: var(--text);
   font-size: 16px;
   font-weight: 600;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   transition: all 0.15s ease;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  padding: 0;
 }
 
+.sheet-icon-btn:active,
 .sheet-close-btn:active {
   transform: scale(0.92);
   background: rgba(255, 255, 255, 0.18);
+}
+
+.sheet .icon-collapse {
+  display: none;
+}
+.sheet.is-expanded .icon-expand {
+  display: none;
+}
+.sheet.is-expanded .icon-collapse {
+  display: inline-block;
 }
 
 .sheet-body {
@@ -2056,6 +2102,12 @@ h1.brand-name {
   flex-direction: column;
   gap: 12px;
   color: var(--muted);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  padding-right: 2px;
 }
 
 .sheet-body .md {
@@ -2067,7 +2119,17 @@ h1.brand-name {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  margin-top: 18px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  flex: 0 0 auto;
+}
+
+.sheet-actions:empty {
+  display: none;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
 }
 
 .sheet-actions .btn {
@@ -3569,10 +3631,16 @@ h1.brand-name {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 320px;
+  max-height: 44vh;
+  max-height: 44dvh;
   overflow-y: auto;
   padding-right: 4px;
   margin-bottom: 16px;
+}
+
+.sheet.is-expanded .model-popup-list {
+  max-height: 68vh;
+  max-height: 68dvh;
 }
 
 .model-check-row {
