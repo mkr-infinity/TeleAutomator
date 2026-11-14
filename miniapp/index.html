@@ -298,10 +298,10 @@
     <section id="view-more" class="view hidden" aria-label="More">
       <h2 class="view-title">More</h2>
 
-      <h3 class="section-h">Access</h3>
+      <h3 class="section-h">Owners &amp; Access</h3>
       <div class="allow-row">
-        <input type="text" id="auth-id" inputmode="numeric" placeholder="Telegram user ID">
-        <button type="button" class="btn primary" id="auth-add">Add user</button>
+        <input type="text" id="auth-id" placeholder="Telegram user ID or @username">
+        <button type="button" class="btn primary" id="auth-add">Add owner</button>
       </div>
       <div class="card list" id="access-list"></div>
 
@@ -393,42 +393,66 @@
       <div class="card list behavior-card" id="behavior-toggles">
         <div class="setting-toggle-row">
           <div class="toggle-info">
-            <span class="toggle-title"><svg class="toggle-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> Auto-Reactions</span>
+            <span class="toggle-title">
+              <svg class="toggle-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+              Auto-Reactions
+              <button type="button" class="help-btn" data-help="reaction" aria-label="Learn about Auto-Reactions">?</button>
+            </span>
             <span class="toggle-sub">Naturally react to incoming messages with emojis</span>
           </div>
           <button type="button" class="clay-switch on" id="sw-reaction" data-action="reaction" data-state="on">ON</button>
         </div>
         <div class="setting-toggle-row">
           <div class="toggle-info">
-            <span class="toggle-title"><svg class="toggle-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="16" cy="7" r="4"/><circle cx="8.5" cy="14.5" r="5.5"/><circle cx="18" cy="18" r="2.5"/></svg> Multi-Bubble Splitting</span>
+            <span class="toggle-title">
+              <svg class="toggle-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="16" cy="7" r="4"/><circle cx="8.5" cy="14.5" r="5.5"/><circle cx="18" cy="18" r="2.5"/></svg>
+              Multi-Bubble Splitting
+              <button type="button" class="help-btn" data-help="multibubble" aria-label="Learn about Multi-Bubble Splitting">?</button>
+            </span>
             <span class="toggle-sub">Split long thoughts into natural consecutive bubbles</span>
           </div>
           <button type="button" class="clay-switch on" id="sw-multibubble" data-action="multibubble" data-state="on">ON</button>
         </div>
         <div class="setting-toggle-row">
           <div class="toggle-info">
-            <span class="toggle-title"><svg class="toggle-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Typo &amp; Self-Correction</span>
+            <span class="toggle-title">
+              <svg class="toggle-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              Typo &amp; Self-Correction
+              <button type="button" class="help-btn" data-help="typo" aria-label="Learn about Typo &amp; Self-Correction">?</button>
+            </span>
             <span class="toggle-sub">Simulate natural typos and edit-fix seconds later</span>
           </div>
           <button type="button" class="clay-switch on" id="sw-typo" data-action="typo" data-state="on">ON</button>
         </div>
         <div class="setting-toggle-row">
           <div class="toggle-info">
-            <span class="toggle-title"><svg class="toggle-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg> Message Burst Debounce</span>
+            <span class="toggle-title">
+              <svg class="toggle-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>
+              Message Burst Debounce
+              <button type="button" class="help-btn" data-help="debounce" aria-label="Learn about Message Burst Debounce">?</button>
+            </span>
             <span class="toggle-sub">Stitch rapid fragmented messages before replying</span>
           </div>
           <button type="button" class="clay-switch on" id="sw-debounce" data-action="debounce" data-state="on">ON</button>
         </div>
         <div class="setting-toggle-row">
           <div class="toggle-info">
-            <span class="toggle-title"><svg class="toggle-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Spontaneous Follow-ups</span>
+            <span class="toggle-title">
+              <svg class="toggle-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              Spontaneous Follow-ups
+              <button type="button" class="help-btn" data-help="followup" aria-label="Learn about Spontaneous Follow-ups">?</button>
+            </span>
             <span class="toggle-sub">Occasional natural delayed follow-ups for short replies</span>
           </div>
           <button type="button" class="clay-switch off" id="sw-followup" data-action="followup" data-state="off">OFF</button>
         </div>
         <div class="setting-toggle-row">
           <div class="toggle-info">
-            <span class="toggle-title"><svg class="toggle-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg> Mention-Only in Groups</span>
+            <span class="toggle-title">
+              <svg class="toggle-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+              Mention-Only in Groups
+              <button type="button" class="help-btn" data-help="mentiononly" aria-label="Learn about Mention-Only in Groups">?</button>
+            </span>
             <span class="toggle-sub">Respond only when explicitly @mentioned or replied to</span>
           </div>
           <button type="button" class="clay-switch off" id="sw-mentiononly" data-action="mentiononly" data-state="off">OFF</button>

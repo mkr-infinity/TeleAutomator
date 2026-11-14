@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import hmac
+import io
 import json
 import time
 import urllib.request
@@ -618,6 +619,154 @@ def test_service_worker_asset_and_registration():
 
     app_js = (miniapp_dir / "app.js").read_text(encoding="utf-8")
     assert "serviceWorker.register" in app_js
+
+
+def test_add_owner_by_username_and_avatar_rendering(tmp_path):
+    ctx, _ = make_ctx(tmp_path, authorized=(555000111,))
+    api = MiniAppAPI(ctx)
+
+    # 1. Store known user in DB
+    ctx.db.record_chat_metadata(777123456, title="Alice Smith", username="alicesmith", chat_type="Private contact")
+
+    # 2. Add owner by @username
+    res = api.handle_action(555000111, "addauth", {"user_id": "@alicesmith"})
+    assert res["ok"] is True
+    assert "777123456" in res["response"]
+
+    # 3. Check handle_access returns avatar metadata
+    access = api.handle_access()
+    users = access["users"]
+    alice = next((u for u in users if u["id"] == 777123456), None)
+    assert alice is not None
+    assert alice["name"] == "Alice Smith"
+    assert alice["username"] == "alicesmith"
+    assert "alicesmith.jpg" in alice["avatar_url"]
+    assert "linear-gradient" in alice["avatar_bg"]
+    assert alice["initials"] == "AS"
+    assert alice["main"] is False
+
+
+def test_save_available_models_and_manual_rotation(tmp_path):
+    ctx, _ = make_ctx(tmp_path, authorized=(555000111,))
+    api = MiniAppAPI(ctx)
+
+    # 1. Initial state has default healthy models
+    state = api.handle_state()
+    assert "available_models" in state
+    assert len(state["available_models"]) > 0
+
+    # 2. Save custom models list
+    res = api.handle_action(555000111, "save_available_models", {"models": ["mercury-3", "mercury-3-preview-1014"]})
+    assert res["ok"] is True
+    assert "2 available model(s)" in res["response"]
+
+    # 3. Verify state persists custom available models
+    state_after = api.handle_state()
+    assert state_after["available_models"] == ["mercury-3", "mercury-3-preview-1014"]
+
+    # 4. User manually sets rotation
+    res_mod = api.handle_action(555000111, "model", {"value": "mercury-3"})
+    assert res_mod["ok"] is True
+    assert api.handle_state()["models_manually_set"] is True
+
+
+def test_chat_cooldown_action_and_chats_payload(tmp_path):
+    ctx, _ = make_ctx(tmp_path, authorized=(555000111,))
+    api = MiniAppAPI(ctx)
+
+    # Initial chats call has empty cooldown_str for chat 111
+    chats = api.handle_chats()["chats"]
+    c = next(x for x in chats if x["id"] == 111)
+    assert c["cooldown_min"] is None
+    assert c["cooldown_max"] is None
+    assert c["cooldown_str"] == ""
+
+    # Set custom cooldown
+    res = api.handle_action(555000111, "chat_cooldown", {"chat_id": 111, "min": 15, "max": 45})
+    assert res["ok"] is True
+    assert "15s - 45s" in res["response"]
+
+    # Verify chats payload reflects custom cooldown
+    chats_after = api.handle_chats()["chats"]
+    c_after = next(x for x in chats_after if x["id"] == 111)
+    assert c_after["cooldown_min"] == 15.0
+    assert c_after["cooldown_max"] == 45.0
+    assert c_after["cooldown_str"] == "15s - 45s"
+
+    # Reset cooldown to global default
+    res_reset = api.handle_action(555000111, "chat_cooldown", {"chat_id": 111, "reset": True})
+    assert res_reset["ok"] is True
+    assert "reset to global default" in res_reset["response"]
+
+    chats_reset = api.handle_chats()["chats"]
+    c_reset = next(x for x in chats_reset if x["id"] == 111)
+    assert c_reset["cooldown_min"] is None
+    assert c_reset["cooldown_str"] == ""
+
+
+def test_handle_activity_includes_msg_url(tmp_path):
+    ctx, _ = make_ctx(tmp_path, authorized=(555000111,))
+    api = MiniAppAPI(ctx)
+
+    # Record outgoing message with username in known_chats
+    ctx.db.record_chat_metadata(-1001987654321, title="Startup Supergroup", username="startupindia", chat_type="supergroup")
+    with ctx.db._get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO chat_messages (chat_id, message_id, sender_id, sender_name, text, is_outgoing)
+            VALUES (?, ?, ?, ?, ?, 1)
+            """,
+            (-1001987654321, 555, 111, "TeleAutomator", "Test reply with link"),
+        )
+
+    acts = api.handle_activity()["activity"]
+    assert len(acts) > 0
+    first = acts[0]
+    assert first["chat_id"] == -1001987654321
+    assert first["message_id"] == 555
+    assert first["msg_url"] == "https://t.me/startupindia/555"
+
+
+def test_handle_fetch_models_base_url_normalization_and_errors(tmp_path, monkeypatch):
+    """Test Base URL normalization (scheme, trailing slash, /chat/completions) and rich error messages."""
+    ctx, _ = make_ctx(tmp_path)
+    api = MiniAppAPI(ctx)
+
+    called_urls = []
+
+    def mock_urlopen_401(req, timeout=10.0):
+        called_urls.append(req.full_url)
+        raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, io.BytesIO(b'{"error": "Invalid API key provided"}'))
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen_401)
+
+    # 1. Base URL without scheme + with /chat/completions suffix
+    res = api.handle_fetch_models(base_url="api.groq.com/openai/v1/chat/completions", api_key="bad-key")
+    assert res["ok"] is False
+    assert called_urls[0] == "https://api.groq.com/openai/v1/models"
+    assert "Unauthorized" in res["error"]
+    assert "Invalid API key" in res["error"]
+
+    # 2. HTTP 404 Not Found error
+    def mock_urlopen_404(req, timeout=10.0):
+        raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, io.BytesIO(b'{"error": {"message": "Resource missing"}}'))
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen_404)
+    res404 = api.handle_fetch_models(base_url="https://api.example.com/v1/wrong_path", api_key="any-key")
+    assert res404["ok"] is False
+    assert "Not Found: verify Base URL" in res404["error"]
+
+    # 3. Connection / URLError error
+    def mock_urlopen_url_err(req, timeout=10.0):
+        raise urllib.error.URLError("Name or service not known")
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen_url_err)
+    res_conn = api.handle_fetch_models(base_url="https://bad-dns-typo.internal", api_key="any-key")
+    assert res_conn["ok"] is False
+    assert "Connection error" in res_conn["error"]
+    assert "verify that base url" in res_conn["error"].lower()
+
+
 
 
 

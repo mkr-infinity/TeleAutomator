@@ -18,6 +18,10 @@
     brain: '<svg class="btn-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-2.04z"/></svg>',
     msg: '<svg class="btn-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
     trash: '<svg class="btn-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+    clock: '<svg class="btn-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+    chevronRight: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>',
+    copy: '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+    externalLink: '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
     bolt: '<svg class="preset-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
     handshake: '<svg class="preset-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M11 17a2.5 2.5 0 0 0 4 0l4-4a2.5 2.5 0 0 0-3.5-3.5L14 11l-3-3-4 4a2.5 2.5 0 0 0 3.5 3.5Z"/><path d="m14 11 3.5-3.5a2.5 2.5 0 0 1 3.5 3.5l-4 4"/></svg>',
     rocket: '<svg class="preset-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4.5c1.62-1.63 5-2.5 5-2.5"/><path d="M12 15v5s3.03-.55 4.5-2c1.63-1.62 2.5-5 2.5-5"/></svg>',
@@ -28,6 +32,70 @@
   };
 
   let cachedEndpointModels = [];
+
+  const BEHAVIOR_HELP = {
+    reaction: {
+      title: "Auto-Reactions",
+      desc: "Automatically reacts to incoming messages with native Telegram emoji reactions, just like an active human reading their chats.",
+      onText: "The bot analyzes message sentiment and naturally places an appropriate emoji reaction (such as thumbs-up, heart, or fire) before or alongside replying.",
+      offText: "Emoji reactions are disabled. All responses from the account will be text-only.",
+    },
+    multibubble: {
+      title: "Multi-Bubble Splitting",
+      desc: "Breaks longer replies into 2–3 natural consecutive message bubbles with realistic typing pauses between them.",
+      onText: "Sends natural multi-part messages simulating mobile phone texting cadence instead of one robotic wall of text.",
+      offText: "Replies are always sent in a single message bubble all at once.",
+    },
+    typo: {
+      title: "Typo & Self-Correction",
+      desc: "Simulates accidental human thumb slips on mobile keyboards and auto-corrects them moments later.",
+      onText: "Occasionally sends a minor realistic typo and edits the message or sends an asterisk (*fix) seconds later.",
+      offText: "Every reply is sent cleanly with zero simulated typos or post-edits.",
+    },
+    debounce: {
+      title: "Message Burst Debounce",
+      desc: "Waits for rapid consecutive incoming messages to finish before generating one cohesive response.",
+      onText: "Stitches multiple quick fragments (e.g. 'hey', 'you free?', 'look at this') into one context before replying once.",
+      offText: "Replies immediately to every single incoming message independently, risking spammy fragmented replies.",
+    },
+    followup: {
+      title: "Spontaneous Follow-ups",
+      desc: "Simulates natural human texting habits by occasionally sending an extra thought after a short answer.",
+      onText: "After short replies, the bot may spontaneously send a follow-up bubble 10–30s later (e.g. 'btw let me know').",
+      offText: "Strictly sends one reply per incoming turn and never initiates spontaneous follow-ups.",
+    },
+    mentiononly: {
+      title: "Mention-Only in Groups",
+      desc: "Limits automated replies in group chats exclusively to direct replies or @mentions.",
+      onText: "In group chats, the bot stays silent unless someone explicitly quotes its message or mentions its @handle.",
+      offText: "The bot participates in open group conversations based on its configured Chatty probability percentage.",
+    },
+  };
+
+  function openHelpSheet(key) {
+    const item = BEHAVIOR_HELP[key];
+    if (!item) return;
+    const bodyHtml = `
+      <div class="help-popup-content">
+        <p class="help-popup-desc">${esc(item.desc)}</p>
+        <div class="help-states-grid">
+          <div class="help-state-card on">
+            <div class="help-state-header">
+              <span class="help-state-badge on">WHEN ON</span>
+            </div>
+            <div class="help-state-body">${esc(item.onText)}</div>
+          </div>
+          <div class="help-state-card off">
+            <div class="help-state-header">
+              <span class="help-state-badge off">WHEN OFF</span>
+            </div>
+            <div class="help-state-body">${esc(item.offText)}</div>
+          </div>
+        </div>
+      </div>
+    `;
+    openSheet(item.title, bodyHtml, [{ label: "Got it", kind: "primary" }]);
+  }
 
   // ------------------------------------------------------------ api layer
 
@@ -62,6 +130,8 @@
       emergency: false, quiet_hours: false, safe_mode: false, chatty_global: 0.15, style: "casual",
       prompt: "Reply like a 22-year-old Delhi guy, short, lowercase, Hinglish words when natural.",
       owner_name: "Kaif", ai_engine: "Gemini", ai_model: "gemini-2.5-flash-lite", ai_base_url: "",
+      available_models: ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"],
+      models_manually_set: false,
       chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.2",
       auto_reactions: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
       thinking: "default", temperature: "0.7", lang: "english", max_tokens: "512",
@@ -69,26 +139,26 @@
       rules: ["pricing => We update our rates monthly, DM for catalog!", "help => How can I assist you today?"],
     },
     chats: [
-      { id: 123456789, name: "Rohan Sharma", username: "@rohan_s", avatar_url: "https://t.me/i/userpic/320/rohan_s.jpg", initials: "RS", type: "Private", chatty: "", style: "", prompt: "", voice_profile: true, blocked: false },
-      { id: -1001987654321, name: "Startup India Founders", username: "startupindia", avatar_url: "https://t.me/i/userpic/320/startupindia.jpg", initials: "SI", type: "Group", chatty: "0.4", style: "humorous", prompt: "You help founders swap tools. Keep it practical.", voice_profile: false, blocked: false },
-      { id: -1001765432109, name: "Delhi Tech Meetup", username: "@delhitech", avatar_url: "https://t.me/i/userpic/320/delhitech.jpg", initials: "DT", type: "Group", chatty: "0", style: "", prompt: "", voice_profile: false, blocked: false },
-      { id: 987654321, name: "Aarav", username: "@aaravv", avatar_url: "https://t.me/i/userpic/320/aaravv.jpg", initials: "AA", type: "Private", chatty: "0.6", style: "", prompt: "", voice_profile: false, blocked: false },
-      { id: -1001654321098, name: "Crypto Signals Hub", username: "", avatar_url: "", initials: "CS", type: "Group", chatty: "", style: "concise", prompt: "", voice_profile: false, blocked: true },
-      { id: 876543210, name: "Mom", username: "", avatar_url: "", initials: "MO", type: "Private", chatty: "0.25", style: "", prompt: "Never send links here.", voice_profile: false, blocked: false },
+      { id: 123456789, name: "Rohan Sharma", username: "@rohan_s", avatar_url: "https://t.me/i/userpic/320/rohan_s.jpg", initials: "RS", type: "Private", chatty: "", style: "", prompt: "", cooldown_min: 10, cooldown_max: 30, cooldown_str: "10s - 30s", voice_profile: true, blocked: false },
+      { id: -1001987654321, name: "Startup India Founders", username: "startupindia", avatar_url: "https://t.me/i/userpic/320/startupindia.jpg", initials: "SI", type: "Group", chatty: "0.4", style: "humorous", prompt: "You help founders swap tools. Keep it practical.", cooldown_min: 15, cooldown_max: 45, cooldown_str: "15s - 45s", voice_profile: false, blocked: false },
+      { id: -1001765432109, name: "Delhi Tech Meetup", username: "@delhitech", avatar_url: "https://t.me/i/userpic/320/delhitech.jpg", initials: "DT", type: "Group", chatty: "0", style: "", prompt: "", cooldown_min: null, cooldown_max: null, cooldown_str: "", voice_profile: false, blocked: false },
+      { id: 987654321, name: "Aarav", username: "@aaravv", avatar_url: "https://t.me/i/userpic/320/aaravv.jpg", initials: "AA", type: "Private", chatty: "0.6", style: "", prompt: "", cooldown_min: 5, cooldown_max: 20, cooldown_str: "5s - 20s", voice_profile: false, blocked: false },
+      { id: -1001654321098, name: "Crypto Signals Hub", username: "", avatar_url: "", initials: "CS", type: "Group", chatty: "", style: "concise", prompt: "", cooldown_min: null, cooldown_max: null, cooldown_str: "", voice_profile: false, blocked: true },
+      { id: 876543210, name: "Mom", username: "", avatar_url: "", initials: "MO", type: "Private", chatty: "0.25", style: "", prompt: "Never send links here.", cooldown_min: 30, cooldown_max: 90, cooldown_str: "30s - 90s", voice_profile: false, blocked: false },
     ],
     pending: [
       { id: 41, chat_id: -1001987654321, chat_title: "Startup India Founders", username: "startupindia", avatar_url: "https://t.me/i/userpic/320/startupindia.jpg", initials: "SI", sender_id: 11223344, incoming_text: "btw are you joining the demo day on friday? wanted to show you the pitch deck before we send it out", text: "yeah definitely planning to join! send the deck over, will review it tonight.", created: "2026-11-13 14:22" },
       { id: 40, chat_id: 987654321, chat_title: "Aarav", username: "aaravv", avatar_url: "https://t.me/i/userpic/320/aaravv.jpg", initials: "AA", sender_id: 987654321, incoming_text: "Reached home! Call me when free, need to ask about the weekend plan.", text: "[Voice Note] Reached home! Call me when free, need to ask about the weekend plan.", created: "2026-11-13 13:05", is_voice: true, voice_dur: "0:21" },
     ],
     activity: [
-      { chat: "Delhi Tech Meetup", chat_id: -1001765432109, sender: "TeleAutomator", text: "yeah the venue shifted to Hauz Khas this month, same 7pm slot", ts: "2026-11-13 14:18" },
-      { chat: "Rohan Sharma", chat_id: 123456789, sender: "TeleAutomator", text: "[Voice Note] Haan bhai venue pahunch gaya, 2nd floor hall booked hai", ts: "2026-11-13 13:52", is_voice: true, voice_dur: "0:14" },
-      { chat: "Startup India Founders", chat_id: -1001987654321, sender: "TeleAutomator", text: "pricing page looks solid, maybe add a monthly option", ts: "2026-11-13 12:30" },
-      { chat: "Mom", chat_id: 876543210, sender: "TeleAutomator", text: "[Photo] Lunch pic sent, looks great!", ts: "2026-11-13 11:04", is_media: true },
+      { chat: "Delhi Tech Meetup", chat_id: -1001765432109, message_id: 1042, msg_url: "https://t.me/delhitech/1042", sender: "TeleAutomator", text: "yeah the venue shifted to Hauz Khas this month, same 7pm slot", ts: "2026-11-13 14:18" },
+      { chat: "Rohan Sharma", chat_id: 123456789, message_id: 588, msg_url: "https://t.me/rohan_s/588", sender: "TeleAutomator", text: "[Voice Note] Haan bhai venue pahunch gaya, 2nd floor hall booked hai", ts: "2026-11-13 13:52", is_voice: true, voice_dur: "0:14" },
+      { chat: "Startup India Founders", chat_id: -1001987654321, message_id: 912, msg_url: "https://t.me/startupindia/912", sender: "TeleAutomator", text: "pricing page looks solid, maybe add a monthly option", ts: "2026-11-13 12:30" },
+      { chat: "Mom", chat_id: 876543210, message_id: 341, msg_url: "https://t.me/c/876543210/341", sender: "TeleAutomator", text: "[Photo] Lunch pic sent, looks great!", ts: "2026-11-13 11:04", is_media: true },
     ],
     access: [
-      { id: 555000111, name: "Kaif", username: "@mkr_infinity", avatar_url: "https://t.me/i/userpic/320/mkr_infinity.jpg", main: true, perms: "all" },
-      { id: 777000222, name: "Manager", username: "@manager_h", avatar_url: "https://t.me/i/userpic/320/manager_h.jpg", main: false, perms: "all" },
+      { id: 555000111, name: "Kaif", username: "mkr_infinity", avatar_url: "https://t.me/i/userpic/320/mkr_infinity.jpg", avatar_bg: "linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)", initials: "KR", main: true, perms: "all" },
+      { id: 777000222, name: "Manager", username: "manager_h", avatar_url: "https://t.me/i/userpic/320/manager_h.jpg", avatar_bg: "linear-gradient(135deg, #065f46 0%, #10b981 100%)", initials: "MH", main: false, perms: "all" },
     ],
     commands: [
       { command: "status", description: "Live status: mode, AI engine, chat rules" },
@@ -233,6 +303,21 @@
         if (c) c.chatty = p.value === "def" ? "" : String(parseFloat(p.value) / 100);
         return { ok: true, response: `Chatty updated for chat ${p.chat_id}.` };
       }
+      if (a === "chat_cooldown") {
+        const c = DEMO_DATA.chats.find((x) => String(x.id) === String(p.chat_id));
+        if (c) {
+          if (p.reset) {
+            c.cooldown_min = null;
+            c.cooldown_max = null;
+            c.cooldown_str = "";
+          } else {
+            c.cooldown_min = parseFloat(p.min) || 5;
+            c.cooldown_max = parseFloat(p.max) || 60;
+            c.cooldown_str = `${Math.round(c.cooldown_min)}s - ${Math.round(c.cooldown_max)}s`;
+          }
+        }
+        return { ok: true, response: p.reset ? `Cooldown for chat ${p.chat_id} reset to global default.` : `Cooldown for chat ${p.chat_id} set to ${p.min}s - ${p.max}s.` };
+      }
       if (a === "chatprompt") {
         const c = DEMO_DATA.chats.find((x) => String(x.id) === String(p.chat_id));
         if (c) c.prompt = p.value === "default" ? "" : p.value;
@@ -252,9 +337,26 @@
         return { ok: true, response: `Synced pinned message notes for chat ${p.chat_id}.` };
       }
       if (a === "addauth") {
-        const uid = parseInt(p.user_id, 10) || 999999999;
-        DEMO_DATA.access.push({ id: uid, name: `User ${uid}`, username: "", main: false, perms: "all" });
-        return { ok: true, response: `User ${uid} added to authorized users.` };
+        const raw = String(p.user_id || "").trim();
+        const clean = raw.replace(/^@/, "");
+        const uid = parseInt(clean, 10) || Math.floor(100000000 + Math.random() * 900000000);
+        const name = raw.startsWith("@") ? `@${clean}` : `User ${uid}`;
+        const username = raw.startsWith("@") ? clean : "";
+        DEMO_DATA.access.push({
+          id: uid,
+          name: name,
+          username: username,
+          avatar_url: username ? `https://t.me/i/userpic/320/${username}.jpg` : "",
+          avatar_bg: "linear-gradient(135deg, #701a75 0%, #d946ef 100%)",
+          initials: (raw.startsWith("@") ? clean : `U${uid}`).slice(0, 2).toUpperCase(),
+          main: false,
+          perms: "all",
+        });
+        return { ok: true, response: `Owner ${name} (${uid}) added to authorized users.` };
+      }
+      if (a === "save_available_models") {
+        DEMO_DATA.state.available_models = p.models || [];
+        return { ok: true, response: `Saved ${(p.models || []).length} available model(s).` };
       }
       if (a === "removeauth") {
         const i = DEMO_DATA.access.findIndex((u) => String(u.id) === String(p.user_id));
@@ -458,9 +560,11 @@
     else el.textContent = plainText;
 
     el.classList.remove("hidden");
+    el.onclick = () => { el.classList.add("hidden"); clearTimeout(toastTimer); };
     haptic(statusKind === "err" ? "err" : (statusKind === "ok" ? "ok" : "light"));
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.add("hidden"), 3200);
+    const duration = plainText.length > 50 ? Math.min(6000, 3200 + (plainText.length - 50) * 35) : 3400;
+    toastTimer = setTimeout(() => el.classList.add("hidden"), duration);
   }
 
   function haptic(kind) {
@@ -744,8 +848,19 @@
       ? `<div class="media-badge">${SVGS.camera} <span>Media Reply</span></div>`
       : "";
 
-    return `<div class="feed-row">
-      <div class="feed-top"><span class="feed-chat">${esc(a.chat)}</span><span class="feed-ts num">${esc(formatIST(a.ts))}</span></div>
+    const hasLink = Boolean(a.msg_url);
+    const linkIcon = hasLink
+      ? `<span class="feed-link-icon" title="Jump to message in Telegram">${SVGS.externalLink}</span>`
+      : "";
+
+    return `<div class="feed-row ${hasLink ? "feed-clickable" : ""}" ${hasLink ? `data-msg-url="${esc(a.msg_url)}"` : ""} role="${hasLink ? "button" : "article"}" tabindex="${hasLink ? "0" : "-1"}">
+      <div class="feed-top">
+        <span class="feed-chat">${esc(a.chat)}</span>
+        <div class="feed-meta">
+          <span class="feed-ts num">${esc(formatIST(a.ts))}</span>
+          ${linkIcon}
+        </div>
+      </div>
       ${voiceBadge}${mediaBadge}
       <span class="feed-text">${esc(a.text)}</span>
     </div>`;
@@ -769,56 +884,242 @@
     const initials = c.initials || (c.type === "Group" ? "GP" : "DM");
     const avatarBg = c.avatar_bg || "linear-gradient(135deg, #153421 0%, #1E3F2A 100%)";
     const cleanUser = c.username ? c.username.replace(/^@/, "").trim() : "";
-    const userDisplay = cleanUser
-      ? `<a href="https://t.me/${encodeURIComponent(cleanUser)}" target="_blank" rel="noopener noreferrer" class="pill pill-neutral chat-user chat-user-link" title="Open @${esc(cleanUser)} in Telegram">@${esc(cleanUser)} ↗</a>`
-      : "";
+    const usernameText = cleanUser ? `@${cleanUser}` : `ID: ${c.id}`;
 
-    return `<div class="chat-capsule ${c.blocked ? "is-blocked" : ""}" data-cid="${c.id}">
-      <div class="chat-capsule-head">
+    return `<div class="chat-capsule-card ${c.blocked ? "is-blocked" : ""}" data-cid="${c.id}" role="button" tabindex="0" aria-label="${esc(c.name)} details">
+      <div class="chat-capsule-left">
         <div class="chat-avatar-wrap">
           ${c.avatar_url ? `<img src="${esc(c.avatar_url)}" alt="${esc(c.name)}" class="chat-avatar-img" loading="lazy" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />` : ""}
           <div class="chat-avatar fallback" style="background: ${avatarBg}; ${c.avatar_url ? 'display:none;' : ''}">${esc(initials)}</div>
         </div>
-        <div class="chat-info">
-          <div class="chat-title-row">
-            <span class="chat-name">${esc(c.name)}</span>
-            ${userDisplay}
-            <span class="pill pill-neutral num chat-id">${esc(String(c.id))}</span>
-          </div>
-          <div class="chat-badges">
-            <span class="pill ${c.type === "Group" ? "pill-positive" : "pill-neutral"}">${esc(c.type)}</span>
-            ${c.blocked ? `<span class="pill pill-negative">Blocked</span>` : ""}
-            ${c.prompt ? `<span class="pill pill-warning">Custom Prompt</span>` : ""}
-            ${c.context ? `<span class="pill pill-positive">Has Context</span>` : ""}
-            ${c.voice_profile ? `<span class="pill pill-neutral">Voice Profile</span>` : ""}
-            <span class="pill pill-neutral">Chatty ${esc(fmtPct(c.chatty))}</span>
-            ${c.style ? `<span class="pill pill-neutral">${esc(c.style)}</span>` : ""}
-          </div>
+        <div class="chat-capsule-info">
+          <div class="chat-capsule-name">${esc(c.name)}</div>
+          <div class="chat-capsule-username">${esc(usernameText)}</div>
         </div>
       </div>
-      <div class="chat-actions chat-actions-grid">
-        <button type="button" class="btn small action-btn-prompt" data-op="prompt">${SVGS.edit} Prompt</button>
-        <button type="button" class="btn small action-btn-context" data-op="context">${SVGS.brain} Context</button>
-        <button type="button" class="btn small action-btn-chatty" data-op="chatty">${SVGS.msg} Chatty</button>
-        <button type="button" class="btn small danger action-btn-remove" data-op="remove">${SVGS.trash} Remove</button>
+      <div class="chat-capsule-right">
+        ${c.blocked ? `<span class="pill pill-compact pill-negative">Blocked</span>` : ""}
+        <span class="pill pill-compact ${c.type === "Group" ? "pill-positive" : "pill-neutral"}">${esc(c.type)}</span>
+        <span class="chat-capsule-arrow" aria-hidden="true">${SVGS.chevronRight}</span>
       </div>
     </div>`;
   }
 
   function wireChatRows() {
-    document.querySelectorAll("#chat-list .chat-capsule, #chat-list .row").forEach((row) => {
-      const cid = row.dataset.cid;
-      row.querySelectorAll("[data-op]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const c = chatCache.find((x) => String(x.id) === String(cid));
-          if (!c) return;
-          if (btn.dataset.op === "chatty") chattySheet(c);
-          else if (btn.dataset.op === "prompt") promptSheet(c);
-          else if (btn.dataset.op === "context") contextSheet(c);
-          else removeSheet(c, btn.dataset.op);
-        });
+    document.querySelectorAll("#chat-list .chat-capsule-card").forEach((card) => {
+      const cid = card.dataset.cid;
+      const openHandler = () => {
+        const c = chatCache.find((x) => String(x.id) === String(cid));
+        if (c) openChatDetailSheet(c);
+      };
+      card.addEventListener("click", openHandler);
+      card.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openHandler();
+        }
       });
     });
+  }
+
+  function openChatDetailSheet(c) {
+    const initials = c.initials || (c.type === "Group" ? "GP" : "DM");
+    const avatarBg = c.avatar_bg || "linear-gradient(135deg, #153421 0%, #1E3F2A 100%)";
+    const cleanUser = c.username ? c.username.replace(/^@/, "").trim() : "";
+    const userDisplay = cleanUser
+      ? `<a href="https://t.me/${encodeURIComponent(cleanUser)}" target="_blank" rel="noopener noreferrer" class="pill pill-neutral chat-user chat-user-link" title="Open @${esc(cleanUser)} in Telegram">@${esc(cleanUser)} ${SVGS.externalLink}</a>`
+      : "";
+
+    const chattyDisplay = c.chatty !== "" && c.chatty !== null && c.chatty !== undefined ? `${Math.round(parseFloat(c.chatty) * 100)}%` : "Default (30–60%)";
+    const cooldownDisplay = c.cooldown_str || "Global Default (5s – 60s)";
+
+    const bodyHtml = `
+      <div class="chat-detail-wrap">
+        <div class="chat-detail-header">
+          <div class="chat-avatar-wrap large">
+            ${c.avatar_url ? `<img src="${esc(c.avatar_url)}" alt="${esc(c.name)}" class="chat-avatar-img" loading="lazy" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />` : ""}
+            <div class="chat-avatar fallback" style="background: ${avatarBg}; ${c.avatar_url ? 'display:none;' : ''}">${esc(initials)}</div>
+          </div>
+          <div class="chat-detail-title-col">
+            <h4 class="chat-detail-name">${esc(c.name)}</h4>
+            <div class="chat-detail-sub-row">
+              ${userDisplay}
+              <div class="chat-id-badge-wrap">
+                <span class="pill pill-neutral num">ID: ${esc(String(c.id))}</span>
+                <button type="button" class="copy-id-btn" data-copy="${esc(String(c.id))}" title="Copy Chat ID">${SVGS.copy}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="chat-detail-tags">
+          <span class="pill ${c.type === "Group" ? "pill-positive" : "pill-neutral"}">${esc(c.type)}</span>
+          ${c.voice_profile ? `<span class="pill pill-neutral">Voice Profile Active</span>` : ""}
+          ${c.blocked ? `<span class="pill pill-negative">Blocked</span>` : ""}
+          ${c.prompt ? `<span class="pill pill-warning">Custom Prompt</span>` : ""}
+          ${c.context ? `<span class="pill pill-positive">Has Context</span>` : ""}
+        </div>
+
+        <div class="chat-detail-summary-card">
+          <div class="summary-item">
+            <span class="summary-label">Chatty Frequency</span>
+            <span class="summary-val">${esc(chattyDisplay)}</span>
+          </div>
+          <div class="summary-item">
+            <span class="summary-label">Reply Cooldown</span>
+            <span class="summary-val">${esc(cooldownDisplay)}</span>
+          </div>
+          ${c.prompt ? `
+            <div class="summary-item full">
+              <span class="summary-label">Custom Persona</span>
+              <div class="summary-quote">${esc(c.prompt)}</div>
+            </div>` : ""}
+          ${c.context ? `
+            <div class="summary-item full">
+              <span class="summary-label">Permanent Memory</span>
+              <div class="summary-quote">${esc(c.context)}</div>
+            </div>` : ""}
+        </div>
+
+        <div class="chat-actions-heading">Chat Actions</div>
+        <div class="chat-actions-5grid">
+          <button type="button" class="clay-action-btn action-theme-prompt" data-action="prompt">
+            <div class="action-btn-icon-wrap">${SVGS.edit}</div>
+            <div class="action-btn-text">
+              <span class="action-btn-title">Prompt</span>
+              <span class="action-btn-sub">AI Persona</span>
+            </div>
+          </button>
+          <button type="button" class="clay-action-btn action-theme-context" data-action="context">
+            <div class="action-btn-icon-wrap">${SVGS.brain}</div>
+            <div class="action-btn-text">
+              <span class="action-btn-title">Context</span>
+              <span class="action-btn-sub">Chat Memory</span>
+            </div>
+          </button>
+          <button type="button" class="clay-action-btn action-theme-chatty" data-action="chatty">
+            <div class="action-btn-icon-wrap">${SVGS.msg}</div>
+            <div class="action-btn-text">
+              <span class="action-btn-title">Chatty</span>
+              <span class="action-btn-sub">${esc(fmtPct(c.chatty))} Chance</span>
+            </div>
+          </button>
+          <button type="button" class="clay-action-btn action-theme-cooldown" data-action="cooldown">
+            <div class="action-btn-icon-wrap">${SVGS.clock}</div>
+            <div class="action-btn-text">
+              <span class="action-btn-title">Cooldown</span>
+              <span class="action-btn-sub">${esc(c.cooldown_str || "Default")}</span>
+            </div>
+          </button>
+          <button type="button" class="clay-action-btn action-theme-remove" data-action="remove">
+            <div class="action-btn-icon-wrap">${SVGS.trash}</div>
+            <div class="action-btn-text">
+              <span class="action-btn-title">Remove</span>
+              <span class="action-btn-sub">Delete / Block</span>
+            </div>
+          </button>
+        </div>
+      </div>
+    `;
+
+    openSheet(c.name, bodyHtml, [{ label: "Close", kind: "" }]);
+
+    setTimeout(() => {
+      const sheetBody = $("sheet-body");
+      if (!sheetBody) return;
+
+      sheetBody.querySelector(".copy-id-btn")?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const copyText = e.currentTarget.dataset.copy;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(copyText).then(() => toast("Chat ID copied!"));
+        } else {
+          toast(`ID: ${copyText}`);
+        }
+      });
+
+      sheetBody.querySelectorAll(".clay-action-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          closeSheet();
+          const act = btn.dataset.action;
+          if (act === "prompt") promptSheet(c);
+          else if (act === "context") contextSheet(c);
+          else if (act === "chatty") chattySheet(c);
+          else if (act === "cooldown") chatCooldownSheet(c);
+          else if (act === "remove") removeSheet(c, "remove");
+        });
+      });
+    }, 50);
+  }
+
+  function chatCooldownSheet(c) {
+    const curMin = c.cooldown_min != null ? c.cooldown_min : 5;
+    const curMax = c.cooldown_max != null ? c.cooldown_max : 60;
+    const isCustom = c.cooldown_min != null && c.cooldown_max != null;
+
+    const bodyHtml = `
+      <div class="cooldown-sheet-content">
+        <p class="field-hint" style="margin-top:0;margin-bottom:12px">
+          Set custom random reply cooldown range for <strong>${esc(c.name)}</strong>. The bot waits a random duration between Min and Max seconds between automated replies in this chat.
+        </p>
+        <div class="cooldown-inputs-grid">
+          <div class="field-group">
+            <label for="cd-min-input" class="field-label">Min Cooldown (sec)</label>
+            <input type="number" id="cd-min-input" class="clay-input" min="0" max="600" value="${curMin}" step="1">
+          </div>
+          <div class="field-group">
+            <label for="cd-max-input" class="field-label">Max Cooldown (sec)</label>
+            <input type="number" id="cd-max-input" class="clay-input" min="0" max="1200" value="${curMax}" step="1">
+          </div>
+        </div>
+        <div class="cooldown-presets-section">
+          <span class="field-label" style="display:block;margin-bottom:6px">Quick Presets</span>
+          <div class="cooldown-preset-chips">
+            <button type="button" class="preset-chip" data-min="5" data-max="15">5s - 15s (Active)</button>
+            <button type="button" class="preset-chip" data-min="15" data-max="45">15s - 45s (Natural)</button>
+            <button type="button" class="preset-chip" data-min="30" data-max="90">30s - 90s (Casual)</button>
+            <button type="button" class="preset-chip" data-min="60" data-max="180">60s - 180s (Slow)</button>
+          </div>
+        </div>
+        <div class="current-cd-status" style="margin-top:12px;font-size:12px;color:var(--faint);">
+          Status: ${isCustom ? `<span style="color:var(--accent-bright);font-weight:600">Custom (${curMin}s - ${curMax}s)</span>` : `<span>Global default (5s - 60s)</span>`}
+        </div>
+      </div>
+    `;
+
+    openSheet(
+      `Cooldown · ${c.name}`,
+      bodyHtml,
+      [
+        {
+          label: "Save Cooldown",
+          kind: "primary",
+          onClick: () => {
+            const minVal = parseFloat($("cd-min-input")?.value || "5");
+            const maxVal = parseFloat($("cd-max-input")?.value || "60");
+            runAction("chat_cooldown", { chat_id: c.id, min: minVal, max: maxVal });
+          },
+        },
+        {
+          label: "Reset to Global",
+          onClick: () => {
+            runAction("chat_cooldown", { chat_id: c.id, reset: true });
+          },
+        },
+      ]
+    );
+
+    setTimeout(() => {
+      document.querySelectorAll(".cooldown-preset-chips .preset-chip").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const minInp = $("cd-min-input");
+          const maxInp = $("cd-max-input");
+          if (minInp) minInp.value = btn.dataset.min;
+          if (maxInp) maxInp.value = btn.dataset.max;
+          haptic("light");
+        });
+      });
+    }, 50);
   }
 
   function chattySheet(c) {
@@ -1032,7 +1333,7 @@
           <div class="approval-user-meta">
             <div class="approval-name-row">
               <span class="approval-user-name">${esc(p.chat_title || `Chat ${p.chat_id}`)}</span>
-              ${cleanUser ? `<a href="https://t.me/${encodeURIComponent(cleanUser)}" target="_blank" rel="noopener noreferrer" class="pill pill-neutral chat-user-link" title="Open @${esc(cleanUser)} in Telegram">@${esc(cleanUser)} ↗</a>` : ""}
+              ${cleanUser ? `<a href="https://t.me/${encodeURIComponent(cleanUser)}" target="_blank" rel="noopener noreferrer" class="pill pill-neutral chat-user-link" title="Open @${esc(cleanUser)} in Telegram">@${esc(cleanUser)} ${SVGS.externalLink}</a>` : ""}
             </div>
             <div class="approval-sub-row">
               <span class="pill pill-neutral num">ID: ${esc(String(p.sender_id || p.chat_id))}</span>
@@ -1140,15 +1441,16 @@
     if (!data || data.authorized === false) return maybePaywall(data);
     $("access-list").innerHTML = (data.users || []).length
       ? data.users.map((u) => {
-          const initials = (u.name || "U").slice(0, 2).toUpperCase();
+          const initials = u.initials || (u.name || "U").slice(0, 2).toUpperCase();
           const cleanUser = u.username ? u.username.replace(/^@/, "").trim() : "";
           const userLink = cleanUser
-            ? `<a href="https://t.me/${encodeURIComponent(cleanUser)}" target="_blank" rel="noopener noreferrer" class="pill pill-neutral chat-user-link" title="Open in Telegram">@${esc(cleanUser)} ↗</a>`
+            ? `<a href="https://t.me/${encodeURIComponent(cleanUser)}" target="_blank" rel="noopener noreferrer" class="pill pill-neutral chat-user-link" title="Open in Telegram">@${esc(cleanUser)} ${SVGS.externalLink}</a>`
             : "";
+          const avatarBg = u.avatar_bg || "linear-gradient(135deg, #1E293B 0%, #334155 100%)";
           return `<div class="user-capsule">
             <div class="user-avatar-wrap">
               ${u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="${esc(u.name)}" class="user-avatar-img" loading="lazy" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />` : ""}
-              <div class="user-avatar-circle" style="${u.avatar_url ? 'display:none;' : ''}">${esc(initials)}</div>
+              <div class="user-avatar-circle" style="${u.avatar_url ? 'display:none;' : ''}background:${avatarBg};">${esc(initials)}</div>
             </div>
             <div class="capsule-main">
               <div class="capsule-head">
@@ -1163,15 +1465,20 @@
             </div>
           </div>`;
         }).join("")
-      : `<div class="empty">No authorized users.</div>`;
+      : `<div class="empty">No authorized owners. Add an owner by ID or @username above.</div>`;
     $("access-list").querySelectorAll("[data-unauth]").forEach((btn) =>
-      btn.addEventListener("click", () => openSheet("Remove user", `<p>Revoke panel access for user <span class="num">${esc(btn.dataset.unauth)}</span>?</p>`,
+      btn.addEventListener("click", () => openSheet("Remove owner", `<p>Revoke panel access for owner <span class="num">${esc(btn.dataset.unauth)}</span>?</p>`,
         [{ label: "Remove", kind: "danger", onClick: () => runAction("removeauth", { user_id: btn.dataset.unauth }) }, { label: "Cancel" }])));
 
     const s = await api("/api/state");
     if (s && s.authorized !== false) {
       if (document.activeElement !== $("ai-model") && s.ai_model) $("ai-model").value = s.ai_model;
       if (document.activeElement !== $("ai-baseurl") && s.ai_base_url) $("ai-baseurl").value = s.ai_base_url;
+      if (s.available_models && Array.isArray(s.available_models) && s.available_models.length) {
+        cachedEndpointModels = s.available_models;
+        $("models-fetched-count").textContent = `(${cachedEndpointModels.length})`;
+        renderModelChips(cachedEndpointModels);
+      }
       renderMoreControls(s);
     }
   }
@@ -1558,19 +1865,45 @@
 
     // Instant Tactile Haptic on buttons
     document.addEventListener("pointerdown", (e) => {
-      const target = e.target.closest(".btn, .pay-btn, .pay-check-btn, .chip, .seg, .model-chip, .preset-chip, .clay-switch, .m3-nav-item, .sheet-close-btn, .linklike, .kpi[data-goto], .usage-cell[data-goto]");
+      const target = e.target.closest(".btn, .pay-btn, .pay-check-btn, .chip, .seg, .model-chip, .preset-chip, .clay-switch, .m3-nav-item, .sheet-close-btn, .linklike, .kpi[data-goto], .usage-cell[data-goto], .help-btn, .clay-action-btn, .chat-capsule-card, .feed-clickable");
       if (!target) return;
       haptic("light");
     }, { passive: true });
 
-    // Native Telegram link navigation bridge
+    // Native Telegram message navigation & user profile link bridge
     document.addEventListener("click", (e) => {
+      const feedRow = e.target.closest(".feed-clickable");
+      if (feedRow) {
+        const url = feedRow.dataset.msgUrl;
+        if (url) {
+          haptic("light");
+          if (window.Telegram?.WebApp?.openTelegramLink && url.startsWith("https://t.me/")) {
+            try {
+              window.Telegram.WebApp.openTelegramLink(url);
+              return;
+            } catch (_) {}
+          }
+          window.open(url, "_blank", "noopener,noreferrer");
+          return;
+        }
+      }
       const link = e.target.closest(".chat-user-link");
       if (!link) return;
       const href = link.getAttribute("href");
       if (href && href.startsWith("https://t.me/") && window.Telegram && window.Telegram.WebApp && typeof window.Telegram.WebApp.openTelegramLink === "function") {
         e.preventDefault();
         window.Telegram.WebApp.openTelegramLink(href);
+      }
+    });
+
+    // Keyboard navigation support for clickable feed items
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        const feedRow = e.target.closest(".feed-clickable");
+        if (feedRow && document.activeElement === feedRow) {
+          e.preventDefault();
+          feedRow.click();
+        }
       }
     });
 
@@ -1669,7 +2002,7 @@
 
     $("auth-add").addEventListener("click", () => {
       const v = $("auth-id").value.trim();
-      if (!v) return toast("Enter a Telegram user ID");
+      if (!v) return toast("Enter a Telegram user ID or @username");
       $("auth-id").value = "";
       runAction("addauth", { user_id: v });
     });
@@ -1681,12 +2014,13 @@
       runAction("model", { value: v });
     });
     $("ai-model").addEventListener("keydown", (e) => { if (e.key === "Enter") $("ai-model-save").click(); });
+
     // Model Fallback Multi-Select Chips
     function renderModelChips(modelsList, selectedOverride) {
       const container = $("ai-model-chips");
       if (!container) return;
       if (!modelsList || !modelsList.length) {
-        container.innerHTML = '<div class="empty sm">No models found. Tap &ldquo;Fetch models&rdquo; or type manually.</div>';
+        container.innerHTML = '<div class="empty sm">No models loaded. Tap &ldquo;Fetch models&rdquo; to query your endpoint.</div>';
         return;
       }
 
@@ -1734,7 +2068,142 @@
       });
     }
 
-    // Health check candidate models and auto-add healthy models
+    // Modal popup: Select which fetched models to add to available models
+    function showFetchModelsPopup(models) {
+      if (!models || !models.length) {
+        toast("Endpoint returned 0 models.");
+        return;
+      }
+      const currentActive = ($("ai-model").value || "")
+        .split(/[,;]/)
+        .map((s) => s.trim().replace(/^models\//, ""))
+        .filter(Boolean);
+
+      const html = `
+        <div class="model-popup-toolbar">
+          <span class="faint">${models.length} model(s) retrieved from endpoint</span>
+          <div class="model-popup-btns">
+            <button type="button" class="btn small" id="popup-select-all">Select all</button>
+            <button type="button" class="btn small" id="popup-deselect-all">Deselect all</button>
+          </div>
+        </div>
+        <div class="model-popup-list" id="popup-models-list">
+          ${models.map((m) => {
+            const cleanM = String(m).replace(/^models\//, "").trim();
+            const isChecked = cachedEndpointModels.length
+              ? cachedEndpointModels.includes(cleanM)
+              : (currentActive.includes(cleanM) || cleanM.includes("mercury-3") || cleanM.includes("flash"));
+            return `<label class="model-check-row">
+              <input type="checkbox" class="model-popup-cb" value="${esc(cleanM)}" ${isChecked ? "checked" : ""}>
+              <span class="model-row-name num">${esc(cleanM)}</span>
+            </label>`;
+          }).join("")}
+        </div>
+      `;
+
+      openSheet(
+        "Available Models from Endpoint",
+        html,
+        [
+          {
+            label: "Confirm Selection",
+            kind: "primary",
+            onClick: () => {
+              const cbs = Array.from(document.querySelectorAll(".model-popup-cb:checked"));
+              const selected = cbs.map((cb) => cb.value.trim()).filter(Boolean);
+              if (!selected.length) {
+                toast("Please select at least 1 model.");
+                return;
+              }
+              cachedEndpointModels = selected;
+              $("models-fetched-count").textContent = `(${cachedEndpointModels.length})`;
+              renderModelChips(cachedEndpointModels);
+              runAction("save_available_models", { models: selected });
+              toast(`Loaded ${selected.length} model(s) into available models`);
+            },
+          },
+          { label: "Cancel" },
+        ]
+      );
+
+      const selAll = $("popup-select-all");
+      const deselAll = $("popup-deselect-all");
+      if (selAll) {
+        selAll.addEventListener("click", () => {
+          document.querySelectorAll(".model-popup-cb").forEach((cb) => (cb.checked = true));
+        });
+      }
+      if (deselAll) {
+        deselAll.addEventListener("click", () => {
+          document.querySelectorAll(".model-popup-cb").forEach((cb) => (cb.checked = false));
+        });
+      }
+    }
+
+    // Modal popup: Health check results and manual rotation confirmation
+    function showHealthResultsPopup(res) {
+      if (!res || !res.results) return;
+      const okCount = res.working_models ? res.working_models.length : 0;
+      const totalCount = res.results.length;
+
+      const replyHtml = res.reply
+        ? `<p class="faint sm" style="margin-top:6px;word-break:break-word;">Live reply: &ldquo;${esc(res.reply)}&rdquo;</p>`
+        : "";
+
+      const bannerHtml = `
+        <div class="health-summary-banner ${okCount > 0 ? "positive" : "negative"}">
+          <span class="pill ${okCount > 0 ? "pill-positive" : "pill-negative"}">${okCount} Healthy / ${totalCount} Tested</span>
+          ${replyHtml}
+        </div>
+      `;
+
+      const listHtml = `
+        <div class="health-model-list">
+          ${res.results.map((r) => {
+            const isOk = !!r.ok;
+            return `<div class="health-model-row ${isOk ? "is-ok" : "is-fail"}">
+              <div class="health-model-left">
+                <input type="checkbox" class="health-result-cb" value="${esc(r.model)}" ${isOk ? "checked" : ""}>
+                <span class="health-model-name num">${esc(r.model)}</span>
+              </div>
+              <div class="health-model-right">
+                <span class="pill ${isOk ? "pill-positive" : "pill-negative"}">${isOk ? "Healthy" : "Failed"}</span>
+                <span class="faint sm detail" title="${esc(r.detail || "")}">${esc(r.detail || "")}</span>
+              </div>
+            </div>`;
+          }).join("")}
+        </div>
+      `;
+
+      const bodyHtml = bannerHtml + `<p class="field-hint" style="margin-bottom:8px;">Choose which healthy models to activate in your fallback rotation:</p>` + listHtml;
+
+      openSheet(
+        "Health Check Results",
+        bodyHtml,
+        [
+          {
+            label: "Apply Selected to Rotation",
+            kind: "primary",
+            onClick: () => {
+              const cbs = Array.from(document.querySelectorAll(".health-result-cb:checked"));
+              const selected = cbs.map((cb) => cb.value.trim()).filter(Boolean);
+              if (!selected.length) {
+                toast("Select at least 1 healthy model.");
+                return;
+              }
+              const newChain = selected.join(",");
+              $("ai-model").value = newChain;
+              runAction("model", { value: newChain });
+              renderModelChips(cachedEndpointModels.length ? cachedEndpointModels : selected, selected);
+              toast(`Set active rotation (${selected.length} model(s)): ${newChain}`);
+            },
+          },
+          { label: "Close" },
+        ]
+      );
+    }
+
+    // Health check candidate models
     async function checkModelsHealth() {
       const btn = $("ai-check");
       const baseurl = $("ai-baseurl").value.trim();
@@ -1746,7 +2215,7 @@
 
       btn.disabled = true;
       btn.textContent = "Checking...";
-      toast("Pinging candidate models for live health...");
+      toast("Pinging models for live endpoint health...");
 
       const box = $("test-results-box");
       const badge = $("test-badge");
@@ -1774,12 +2243,14 @@
           modelEl.textContent = `Active rotation: ${res.active_model}`;
           replyEl.textContent = `"${res.reply}"`;
 
-          $("ai-model").value = res.active_model;
+          if (res.auto_applied) {
+            $("ai-model").value = res.active_model;
+          }
           if (!cachedEndpointModels.length && res.results) {
             cachedEndpointModels = res.results.map((r) => r.model);
             $("models-fetched-count").textContent = `(${cachedEndpointModels.length})`;
           }
-          renderModelChips(cachedEndpointModels.length ? cachedEndpointModels : res.working_models, res.working_models);
+          renderModelChips(cachedEndpointModels.length ? cachedEndpointModels : res.working_models);
 
           const pills = (res.results || []).map((r) => {
             const cls = r.ok ? "test-pill ok" : "test-pill fail";
@@ -1790,7 +2261,7 @@
           });
           summaryEl.innerHTML = pills.join("");
 
-          toast(`Auto-configured ${res.working_models.length} healthy model(s): ${res.active_model}`);
+          showHealthResultsPopup(res);
         } else {
           badge.className = "pill pill-negative";
           badge.textContent = "Failed";
@@ -1802,7 +2273,11 @@
             return `<span class="test-pill fail">${failSvg}${esc(r.model)}: ${esc(r.detail)}</span>`;
           });
           summaryEl.innerHTML = pills.join("");
-          toast("Health check found 0 working models");
+          if (res && res.results) {
+            showHealthResultsPopup(res);
+          } else {
+            toast("Health check found 0 working models");
+          }
         }
       } catch (e) {
         badge.className = "pill pill-negative";
@@ -1816,7 +2291,7 @@
     }
     $("ai-check").addEventListener("click", checkModelsHealth);
 
-    // Fetch models from endpoint
+    // Fetch models from endpoint with interactive selection popup
     async function fetchModels() {
       const btn = $("ai-fetch-models");
       const baseurl = $("ai-baseurl").value.trim();
@@ -1830,15 +2305,11 @@
           return;
         }
         const models = res.models || [];
-        cachedEndpointModels = models;
-        $("models-fetched-count").textContent = `(${models.length})`;
         if (!models.length) {
-          $("ai-model-chips").innerHTML = `<div class="empty sm">Endpoint returned 0 models.</div>`;
+          toast("Endpoint returned 0 models.");
           return;
         }
-
-        renderModelChips(cachedEndpointModels);
-        toast(`Loaded ${models.length} models from endpoint`);
+        showFetchModelsPopup(models);
       } catch (e) {
         toast("Error fetching models: " + e.message);
       } finally {
@@ -1995,6 +2466,15 @@
         sw.className = `clay-switch ${next}`;
         sw.textContent = next.toUpperCase();
         runAction(sw.dataset.action, { value: next });
+      });
+    });
+
+    // Behavior Simulation Help Popup Buttons (?)
+    document.querySelectorAll("#behavior-toggles .help-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        haptic("light");
+        openHelpSheet(btn.dataset.help);
       });
     });
 

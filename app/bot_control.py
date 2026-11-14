@@ -556,13 +556,34 @@ class BotControl:
                     "❌ Permission denied\nMissing: Main owner privileges\nFix: Only the main account owner can add authorized users.",
                 )
                 return
-            if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
+            if len(parts) < 2:
                 await self.send_message(
                     chat_id,
-                    "❌ /addauth failed\nMissing: Valid Telegram User ID\nFix: /addauth <user_id> (e.g. /addauth 123456789)",
+                    "❌ /addauth failed\nMissing: Valid Telegram User ID or @username\nFix: /addauth <user_id|@username> (e.g. /addauth 123456789 or /addauth @alice)",
                 )
                 return
-            new_id = int(parts[1].lstrip("-"))
+            target_str = parts[1].strip()
+            new_id = None
+            if target_str.lstrip("-").isdigit():
+                new_id = int(target_str.lstrip("-"))
+            elif self.reply_manager and hasattr(self.reply_manager, "_resolve_chat_id"):
+                cid, meta, err = await self.reply_manager._resolve_chat_id(target_str)
+                if err or cid is None:
+                    await self.send_message(chat_id, err or f"❌ Could not resolve '{target_str}'.")
+                    return
+                new_id = cid
+            elif self.db and hasattr(self.db, "find_chat_by_username"):
+                clean = target_str.lstrip("@").strip()
+                meta = self.db.find_chat_by_username(clean)
+                if meta:
+                    new_id = meta["chat_id"]
+
+            if new_id is None or new_id <= 0:
+                await self.send_message(
+                    chat_id,
+                    "❌ /addauth failed\nMissing: Valid Telegram User ID or @username\nFix: /addauth <user_id|@username> (e.g. /addauth 123456789 or /addauth @alice)",
+                )
+                return
             users = self._load_authorized()
             if new_id in users:
                 await self.send_message(chat_id, f"User `{new_id}` is already authorized.")
@@ -581,13 +602,34 @@ class BotControl:
                     "❌ Permission denied\nMissing: Main owner privileges\nFix: Only the main account owner can remove authorized users.",
                 )
                 return
-            if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
+            if len(parts) < 2:
                 await self.send_message(
                     chat_id,
-                    "❌ /removeauth failed\nMissing: Valid Telegram User ID\nFix: /removeauth <user_id> (e.g. /removeauth 123456789)",
+                    "❌ /removeauth failed\nMissing: Valid Telegram User ID or @username\nFix: /removeauth <user_id|@username> (e.g. /removeauth 123456789 or /removeauth @alice)",
                 )
                 return
-            target = int(parts[1].lstrip("-"))
+            target_str = parts[1].strip()
+            target = None
+            if target_str.lstrip("-").isdigit():
+                target = int(target_str.lstrip("-"))
+            elif self.reply_manager and hasattr(self.reply_manager, "_resolve_chat_id"):
+                cid, meta, err = await self.reply_manager._resolve_chat_id(target_str)
+                if err or cid is None:
+                    await self.send_message(chat_id, err or f"❌ Could not resolve '{target_str}'.")
+                    return
+                target = cid
+            elif self.db and hasattr(self.db, "find_chat_by_username"):
+                clean = target_str.lstrip("@").strip()
+                meta = self.db.find_chat_by_username(clean)
+                if meta:
+                    target = meta["chat_id"]
+
+            if target is None:
+                await self.send_message(
+                    chat_id,
+                    "❌ /removeauth failed\nMissing: Valid Telegram User ID or @username\nFix: /removeauth <user_id|@username> (e.g. /removeauth 123456789 or /removeauth @alice)",
+                )
+                return
             users = self._load_authorized()
             if target not in users:
                 await self.send_message(

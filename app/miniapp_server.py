@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -164,6 +165,21 @@ def _is_main_user(ctx: MiniAppContext, user_id: int) -> bool:
     return False
 
 
+def _main_user_id(ctx: MiniAppContext) -> Optional[int]:
+    if ctx.bot_control and hasattr(ctx.bot_control, "main_user_id"):
+        return ctx.bot_control.main_user_id
+    try:
+        saved_main = ctx.db.get_state("main_owner_id", "")
+        if saved_main and int(saved_main) > 0:
+            return int(saved_main)
+    except Exception:
+        pass
+    if ctx.reply_manager and hasattr(ctx.reply_manager, "config") and getattr(ctx.reply_manager.config, "bot_authorized_users", None):
+        return sorted(ctx.reply_manager.config.bot_authorized_users)[0]
+    users = _authorized_user_ids(ctx)
+    return min(users) if users else None
+
+
 class MiniAppAPI:
     """Route handlers, kept separate from the HTTP plumbing for testability."""
 
@@ -225,6 +241,26 @@ class MiniAppAPI:
         lang = ctx.db.get_state("chat_language") or ctx.db.get_state("reply_language") or getattr(getattr(ctx, "generator", None), "language", "english") or "english"
         maxtokens = ctx.db.get_state("ai_max_tokens", "512")
         rules = ctx.db.list_keyword_rules() if hasattr(ctx.db, "list_keyword_rules") else []
+
+        # Available models list (custom/endpoint or defaults)
+        raw_avail = ctx.db.get_state("available_models", "")
+        avail_models: list[str] = []
+        if raw_avail:
+            try:
+                avail_models = json.loads(raw_avail)
+            except Exception:
+                pass
+        if not avail_models:
+            eff_base = (ai_base_url or "").lower()
+            if "inceptionlabs" in eff_base:
+                avail_models = ["mercury-3", "mercury-3-preview-1014", "mercury-3-preview-1002"]
+            elif "openai" in eff_base:
+                avail_models = ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"]
+            elif "nvidia" in eff_base:
+                avail_models = ["meta/llama-3.1-70b-instruct", "meta/llama-3.1-8b-instruct"]
+            else:
+                avail_models = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"]
+
         return {
             "mode": mode,
             "state": "stopped" if emergency else ("paused" if paused > 0 else "active"),
@@ -243,6 +279,8 @@ class MiniAppAPI:
             "ai_engine": type(ctx.generator.provider).__name__.replace("Provider", ""),
             "ai_model": ai_model or "",
             "ai_base_url": ai_base_url or "",
+            "available_models": avail_models,
+            "models_manually_set": ctx.db.get_state("models_manually_set", "0") == "1",
             "auto_reactions": auto_reactions,
             "multibubble": multibubble,
             "typo": typo,
@@ -301,6 +339,19 @@ class MiniAppAPI:
             clean_user = username.lstrip("@").strip()
             avatar_url = f"https://t.me/i/userpic/320/{clean_user}.jpg" if clean_user else ""
 
+            c_min_str = ctx.db.get_state(f"chat_cooldown_min_{cid}") or ""
+            c_max_str = ctx.db.get_state(f"chat_cooldown_max_{cid}") or ""
+            cooldown_min = None
+            cooldown_max = None
+            cooldown_str = ""
+            if c_min_str and c_max_str:
+                try:
+                    cooldown_min = float(c_min_str)
+                    cooldown_max = float(c_max_str)
+                    cooldown_str = f"{int(cooldown_min)}s - {int(cooldown_max)}s"
+                except (ValueError, TypeError):
+                    pass
+
             chats.append({
                 "id": cid,
                 "name": title,
@@ -313,6 +364,9 @@ class MiniAppAPI:
                 "style": ctx.db.get_state(f"chat_style_{cid}") or "",
                 "prompt": ctx.db.get_state(f"chat_prompt_{cid}") or "",
                 "context": perm.get("notes") or "",
+                "cooldown_min": cooldown_min,
+                "cooldown_max": cooldown_max,
+                "cooldown_str": cooldown_str,
                 "voice_profile": bool(ctx.db.get_state(f"chat_voice_profile_{cid}")),
                 "blocked": cid in blocked,
             })
@@ -351,8 +405,9 @@ class MiniAppAPI:
         with self.ctx.db._get_connection() as conn:
             rows = conn.execute(
                 """
-                SELECT m.chat_id, m.sender_name, m.text, m.created_at,
-                       COALESCE(k.title, '') AS title
+                SELECT m.chat_id, m.message_id, m.sender_name, m.text, m.created_at,
+                       COALESCE(k.title, '') AS title,
+                       COALESCE(k.username, '') AS username
                 FROM chat_messages m
                 LEFT JOIN known_chats k ON k.chat_id = m.chat_id
                 WHERE m.is_outgoing = 1
@@ -362,9 +417,24 @@ class MiniAppAPI:
             ).fetchall()
         items = []
         for r in rows:
+            cid = r["chat_id"]
+            mid = r["message_id"]
+            username = (r["username"] or "").lstrip("@").strip()
+            msg_url = ""
+            if mid and mid > 0:
+                if username:
+                    msg_url = f"https://t.me/{username}/{mid}"
+                elif str(cid).startswith("-100"):
+                    clean_cid = str(cid)[4:]
+                    msg_url = f"https://t.me/c/{clean_cid}/{mid}"
+                elif cid > 0:
+                    msg_url = f"https://t.me/c/{cid}/{mid}"
+
             items.append({
-                "chat": r["title"] or f"Chat {r['chat_id']}",
-                "chat_id": r["chat_id"],
+                "chat": r["title"] or f"Chat {cid}",
+                "chat_id": cid,
+                "message_id": mid,
+                "msg_url": msg_url,
                 "text": r["text"] or "",
                 "sender": r["sender_name"] or "",
                 "ts": r["created_at"] or "",
@@ -373,18 +443,44 @@ class MiniAppAPI:
 
     def handle_access(self) -> dict:
         ids = sorted(_authorized_user_ids(self.ctx))
-        main_id = min(ids) if ids else None
+        main_id = _main_user_id(self.ctx)
+        if main_id and main_id not in ids:
+            ids.append(main_id)
+            ids.sort()
+
+        gradients = [
+            "linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)",
+            "linear-gradient(135deg, #065f46 0%, #10b981 100%)",
+            "linear-gradient(135deg, #701a75 0%, #d946ef 100%)",
+            "linear-gradient(135deg, #831843 0%, #f43f5e 100%)",
+            "linear-gradient(135deg, #1e293b 0%, #64748b 100%)",
+            "linear-gradient(135deg, #0f2c1f 0%, #1e40af 100%)",
+        ]
+
         users = []
         for uid in ids:
-            meta = self.ctx.db.get_chat_metadata(uid) or {}
+            meta = self.ctx.db.get_chat_metadata(uid) or {} if hasattr(self.ctx.db, "get_chat_metadata") else {}
             username = meta.get("username") or ""
             clean_user = username.lstrip("@").strip()
             avatar_url = f"https://t.me/i/userpic/320/{clean_user}.jpg" if clean_user else ""
+            title = meta.get("title") or ("Main Owner" if uid == main_id else f"User {uid}")
+            clean_name = re.sub(r"[^\w\s]", "", title).strip()
+            words = clean_name.split()
+            if len(words) >= 2:
+                initials = (words[0][0] + words[1][0]).upper()
+            elif words:
+                initials = words[0][:2].upper()
+            else:
+                initials = "OW" if uid == main_id else "US"
+
+            avatar_bg = gradients[abs(uid) % len(gradients)]
             users.append({
                 "id": uid,
-                "name": meta.get("title") or f"User {uid}",
+                "name": title,
                 "username": username,
                 "avatar_url": avatar_url,
+                "avatar_bg": avatar_bg,
+                "initials": initials,
                 "main": uid == main_id,
                 "perms": self.ctx.db.get_state(f"bot_granted_cmds_{uid}", "all"),
             })
@@ -465,6 +561,15 @@ class MiniAppAPI:
         ctx = self.ctx
         if action in ("addauth", "removeauth"):
             return self._handle_access_change(user_id, action, params)
+        if action == "save_available_models":
+            models = params.get("models") or []
+            if isinstance(models, list):
+                cleaned = [str(m).strip() for m in models if str(m).strip()]
+                ctx.db.set_state("available_models", json.dumps(cleaned))
+                return {"ok": True, "response": f"Saved {len(cleaned)} available model(s)."}
+            return {"ok": False, "response": "Invalid models list."}
+        if action == "model":
+            ctx.db.set_state("models_manually_set", "1")
         if action == "chat_chatty":
             # Same state the bot's inline picker writes
             cid = int(params.get("chat_id", 0))
@@ -475,27 +580,108 @@ class MiniAppAPI:
             pct = max(0, min(100, int(float(value))))
             ctx.db.set_state(f"chat_chatty_{cid}", str(pct / 100.0))
             return {"ok": True, "response": f"Chatty for chat {cid} set to {pct}%."}
+        if action == "chat_cooldown":
+            cid = int(params.get("chat_id", 0))
+            is_reset = str(params.get("reset", "")).lower() in ("1", "true", "yes") or "reset" in str(params.get("min", "")).lower()
+            if is_reset:
+                ctx.db.set_state(f"chat_cooldown_min_{cid}", "")
+                ctx.db.set_state(f"chat_cooldown_max_{cid}", "")
+                return {"ok": True, "response": f"Cooldown for chat {cid} reset to global default."}
+            try:
+                c_min = float(params.get("min", 5))
+                c_max = float(params.get("max", 60))
+                if c_min < 0:
+                    c_min = 0.0
+                if c_max < c_min:
+                    c_max = c_min
+                ctx.db.set_state(f"chat_cooldown_min_{cid}", str(round(c_min, 1)))
+                ctx.db.set_state(f"chat_cooldown_max_{cid}", str(round(c_max, 1)))
+                return {"ok": True, "response": f"Cooldown for chat {cid} set to {int(c_min)}s - {int(c_max)}s."}
+            except (ValueError, TypeError) as e:
+                return {"ok": False, "response": f"Invalid cooldown values: {e}"}
         command = self.map_action_to_command(action, params)
         if not command:
             return {"ok": False, "response": f"Unknown action: {action}"}
         return self.run_command(command)
+
+    def _resolve_user_target(self, raw_target: str) -> tuple[Optional[int], Optional[dict], Optional[str]]:
+        """Resolve a username or ID string for owners."""
+        clean = str(raw_target or "").strip()
+        for prefix in ("https://t.me/", "http://t.me/", "t.me/", "@"):
+            if clean.startswith(prefix):
+                clean = clean[len(prefix):]
+        clean = clean.strip("/").strip()
+
+        # 1. Check known_chats in DB
+        if self.ctx.db and hasattr(self.ctx.db, "find_chat_by_username"):
+            meta = self.ctx.db.find_chat_by_username(clean)
+            if meta:
+                return meta["chat_id"], meta, None
+
+        # 2. Try CommandRouter's _resolve_chat_id
+        cmd_router = getattr(getattr(self.ctx, "reply_manager", None), "command_router", None)
+        if cmd_router and hasattr(cmd_router, "_resolve_chat_id"):
+            import asyncio
+            try:
+                if self.ctx.loop and not self.ctx.loop.is_closed():
+                    fut = asyncio.run_coroutine_threadsafe(cmd_router._resolve_chat_id(clean), self.ctx.loop)
+                    cid, meta, err = fut.result(timeout=10.0)
+                else:
+                    cid, meta, err = asyncio.run(cmd_router._resolve_chat_id(clean))
+                if cid is not None:
+                    return cid, meta, None
+                return None, None, err
+            except Exception as e:
+                logger.debug(f"Async resolve failed for {clean}: {e}")
+
+        err_msg = (
+            f"Unable to resolve '{raw_target}'.\n"
+            f"• Issue: Telegram cannot locate a user with handle '{clean}'.\n"
+            f"• How to fix: Verify username spelling, or use the numeric User ID."
+        )
+        return None, None, err_msg
 
     def _handle_access_change(self, requester_id: int, action: str, params: dict) -> dict:
         """Add/remove authorized users — GUI equivalent of the bot's /addauth //removeauth."""
         ctx = self.ctx
         if not _is_main_user(ctx, requester_id):
             return {"ok": False, "response": "Only the main owner can manage authorized users."}
+
+        raw_target = str(params.get("user_id") or params.get("target") or "").strip()
+        if not raw_target:
+            return {"ok": False, "response": "Provide a valid Telegram user ID or @username."}
+
+        target: Optional[int] = None
         try:
-            target = int(params.get("user_id", 0))
-        except (TypeError, ValueError):
-            return {"ok": False, "response": "User ID must be an integer."}
+            target = int(raw_target)
+        except ValueError:
+            pass
+
+        meta: Optional[dict] = None
+        if target is None:
+            resolved_id, resolved_meta, err = self._resolve_user_target(raw_target)
+            if err or resolved_id is None:
+                return {"ok": False, "response": err or f"Could not resolve '{raw_target}'."}
+            target = resolved_id
+            meta = resolved_meta
+
         if target <= 0:
-            return {"ok": False, "response": "Provide a valid Telegram user ID."}
+            return {"ok": False, "response": "Authorized owners must be Telegram user accounts, not groups or channels."}
+
         users = _authorized_user_ids(ctx)
         if action == "addauth":
             users.add(target)
             ctx.db.set_state("bot_authorized_users", json.dumps(sorted(users)))
-            return {"ok": True, "response": f"User {target} added to authorized users."}
+            if meta and hasattr(ctx.db, "record_chat_metadata"):
+                ctx.db.record_chat_metadata(
+                    target,
+                    title=meta.get("title") or f"User {target}",
+                    username=meta.get("username") or "",
+                    chat_type="Owner",
+                )
+            name_display = (meta.get("title") if meta else "") or f"User {target}"
+            return {"ok": True, "response": f"Owner {name_display} ({target}) added to authorized users."}
+
         if _is_main_user(ctx, target):
             return {"ok": False, "response": "The main owner cannot be removed."}
         users.discard(target)
@@ -544,6 +730,8 @@ class MiniAppAPI:
         db_base = (self.ctx.db.get_state("ai_base_url") or "").strip().rstrip("/")
         config_base = (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_base_url", "") or "").strip().rstrip("/")
         effective_base = user_base or db_base or config_base
+        if effective_base and not effective_base.startswith(("http://", "https://")):
+            effective_base = f"https://{effective_base}"
 
         if effective_base:
             is_gemini = "googleapis.com" in effective_base
@@ -602,15 +790,28 @@ class MiniAppAPI:
                 err_msg = f"HTTP {e.code}"
                 try:
                     eb = json.loads(e.read().decode("utf-8"))
-                    if isinstance(eb, dict) and "error" in eb:
-                        err_msg = f"HTTP {e.code}: {eb['error'].get('message', eb['error'])}"
+                    if isinstance(eb, dict):
+                        if "error" in eb:
+                            err_obj = eb["error"]
+                            err_msg = f"HTTP {e.code}: {err_obj.get('message', err_obj) if isinstance(err_obj, dict) else err_obj}"
+                        elif "message" in eb:
+                            err_msg = f"HTTP {e.code}: {eb['message']}"
                 except Exception:
                     pass
+                if e.code == 400 and "api_key_invalid" in err_msg.lower():
+                    err_msg = "Invalid Gemini API Key"
+                elif e.code == 401:
+                    err_msg += " (Unauthorized: check your Gemini API key)"
                 return {"ok": False, "error": err_msg, "url": "https://generativelanguage.googleapis.com/v1beta/models"}
+            except urllib.error.URLError as e:
+                reason = getattr(e, "reason", str(e))
+                return {"ok": False, "error": f"Connection error: {reason}. Check your internet connection.", "url": "https://generativelanguage.googleapis.com/v1beta/models"}
             except Exception as e:
                 return {"ok": False, "error": str(e), "url": "https://generativelanguage.googleapis.com/v1beta/models"}
 
-        raw_url = effective_base or "https://api.openai.com/v1"
+        raw_url = (effective_base or "https://api.openai.com/v1").rstrip("/")
+        if not raw_url.startswith(("http://", "https://")):
+            raw_url = f"https://{raw_url}"
         if raw_url.endswith("/chat/completions"):
             raw_url = raw_url[:-len("/chat/completions")].rstrip("/")
         models_url = raw_url if raw_url.endswith("/models") else f"{raw_url}/models"
@@ -627,25 +828,58 @@ class MiniAppAPI:
                 if raw_data is None and isinstance(body, dict):
                     raw_data = body.get("models") or []
                 models = []
+                is_inception = "inceptionlabs" in (effective_base or "").lower()
                 if isinstance(raw_data, list):
                     for item in raw_data:
-                        if isinstance(item, dict) and "id" in item:
-                            models.append(str(item["id"]))
+                        if isinstance(item, dict):
+                            supported = item.get("supported_endpoints") or []
+                            if supported and not any("chat" in ep for ep in supported):
+                                continue
+                            mid = str(item.get("id", "")).strip()
+                            if is_inception and mid in ("mercury-2", "mercury-2.5", "mercury-small"):
+                                continue
+                            if mid:
+                                models.append(mid)
                         elif isinstance(item, str):
-                            models.append(item)
+                            mid = item.strip()
+                            if is_inception and mid in ("mercury-2", "mercury-2.5", "mercury-small"):
+                                continue
+                            if mid:
+                                models.append(mid)
+                if is_inception:
+                    for extra in ("mercury-3", "mercury-3-preview-1014", "mercury-3-preview-1002"):
+                        if extra not in models:
+                            models.append(extra)
                 models = sorted(list(dict.fromkeys(models)))
                 return {"ok": True, "models": models, "url": models_url}
         except urllib.error.HTTPError as e:
             err_msg = f"HTTP {e.code}"
             try:
                 eb = json.loads(e.read().decode("utf-8"))
-                if isinstance(eb, dict) and "error" in eb:
-                    err_msg = f"HTTP {e.code}: {eb['error'].get('message', eb['error'])}"
+                if isinstance(eb, dict):
+                    if "error" in eb:
+                        err_obj = eb["error"]
+                        err_msg = f"HTTP {e.code}: {err_obj.get('message', err_obj) if isinstance(err_obj, dict) else err_obj}"
+                    elif "message" in eb:
+                        err_msg = f"HTTP {e.code}: {eb['message']}"
             except Exception:
                 pass
+            if e.code == 401:
+                err_msg += " (Unauthorized: check API key)"
+            elif e.code == 404:
+                err_msg += f" (Not Found: verify Base URL '{models_url}')"
+            elif e.code == 429:
+                err_msg += " (Quota or Rate Limit Exceeded)"
             return {"ok": False, "error": err_msg, "url": models_url}
+        except urllib.error.URLError as e:
+            reason = getattr(e, "reason", str(e))
+            return {
+                "ok": False,
+                "error": f"Connection error: {reason}. Verify that Base URL '{models_url}' is correct and reachable.",
+                "url": models_url,
+            }
         except Exception as e:
-            return {"ok": False, "error": str(e), "url": models_url}
+            return {"ok": False, "error": f"Failed to fetch models: {e}", "url": models_url}
 
     def handle_test_model(
         self,
@@ -653,6 +887,7 @@ class MiniAppAPI:
         model: Optional[str] = None,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
+        auto_apply: bool = False,
     ) -> dict:
         """Test chat message live in the GUI, test candidates, auto-prune dead models, and auto-save working rotation."""
         prompt = (message or "hello").strip()
@@ -673,6 +908,8 @@ class MiniAppAPI:
         db_base = (self.ctx.db.get_state("ai_base_url") or "").strip().rstrip("/")
         config_base = (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_base_url", "") or "").strip().rstrip("/")
         effective_base = user_base or db_base or config_base
+        if effective_base and not effective_base.startswith(("http://", "https://")):
+            effective_base = f"https://{effective_base}"
 
         if effective_base:
             is_gemini = "googleapis.com" in effective_base
@@ -725,28 +962,40 @@ class MiniAppAPI:
                                         reply_text = str(raw_text).strip().strip('"')
                                         first_working_model = clean_m
                                     continue
-                        results.append({"model": clean_m, "ok": False, "detail": "Empty response"})
+                        results.append({"model": clean_m, "ok": False, "detail": "Empty response from Gemini"})
                 except urllib.error.HTTPError as e:
                     detail = f"HTTP {e.code}"
                     try:
                         eb = json.loads(e.read().decode("utf-8"))
                         if isinstance(eb, dict) and "error" in eb:
-                            detail = f"HTTP {e.code}: {eb['error'].get('message', eb['error'])}"[:45]
+                            err_obj = eb["error"]
+                            detail = f"HTTP {e.code}: {err_obj.get('message', err_obj) if isinstance(err_obj, dict) else err_obj}"
                     except Exception:
                         pass
-                    results.append({"model": clean_m, "ok": False, "detail": detail})
+                    if e.code == 400 and "api_key_invalid" in detail.lower():
+                        detail = "Invalid Gemini API Key"
+                    elif e.code == 404:
+                        detail = f"Model '{clean_m}' not found for key"
+                    results.append({"model": clean_m, "ok": False, "detail": detail[:120]})
+                except urllib.error.URLError as e:
+                    reason = getattr(e, "reason", str(e))
+                    results.append({"model": clean_m, "ok": False, "detail": f"Network error: {reason}"[:120]})
                 except Exception as e:
-                    results.append({"model": clean_m, "ok": False, "detail": str(e)[:45]})
+                    results.append({"model": clean_m, "ok": False, "detail": str(e)[:120]})
         else:
-            endpoint = (effective_base or "https://api.openai.com/v1").rstrip("/")
-            if not endpoint.endswith("/chat/completions"):
-                endpoint = f"{endpoint}/chat/completions"
+            raw_endpoint = (effective_base or "https://api.openai.com/v1").rstrip("/")
+            if raw_endpoint.endswith("/models"):
+                raw_endpoint = raw_endpoint[:-len("/models")].rstrip("/")
+            if not raw_endpoint.endswith("/chat/completions"):
+                endpoint = f"{raw_endpoint}/chat/completions"
+            else:
+                endpoint = raw_endpoint
 
             for m in candidates:
                 payload = {
                     "model": m,
                     "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 150,
+                    "max_tokens": 300,
                     "temperature": 0.7,
                 }
                 data = json.dumps(payload).encode("utf-8")
@@ -770,38 +1019,58 @@ class MiniAppAPI:
                                     reply_text = content
                                     first_working_model = m
                                 continue
-                        results.append({"model": m, "ok": False, "detail": "Empty response"})
+                        results.append({"model": m, "ok": False, "detail": "Empty choices response"})
                 except urllib.error.HTTPError as e:
                     detail = f"HTTP {e.code}"
                     try:
                         eb = json.loads(e.read().decode("utf-8"))
-                        if isinstance(eb, dict) and "error" in eb:
-                            detail = f"HTTP {e.code}: {eb['error'].get('message', eb['error'])}"[:45]
+                        if isinstance(eb, dict):
+                            if "error" in eb:
+                                err_obj = eb["error"]
+                                detail = f"HTTP {e.code}: {err_obj.get('message', err_obj) if isinstance(err_obj, dict) else err_obj}"
+                            elif "message" in eb:
+                                detail = f"HTTP {e.code}: {eb['message']}"
                     except Exception:
                         pass
-                    results.append({"model": m, "ok": False, "detail": detail})
+                    if e.code == 401 and "unauthorized" not in detail.lower():
+                        detail += " (Invalid API key)"
+                    elif e.code == 404 and "not found" not in detail.lower():
+                        detail += f" (Endpoint '{endpoint}' or model not found)"
+                    elif e.code == 429 and "quota" not in detail.lower():
+                        detail += " (Quota or Rate Limit)"
+                    results.append({"model": m, "ok": False, "detail": detail[:120]})
+                except urllib.error.URLError as e:
+                    reason = getattr(e, "reason", str(e))
+                    results.append({"model": m, "ok": False, "detail": f"Network error: {reason}. Check Base URL '{endpoint}'"[:120]})
                 except Exception as e:
-                    results.append({"model": m, "ok": False, "detail": str(e)[:45]})
+                    results.append({"model": m, "ok": False, "detail": str(e)[:120]})
+
+        manually_set = self.ctx.db.get_state("models_manually_set", "0") == "1"
+        should_auto_apply = not manually_set or bool(auto_apply)
 
         updated_chain = ""
         if working_models:
             updated_chain = ",".join(working_models)
-            self.ctx.db.set_state("ai_model", updated_chain)
-            if hasattr(self.ctx.generator, "provider") and self.ctx.generator.provider:
-                self.ctx.generator.provider.model = updated_chain
+            if should_auto_apply:
+                self.ctx.db.set_state("ai_model", updated_chain)
+                if hasattr(self.ctx.generator, "provider") and self.ctx.generator.provider:
+                    self.ctx.generator.provider.model = updated_chain
             if base_url:
                 self.ctx.db.set_state("ai_base_url", base_url)
             if api_key:
                 self.ctx.db.set_state("ai_api_key", api_key)
 
+        primary_err = results[0]["detail"] if results else "All candidate models failed."
         return {
             "ok": len(working_models) > 0,
             "reply": reply_text or "No reply received.",
+            "error": "" if working_models else primary_err,
             "model_used": first_working_model,
             "working_models": working_models,
             "failed_models": [r["model"] for r in results if not r["ok"]],
             "results": results,
-            "active_model": updated_chain or model_param,
+            "active_model": (updated_chain if should_auto_apply else model_param) or model_param,
+            "auto_applied": should_auto_apply and len(working_models) > 0,
         }
 
 
@@ -957,7 +1226,8 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
                 model = str(body.get("model") or "").strip() or None
                 base_url = str(body.get("base_url") or "").strip() or None
                 api_key = str(body.get("api_key") or "").strip() or None
-                self._json(200, self.api.handle_test_model(message, model, base_url, api_key))
+                auto_apply = bool(body.get("auto_apply", False))
+                self._json(200, self.api.handle_test_model(message, model, base_url, api_key, auto_apply=auto_apply))
             else:
                 self._json(404, {"ok": False, "response": "Unknown endpoint."})
         except Exception as e:

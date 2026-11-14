@@ -431,3 +431,35 @@ def test_welcome_card_sent_on_startup(tmp_path: Path) -> None:
     assert "TeleAutomator is live" in card
     assert "@MyCtrlBot" in card
     assert "111" in card
+
+
+def test_addauth_and_removeauth_with_username(tmp_path: Path) -> None:
+    bot, _mgr, db = _make_bot(tmp_path, seed="111")
+    db.record_chat_metadata(999888, title="Bob Dylan", username="bobdylan", chat_type="Private contact")
+
+    sent: list[tuple[int, str]] = []
+
+    async def fake_call(method: str, payload: dict) -> dict:
+        if method == "sendMessage":
+            sent.append((payload["chat_id"], payload["text"]))
+            return {"ok": True}
+        return {"ok": True, "result": {}}
+
+    with patch.object(BotControl, "_call", new=AsyncMock(side_effect=fake_call)):
+        # 1. Add owner by @username
+        asyncio.run(bot._process_update({
+            "update_id": 1,
+            "message": {"text": "/addauth @bobdylan", "chat": {"id": 111}, "from": {"id": 111, "is_bot": False}},
+        }))
+        assert any("User `999888` is now authorized" in s[1] for s in sent)
+        assert bot.is_authorized(999888)
+
+        # 2. Remove owner by @username
+        sent.clear()
+        asyncio.run(bot._process_update({
+            "update_id": 2,
+            "message": {"text": "/removeauth @bobdylan", "chat": {"id": 111}, "from": {"id": 111, "is_bot": False}},
+        }))
+        assert any("User `999888` removed from authorized list" in s[1] for s in sent)
+        assert not bot.is_authorized(999888)
+
