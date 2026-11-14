@@ -545,4 +545,21 @@ def test_clean_reply_never_writes_usernames_or_names():
     assert pm.clean_reply("Alice, are you coming", sender_name="Alice") == "are you coming"
 
 
+def test_reply_generator_end_to_end_with_custom_prompt():
+    """Verify ReplyGenerator.generate_reply works end-to-end without NameError on 're'."""
+    from unittest.mock import MagicMock
+    cfg = MagicMock()
+    provider = LocalRuleProvider()
+    generator = ReplyGenerator(config=cfg, provider=provider)
+
+    reply = generator.generate(
+        sender_name="Alice",
+        incoming_text="Khana ho gaya kya ?",
+        is_group=True,
+        persona_override="Mention friends when needed and talk informally",
+    )
+    assert isinstance(reply, str)
+    assert len(reply) > 0
+
+
 
