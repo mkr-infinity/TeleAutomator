@@ -739,8 +739,6 @@
 
   // ----------------------------------------------------------------- more
 
-  let commandCache = [];
-
   async function refreshMore() {
     const data = await api("/api/access");
     if (!data || data.authorized === false) return maybePaywall(data);
@@ -770,32 +768,85 @@
     if (s && s.authorized !== false) {
       if (document.activeElement !== $("ai-model") && s.ai_model) $("ai-model").value = s.ai_model;
       if (document.activeElement !== $("ai-baseurl") && s.ai_base_url) $("ai-baseurl").value = s.ai_base_url;
+      renderMoreControls(s);
     }
-
-    if (!commandCache.length) {
-      const cmds = await api("/api/commands");
-      commandCache = cmds.commands || [];
-    }
-    renderCommandChips(commandCache);
   }
 
-  function renderCommandChips(commands) {
-    const src = commands && commands.length ? commands : commandCache;
-    const q = ($("cmd-search").value || "").toLowerCase();
-    const list = src.filter((c) => !q || c.command.includes(q) || c.description.toLowerCase().includes(q));
-    const countEl = $("cmd-count");
-    if (countEl) countEl.textContent = `(${list.length})`;
-    $("cmd-chips").innerHTML = list.map((c) =>
-      `<button class="chip" data-cmd="${esc(c.command)}"><strong>/${esc(c.command)}</strong>${esc(plain(c.description))}</button>`).join("")
-      || `<div class="empty">No matching command.</div>`;
-    $("cmd-chips").querySelectorAll(".chip").forEach((chip) =>
-      chip.addEventListener("click", () => {
-        const cmd = chip.dataset.cmd;
-        const target = src.find((x) => x.command === cmd);
-        const desc = target ? plain(target.description) : "";
-        openSheet(`/${cmd}`, `${desc ? `<p class="field-hint" style="margin-top:0;margin-bottom:10px">${esc(desc)}</p>` : ""}<input id="sheet-input" placeholder="Arguments (leave empty to run bare)">`,
-          [{ label: "Run", kind: "primary", onClick: () => runCmd(`/${cmd} ${$("sheet-input").value.trim()}`.trim()), keepOpen: false }, { label: "Cancel" }]);
-      }));
+  function renderMoreControls(s) {
+    if (!s) return;
+
+    // 1. Quiet Hours & Sleep (Phase 7)
+    const qhStatus = $("qh-status-pill");
+    if (qhStatus) {
+      qhStatus.textContent = s.quiet_hours ? "Sleeping" : "Scheduled";
+      qhStatus.className = `pill ${s.quiet_hours ? "pill-warning" : "pill-positive"}`;
+    }
+    const qhStart = $("qh-start-input");
+    const qhEnd = $("qh-end-input");
+    if (qhStart && document.activeElement !== qhStart && s.quiet_hours_start) qhStart.value = s.quiet_hours_start;
+    if (qhEnd && document.activeElement !== qhEnd && s.quiet_hours_end) qhEnd.value = s.quiet_hours_end;
+
+    // 2. Behavior Toggles
+    const toggleMap = {
+      "reaction": s.auto_reactions,
+      "multibubble": s.multibubble,
+      "typo": s.typo,
+      "debounce": s.debounce,
+      "followup": s.followup,
+      "mentiononly": s.mention_only,
+    };
+    Object.entries(toggleMap).forEach(([action, isEnabled]) => {
+      const btn = $(`sw-${action}`);
+      if (!btn) return;
+      const on = Boolean(isEnabled);
+      btn.dataset.state = on ? "on" : "off";
+      btn.className = `clay-switch ${on ? "on" : "off"}`;
+      btn.textContent = on ? "ON" : "OFF";
+    });
+
+    // 3. AI Tuning Chips
+    const setSegActive = (containerId, activeVal) => {
+      const container = $(containerId);
+      if (!container) return;
+      container.querySelectorAll(".seg").forEach((b) => {
+        b.classList.toggle("active", String(b.dataset.val).toLowerCase() === String(activeVal).toLowerCase());
+      });
+    };
+    setSegActive("seg-thinking", s.thinking || "default");
+    setSegActive("seg-temp", s.temperature || "0.7");
+    setSegActive("seg-lang", s.lang || "dynamic");
+    setSegActive("seg-maxtokens", s.max_tokens || "512");
+
+    // 4. Keyword Rules
+    const rulesList = $("rules-list");
+    if (rulesList) {
+      const rules = s.rules || [];
+      rulesList.innerHTML = rules.length
+        ? rules.map((r) => `<div class="rule-row">
+            <div class="rule-info">
+              <span class="rule-trigger">Trigger: &ldquo;${esc(r.keyword)}&rdquo;</span>
+              <span class="rule-response">${esc(r.reply)}</span>
+            </div>
+            <button class="btn small danger" data-delrule="${esc(r.keyword)}">Delete</button>
+          </div>`).join("")
+        : `<div class="empty">No keyword auto-replies configured. Tap &ldquo;+ Add Rule&rdquo; above.</div>`;
+
+      rulesList.querySelectorAll("[data-delrule]").forEach((b) => {
+        b.addEventListener("click", () => {
+          openSheet("Delete trigger", `<p>Remove keyword auto-reply for <strong>&ldquo;${esc(b.dataset.delrule)}&rdquo;</strong>?</p>`, [
+            { label: "Delete", kind: "danger", onClick: () => runAction("delrule", { value: b.dataset.delrule }) },
+            { label: "Cancel" }
+          ]);
+        });
+      });
+    }
+
+    // 5. System Safety & Maintenance
+    const safemodeBadge = $("safemode-badge");
+    if (safemodeBadge) {
+      safemodeBadge.textContent = s.safe_mode ? "Safe Mode Triggered" : "Protected";
+      safemodeBadge.className = `pill ${s.safe_mode ? "pill-warning" : "pill-positive"}`;
+    }
   }
 
   // --------------------------------------------------------- run + notify
@@ -924,7 +975,7 @@
 
     // Android Material 3 Expressive Fluid Wave Touch Ripple + Instant Tactile Haptic
     document.addEventListener("pointerdown", (e) => {
-      const target = e.target.closest(".btn, .pay-btn, .pay-check-btn, .chip, .seg, .model-chip, .preset-chip, .m3-nav-item, .sheet-close-btn, .linklike");
+      const target = e.target.closest(".btn, .pay-btn, .pay-check-btn, .chip, .seg, .model-chip, .preset-chip, .clay-switch, .m3-nav-item, .sheet-close-btn, .linklike");
       if (!target) return;
       haptic("light");
       const rect = target.getBoundingClientRect();
@@ -1172,9 +1223,114 @@
     $("btn-test-model").addEventListener("click", testModelPlayground);
     $("test-prompt").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btn-test-model").click(); });
 
-    $("cmd-search").addEventListener("input", () => {
-      renderCommandChips(commandCache);
+    // Phase 7: Quiet Hours & Sleep Wiring
+    const qhSave = $("qh-save-btn");
+    if (qhSave) {
+      qhSave.addEventListener("click", () => {
+        const start = ($("qh-start-input").value || "02:00").trim();
+        const end = ($("qh-end-input").value || "08:00").trim();
+        runAction("quiethours", { value: `on ${start} ${end}` });
+      });
+    }
+
+    const qhSleep = $("btn-quick-sleep");
+    if (qhSleep) {
+      qhSleep.addEventListener("click", () => {
+        openSheet("Sleep Until Morning", "<p>Pause automated replies overnight until morning IST? Automation resumes automatically.</p>", [
+          { label: "Sleep Now", kind: "primary", onClick: () => runAction("sleep", {}) },
+          { label: "Cancel" }
+        ]);
+      });
+    }
+
+    document.querySelectorAll("#qh-preset-carousel button").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        haptic("light");
+        const qh = chip.dataset.qh;
+        if (qh === "off") {
+          runAction("quiethours", { value: "off" });
+        } else {
+          const parts = qh.split(" ");
+          if ($("qh-start-input")) $("qh-start-input").value = parts[0];
+          if ($("qh-end-input")) $("qh-end-input").value = parts[1];
+          runAction("quiethours", { value: `on ${qh}` });
+        }
+        document.querySelectorAll("#qh-preset-carousel button").forEach((c) => c.classList.remove("active"));
+        chip.classList.add("active");
+      });
     });
+
+    // Behavior Simulation Clay Switches
+    document.querySelectorAll("#behavior-toggles .clay-switch").forEach((sw) => {
+      sw.addEventListener("click", () => {
+        haptic("light");
+        const cur = sw.dataset.state || "off";
+        const next = cur === "on" ? "off" : "on";
+        sw.dataset.state = next;
+        sw.className = `clay-switch ${next}`;
+        sw.textContent = next.toUpperCase();
+        runAction(sw.dataset.action, { value: next });
+      });
+    });
+
+    // AI Tuning Segmented Controls
+    document.querySelectorAll("#seg-thinking .seg, #seg-temp .seg, #seg-lang .seg, #seg-maxtokens .seg").forEach((b) => {
+      b.addEventListener("click", () => {
+        haptic("light");
+        const param = b.dataset.param;
+        const val = b.dataset.val;
+        b.parentElement.querySelectorAll(".seg").forEach((s) => s.classList.remove("active"));
+        b.classList.add("active");
+        runAction(param, { value: val });
+      });
+    });
+
+    // Keyword Auto-Reply Rules Add
+    const addRuleBtn = $("btn-add-rule");
+    if (addRuleBtn) {
+      addRuleBtn.addEventListener("click", () => {
+        openSheet("New Keyword Auto-Reply", `
+          <p class="field-hint" style="margin-top:0">When incoming message contains this keyword, reply instantly:</p>
+          <label for="rule-kw-input" style="font-weight:600;font-size:13px;display:block;margin-top:8px">Keyword trigger</label>
+          <input id="rule-kw-input" placeholder="e.g. pricing, help, contact">
+          <label for="rule-reply-input" style="font-weight:600;font-size:13px;display:block;margin-top:12px">Auto-reply message</label>
+          <textarea id="rule-reply-input" rows="3" placeholder="e.g. We are updating packages! DM @admin for urgent queries."></textarea>
+        `, [
+          {
+            label: "Add Rule",
+            kind: "primary",
+            onClick: () => {
+              const kw = ($("rule-kw-input").value || "").trim();
+              const rep = ($("rule-reply-input").value || "").trim();
+              if (!kw || !rep) return toast("Keyword and reply text cannot be empty", "err");
+              runAction("addrule", { value: `${kw} => ${rep}` });
+            }
+          },
+          { label: "Cancel" }
+        ]);
+      });
+    }
+
+    // System Maintenance Buttons
+    const backupBtn = $("btn-backup-db");
+    if (backupBtn) {
+      backupBtn.addEventListener("click", () => {
+        openSheet("Backup Database", "<p>Create a point-in-time snapshot backup of the database and settings?</p>", [
+          { label: "Create Backup", kind: "primary", onClick: () => runAction("backup", {}) },
+          { label: "Cancel" }
+        ]);
+      });
+    }
+
+    const clearCtxBtn = $("btn-clear-context");
+    if (clearCtxBtn) {
+      clearCtxBtn.addEventListener("click", () => {
+        openSheet("Clear AI Context", "<p>Reset cached conversation memory across chats? Permanent notes and allowlists are preserved.</p>", [
+          { label: "Clear Memory", kind: "danger", onClick: () => runAction("clearcontext", { chat_id: "all" }) },
+          { label: "Cancel" }
+        ]);
+      });
+    }
   }
 
   function syncTelegramTheme() {

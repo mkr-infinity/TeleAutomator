@@ -271,9 +271,145 @@
         </div>
       </div>
 
-      <h3 class="section-h">All commands <span id="cmd-count" class="cmd-count num"></span></h3>
-      <input type="search" id="cmd-search" placeholder="Search commands">
-      <div class="chipgrid" id="cmd-chips"></div>
+      <!-- Phase 7: Sleep Schedule & Quiet Hours Visual Picker -->
+      <h3 class="section-h">Sleep Schedule &amp; Quiet Hours</h3>
+      <div class="card form qh-card">
+        <div class="qh-head">
+          <div class="qh-title-group">
+            <span class="qh-title">🌙 Daily Quiet Window</span>
+            <span class="qh-sub">Pauses automated replies overnight (IST)</span>
+          </div>
+          <span class="pill pill-positive" id="qh-status-pill">Active</span>
+        </div>
+        <div class="preset-carousel" id="qh-preset-carousel">
+          <button type="button" class="preset-chip active" data-qh="02:00 08:00">Standard (02:00–08:00)</button>
+          <button type="button" class="preset-chip" data-qh="23:00 07:00">Night Owl (23:00–07:00)</button>
+          <button type="button" class="preset-chip" data-qh="00:00 06:00">Late Shift (00:00–06:00)</button>
+          <button type="button" class="preset-chip" data-qh="off">Disable</button>
+        </div>
+        <div class="time-range-row">
+          <div class="time-field">
+            <label for="qh-start-input">Starts at</label>
+            <input type="time" id="qh-start-input" value="02:00">
+          </div>
+          <div class="time-sep">to</div>
+          <div class="time-field">
+            <label for="qh-end-input">Ends at</label>
+            <input type="time" id="qh-end-input" value="08:00">
+          </div>
+        </div>
+        <div class="inline-save">
+          <button type="button" class="btn primary" id="qh-save-btn">Save Schedule</button>
+          <button type="button" class="btn" id="btn-quick-sleep">😴 Sleep Until Morning</button>
+        </div>
+      </div>
+
+      <!-- Human Behavior Simulation Controls -->
+      <h3 class="section-h">Behavior &amp; Human Simulation</h3>
+      <div class="card list behavior-card" id="behavior-toggles">
+        <div class="setting-toggle-row">
+          <div class="toggle-info">
+            <span class="toggle-title">❤️ Auto-Reactions</span>
+            <span class="toggle-sub">Naturally react to incoming messages with emojis</span>
+          </div>
+          <button type="button" class="clay-switch on" id="sw-reaction" data-action="reaction" data-state="on">ON</button>
+        </div>
+        <div class="setting-toggle-row">
+          <div class="toggle-info">
+            <span class="toggle-title">🫧 Multi-Bubble Splitting</span>
+            <span class="toggle-sub">Split long thoughts into natural consecutive bubbles</span>
+          </div>
+          <button type="button" class="clay-switch on" id="sw-multibubble" data-action="multibubble" data-state="on">ON</button>
+        </div>
+        <div class="setting-toggle-row">
+          <div class="toggle-info">
+            <span class="toggle-title">✏️ Typo &amp; Self-Correction</span>
+            <span class="toggle-sub">Simulate natural typos and edit-fix seconds later</span>
+          </div>
+          <button type="button" class="clay-switch on" id="sw-typo" data-action="typo" data-state="on">ON</button>
+        </div>
+        <div class="setting-toggle-row">
+          <div class="toggle-info">
+            <span class="toggle-title">🧵 Message Burst Debounce</span>
+            <span class="toggle-sub">Stitch rapid fragmented messages before replying</span>
+          </div>
+          <button type="button" class="clay-switch on" id="sw-debounce" data-action="debounce" data-state="on">ON</button>
+        </div>
+        <div class="setting-toggle-row">
+          <div class="toggle-info">
+            <span class="toggle-title">💬 Spontaneous Follow-ups</span>
+            <span class="toggle-sub">Occasional natural delayed follow-ups for short replies</span>
+          </div>
+          <button type="button" class="clay-switch off" id="sw-followup" data-action="followup" data-state="off">OFF</button>
+        </div>
+        <div class="setting-toggle-row">
+          <div class="toggle-info">
+            <span class="toggle-title">🎯 Mention-Only in Groups</span>
+            <span class="toggle-sub">Respond only when explicitly @mentioned or replied to</span>
+          </div>
+          <button type="button" class="clay-switch off" id="sw-mentiononly" data-action="mentiononly" data-state="off">OFF</button>
+        </div>
+      </div>
+
+      <!-- AI Parameters & Tuning -->
+      <h3 class="section-h">AI Parameters &amp; Tuning</h3>
+      <div class="card form">
+        <label>Reasoning Effort (Thinking)</label>
+        <div class="segrow" id="seg-thinking">
+          <button type="button" class="seg active" data-param="thinking" data-val="default">Default</button>
+          <button type="button" class="seg" data-param="thinking" data-val="low">Low</button>
+          <button type="button" class="seg" data-param="thinking" data-val="medium">Medium</button>
+          <button type="button" class="seg" data-param="thinking" data-val="high">High</button>
+          <button type="button" class="seg" data-param="thinking" data-val="off">Off</button>
+        </div>
+
+        <label>Creativity (Temperature)</label>
+        <div class="segrow" id="seg-temp">
+          <button type="button" class="seg" data-param="temp" data-val="0.2">0.2 Precise</button>
+          <button type="button" class="seg" data-param="temp" data-val="0.5">0.5 Balanced</button>
+          <button type="button" class="seg active" data-param="temp" data-val="0.7">0.7 Natural</button>
+          <button type="button" class="seg" data-param="temp" data-val="1.0">1.0 Creative</button>
+        </div>
+
+        <label>Reply Language</label>
+        <div class="segrow" id="seg-lang">
+          <button type="button" class="seg active" data-param="lang" data-val="dynamic">Dynamic</button>
+          <button type="button" class="seg" data-param="lang" data-val="english">English</button>
+          <button type="button" class="seg" data-param="lang" data-val="hindi">Hindi</button>
+          <button type="button" class="seg" data-param="lang" data-val="hinglish">Hinglish</button>
+        </div>
+
+        <label>Max Response Length</label>
+        <div class="segrow" id="seg-maxtokens">
+          <button type="button" class="seg" data-param="maxtokens" data-val="256">256 Short</button>
+          <button type="button" class="seg active" data-param="maxtokens" data-val="512">512 Standard</button>
+          <button type="button" class="seg" data-param="maxtokens" data-val="1024">1024 Detailed</button>
+          <button type="button" class="seg" data-param="maxtokens" data-val="2048">2048 Long</button>
+        </div>
+      </div>
+
+      <!-- Keyword Auto-Reply Rules -->
+      <div class="section-head-btn">
+        <h3 class="section-h" style="margin-top:0">Keyword Auto-Replies</h3>
+        <button type="button" class="btn small primary" id="btn-add-rule">+ Add Rule</button>
+      </div>
+      <div class="card list" id="rules-list"></div>
+
+      <!-- System Maintenance & Safety -->
+      <h3 class="section-h">System Maintenance &amp; Safety</h3>
+      <div class="card form">
+        <div class="maintenance-row">
+          <div class="maintenance-info">
+            <span class="maintenance-title">🛡️ Crash-Loop Guard (Safe Mode)</span>
+            <span class="maintenance-sub">Automatically protects account if rapid errors occur</span>
+          </div>
+          <span class="pill pill-positive" id="safemode-badge">Protected</span>
+        </div>
+        <div class="inline-save">
+          <button type="button" class="btn" id="btn-backup-db">💾 Backup Database</button>
+          <button type="button" class="btn danger" id="btn-clear-context">🧹 Clear AI Memory</button>
+        </div>
+      </div>
     </section>
 
   </main>

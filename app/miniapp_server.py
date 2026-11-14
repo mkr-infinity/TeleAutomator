@@ -202,12 +202,25 @@ class MiniAppAPI:
                 pass
         qh_start = ctx.db.get_state("quiet_hours_start", getattr(ctx.reply_manager.config, "quiet_hours_start", "02:00"))
         qh_end = ctx.db.get_state("quiet_hours_end", getattr(ctx.reply_manager.config, "quiet_hours_end", "08:00"))
+        auto_reactions = ctx.db.get_state("auto_reactions_enabled", "1") == "1"
+        multibubble = ctx.db.get_state("multibubble_enabled", "1") == "1"
+        typo = ctx.db.get_state("typo_correction_enabled", "1") == "1"
+        debounce = ctx.db.get_state("debounce_enabled", "1") == "1"
+        followup = ctx.db.get_state("spontaneous_followup_enabled", "1") == "1"
+        mention_only = ctx.db.get_state("group_mention_only", "0") == "1"
+        temp = ctx.db.get_state("ai_temperature", "0.6")
+        thinking = ctx.db.get_state("ai_reasoning_effort", "default")
+        lang = ctx.db.get_state("reply_language", "dynamic")
+        maxtokens = ctx.db.get_state("ai_max_tokens", "512")
+        rules = ctx.db.list_keyword_rules() if hasattr(ctx.db, "list_keyword_rules") else []
         return {
             "mode": mode,
             "state": "stopped" if emergency else ("paused" if paused > 0 else "active"),
             "paused_remaining_sec": int(paused),
             "emergency": emergency,
             "quiet_hours": in_quiet,
+            "quiet_hours_start": qh_start,
+            "quiet_hours_end": qh_end,
             "quiet_hours_schedule": f"{qh_start} – {qh_end} IST",
             "safe_mode": safe_mode,
             "chatty_global": chatty_global,
@@ -217,6 +230,17 @@ class MiniAppAPI:
             "ai_engine": type(ctx.generator.provider).__name__.replace("Provider", ""),
             "ai_model": ai_model or "",
             "ai_base_url": ai_base_url or "",
+            "auto_reactions": auto_reactions,
+            "multibubble": multibubble,
+            "typo": typo,
+            "debounce": debounce,
+            "followup": followup,
+            "mention_only": mention_only,
+            "temperature": temp,
+            "thinking": thinking,
+            "lang": lang,
+            "max_tokens": maxtokens,
+            "rules": rules,
             "chats_allowed": len(priv | grps),
             "pending_count": len(ctx.db.list_pending_approvals()),
             "replies_24h": ctx.db.get_recent_reply_count(86400.0),
@@ -368,9 +392,12 @@ class MiniAppAPI:
         "debounce": "/debounce {value}",
         "multibubble": "/multibubble {value}",
         "typo": "/typo {value}",
+        "editfix": "/editfix {value}",
         "followup": "/followup {value}",
         "addrule": "/addrule {value}",
         "delrule": "/delrule {value}",
+        "sleep": "/sleep {value}",
+        "backup": "/backup",
     }
 
     def map_action_to_command(self, action: str, params: dict) -> Optional[str]:
