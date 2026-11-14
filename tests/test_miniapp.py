@@ -620,6 +620,56 @@ def test_service_worker_asset_and_registration():
     assert "serviceWorker.register" in app_js
 
 
+def test_add_owner_by_username_and_avatar_rendering(tmp_path):
+    ctx, _ = make_ctx(tmp_path, authorized=(555000111,))
+    api = MiniAppAPI(ctx)
+
+    # 1. Store known user in DB
+    ctx.db.record_chat_metadata(777123456, title="Alice Smith", username="alicesmith", chat_type="Private contact")
+
+    # 2. Add owner by @username
+    res = api.handle_action(555000111, "addauth", {"user_id": "@alicesmith"})
+    assert res["ok"] is True
+    assert "777123456" in res["response"]
+
+    # 3. Check handle_access returns avatar metadata
+    access = api.handle_access()
+    users = access["users"]
+    alice = next((u for u in users if u["id"] == 777123456), None)
+    assert alice is not None
+    assert alice["name"] == "Alice Smith"
+    assert alice["username"] == "alicesmith"
+    assert "alicesmith.jpg" in alice["avatar_url"]
+    assert "linear-gradient" in alice["avatar_bg"]
+    assert alice["initials"] == "AS"
+    assert alice["main"] is False
+
+
+def test_save_available_models_and_manual_rotation(tmp_path):
+    ctx, _ = make_ctx(tmp_path, authorized=(555000111,))
+    api = MiniAppAPI(ctx)
+
+    # 1. Initial state has default healthy models
+    state = api.handle_state()
+    assert "available_models" in state
+    assert len(state["available_models"]) > 0
+
+    # 2. Save custom models list
+    res = api.handle_action(555000111, "save_available_models", {"models": ["mercury-3", "mercury-3-preview-1014"]})
+    assert res["ok"] is True
+    assert "2 available model(s)" in res["response"]
+
+    # 3. Verify state persists custom available models
+    state_after = api.handle_state()
+    assert state_after["available_models"] == ["mercury-3", "mercury-3-preview-1014"]
+
+    # 4. User manually sets rotation
+    res_mod = api.handle_action(555000111, "model", {"value": "mercury-3"})
+    assert res_mod["ok"] is True
+    assert api.handle_state()["models_manually_set"] is True
+
+
+
 
 
 

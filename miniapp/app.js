@@ -62,6 +62,8 @@
       emergency: false, quiet_hours: false, safe_mode: false, chatty_global: 0.15, style: "casual",
       prompt: "Reply like a 22-year-old Delhi guy, short, lowercase, Hinglish words when natural.",
       owner_name: "Kaif", ai_engine: "Gemini", ai_model: "gemini-2.5-flash-lite", ai_base_url: "",
+      available_models: ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"],
+      models_manually_set: false,
       chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.2",
       auto_reactions: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
       thinking: "default", temperature: "0.7", lang: "english", max_tokens: "512",
@@ -87,8 +89,8 @@
       { chat: "Mom", chat_id: 876543210, sender: "TeleAutomator", text: "[Photo] Lunch pic sent, looks great!", ts: "2026-11-13 11:04", is_media: true },
     ],
     access: [
-      { id: 555000111, name: "Kaif", username: "@mkr_infinity", avatar_url: "https://t.me/i/userpic/320/mkr_infinity.jpg", main: true, perms: "all" },
-      { id: 777000222, name: "Manager", username: "@manager_h", avatar_url: "https://t.me/i/userpic/320/manager_h.jpg", main: false, perms: "all" },
+      { id: 555000111, name: "Kaif", username: "mkr_infinity", avatar_url: "https://t.me/i/userpic/320/mkr_infinity.jpg", avatar_bg: "linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%)", initials: "KR", main: true, perms: "all" },
+      { id: 777000222, name: "Manager", username: "manager_h", avatar_url: "https://t.me/i/userpic/320/manager_h.jpg", avatar_bg: "linear-gradient(135deg, #065f46 0%, #10b981 100%)", initials: "MH", main: false, perms: "all" },
     ],
     commands: [
       { command: "status", description: "Live status: mode, AI engine, chat rules" },
@@ -252,9 +254,26 @@
         return { ok: true, response: `Synced pinned message notes for chat ${p.chat_id}.` };
       }
       if (a === "addauth") {
-        const uid = parseInt(p.user_id, 10) || 999999999;
-        DEMO_DATA.access.push({ id: uid, name: `User ${uid}`, username: "", main: false, perms: "all" });
-        return { ok: true, response: `User ${uid} added to authorized users.` };
+        const raw = String(p.user_id || "").trim();
+        const clean = raw.replace(/^@/, "");
+        const uid = parseInt(clean, 10) || Math.floor(100000000 + Math.random() * 900000000);
+        const name = raw.startsWith("@") ? `@${clean}` : `User ${uid}`;
+        const username = raw.startsWith("@") ? clean : "";
+        DEMO_DATA.access.push({
+          id: uid,
+          name: name,
+          username: username,
+          avatar_url: username ? `https://t.me/i/userpic/320/${username}.jpg` : "",
+          avatar_bg: "linear-gradient(135deg, #701a75 0%, #d946ef 100%)",
+          initials: (raw.startsWith("@") ? clean : `U${uid}`).slice(0, 2).toUpperCase(),
+          main: false,
+          perms: "all",
+        });
+        return { ok: true, response: `Owner ${name} (${uid}) added to authorized users.` };
+      }
+      if (a === "save_available_models") {
+        DEMO_DATA.state.available_models = p.models || [];
+        return { ok: true, response: `Saved ${(p.models || []).length} available model(s).` };
       }
       if (a === "removeauth") {
         const i = DEMO_DATA.access.findIndex((u) => String(u.id) === String(p.user_id));
@@ -1140,15 +1159,16 @@
     if (!data || data.authorized === false) return maybePaywall(data);
     $("access-list").innerHTML = (data.users || []).length
       ? data.users.map((u) => {
-          const initials = (u.name || "U").slice(0, 2).toUpperCase();
+          const initials = u.initials || (u.name || "U").slice(0, 2).toUpperCase();
           const cleanUser = u.username ? u.username.replace(/^@/, "").trim() : "";
           const userLink = cleanUser
             ? `<a href="https://t.me/${encodeURIComponent(cleanUser)}" target="_blank" rel="noopener noreferrer" class="pill pill-neutral chat-user-link" title="Open in Telegram">@${esc(cleanUser)} ↗</a>`
             : "";
+          const avatarBg = u.avatar_bg || "linear-gradient(135deg, #1E293B 0%, #334155 100%)";
           return `<div class="user-capsule">
             <div class="user-avatar-wrap">
               ${u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="${esc(u.name)}" class="user-avatar-img" loading="lazy" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />` : ""}
-              <div class="user-avatar-circle" style="${u.avatar_url ? 'display:none;' : ''}">${esc(initials)}</div>
+              <div class="user-avatar-circle" style="${u.avatar_url ? 'display:none;' : ''}background:${avatarBg};">${esc(initials)}</div>
             </div>
             <div class="capsule-main">
               <div class="capsule-head">
@@ -1163,15 +1183,20 @@
             </div>
           </div>`;
         }).join("")
-      : `<div class="empty">No authorized users.</div>`;
+      : `<div class="empty">No authorized owners. Add an owner by ID or @username above.</div>`;
     $("access-list").querySelectorAll("[data-unauth]").forEach((btn) =>
-      btn.addEventListener("click", () => openSheet("Remove user", `<p>Revoke panel access for user <span class="num">${esc(btn.dataset.unauth)}</span>?</p>`,
+      btn.addEventListener("click", () => openSheet("Remove owner", `<p>Revoke panel access for owner <span class="num">${esc(btn.dataset.unauth)}</span>?</p>`,
         [{ label: "Remove", kind: "danger", onClick: () => runAction("removeauth", { user_id: btn.dataset.unauth }) }, { label: "Cancel" }])));
 
     const s = await api("/api/state");
     if (s && s.authorized !== false) {
       if (document.activeElement !== $("ai-model") && s.ai_model) $("ai-model").value = s.ai_model;
       if (document.activeElement !== $("ai-baseurl") && s.ai_base_url) $("ai-baseurl").value = s.ai_base_url;
+      if (s.available_models && Array.isArray(s.available_models) && s.available_models.length) {
+        cachedEndpointModels = s.available_models;
+        $("models-fetched-count").textContent = `(${cachedEndpointModels.length})`;
+        renderModelChips(cachedEndpointModels);
+      }
       renderMoreControls(s);
     }
   }
@@ -1669,7 +1694,7 @@
 
     $("auth-add").addEventListener("click", () => {
       const v = $("auth-id").value.trim();
-      if (!v) return toast("Enter a Telegram user ID");
+      if (!v) return toast("Enter a Telegram user ID or @username");
       $("auth-id").value = "";
       runAction("addauth", { user_id: v });
     });
@@ -1681,12 +1706,13 @@
       runAction("model", { value: v });
     });
     $("ai-model").addEventListener("keydown", (e) => { if (e.key === "Enter") $("ai-model-save").click(); });
+
     // Model Fallback Multi-Select Chips
     function renderModelChips(modelsList, selectedOverride) {
       const container = $("ai-model-chips");
       if (!container) return;
       if (!modelsList || !modelsList.length) {
-        container.innerHTML = '<div class="empty sm">No models found. Tap &ldquo;Fetch models&rdquo; or type manually.</div>';
+        container.innerHTML = '<div class="empty sm">No models loaded. Tap &ldquo;Fetch models&rdquo; to query your endpoint.</div>';
         return;
       }
 
@@ -1734,7 +1760,142 @@
       });
     }
 
-    // Health check candidate models and auto-add healthy models
+    // Modal popup: Select which fetched models to add to available models
+    function showFetchModelsPopup(models) {
+      if (!models || !models.length) {
+        toast("Endpoint returned 0 models.");
+        return;
+      }
+      const currentActive = ($("ai-model").value || "")
+        .split(/[,;]/)
+        .map((s) => s.trim().replace(/^models\//, ""))
+        .filter(Boolean);
+
+      const html = `
+        <div class="model-popup-toolbar">
+          <span class="faint">${models.length} model(s) retrieved from endpoint</span>
+          <div class="model-popup-btns">
+            <button type="button" class="btn small" id="popup-select-all">Select all</button>
+            <button type="button" class="btn small" id="popup-deselect-all">Deselect all</button>
+          </div>
+        </div>
+        <div class="model-popup-list" id="popup-models-list">
+          ${models.map((m) => {
+            const cleanM = String(m).replace(/^models\//, "").trim();
+            const isChecked = cachedEndpointModels.length
+              ? cachedEndpointModels.includes(cleanM)
+              : (currentActive.includes(cleanM) || cleanM.includes("mercury-3") || cleanM.includes("flash"));
+            return `<label class="model-check-row">
+              <input type="checkbox" class="model-popup-cb" value="${esc(cleanM)}" ${isChecked ? "checked" : ""}>
+              <span class="model-row-name num">${esc(cleanM)}</span>
+            </label>`;
+          }).join("")}
+        </div>
+      `;
+
+      openSheet(
+        "Available Models from Endpoint",
+        html,
+        [
+          {
+            label: "Confirm Selection",
+            kind: "primary",
+            onClick: () => {
+              const cbs = Array.from(document.querySelectorAll(".model-popup-cb:checked"));
+              const selected = cbs.map((cb) => cb.value.trim()).filter(Boolean);
+              if (!selected.length) {
+                toast("Please select at least 1 model.");
+                return;
+              }
+              cachedEndpointModels = selected;
+              $("models-fetched-count").textContent = `(${cachedEndpointModels.length})`;
+              renderModelChips(cachedEndpointModels);
+              runAction("save_available_models", { models: selected });
+              toast(`Loaded ${selected.length} model(s) into available models`);
+            },
+          },
+          { label: "Cancel" },
+        ]
+      );
+
+      const selAll = $("popup-select-all");
+      const deselAll = $("popup-deselect-all");
+      if (selAll) {
+        selAll.addEventListener("click", () => {
+          document.querySelectorAll(".model-popup-cb").forEach((cb) => (cb.checked = true));
+        });
+      }
+      if (deselAll) {
+        deselAll.addEventListener("click", () => {
+          document.querySelectorAll(".model-popup-cb").forEach((cb) => (cb.checked = false));
+        });
+      }
+    }
+
+    // Modal popup: Health check results and manual rotation confirmation
+    function showHealthResultsPopup(res) {
+      if (!res || !res.results) return;
+      const okCount = res.working_models ? res.working_models.length : 0;
+      const totalCount = res.results.length;
+
+      const replyHtml = res.reply
+        ? `<p class="faint sm" style="margin-top:6px;word-break:break-word;">Live reply: &ldquo;${esc(res.reply)}&rdquo;</p>`
+        : "";
+
+      const bannerHtml = `
+        <div class="health-summary-banner ${okCount > 0 ? "positive" : "negative"}">
+          <span class="pill ${okCount > 0 ? "pill-positive" : "pill-negative"}">${okCount} Healthy / ${totalCount} Tested</span>
+          ${replyHtml}
+        </div>
+      `;
+
+      const listHtml = `
+        <div class="health-model-list">
+          ${res.results.map((r) => {
+            const isOk = !!r.ok;
+            return `<div class="health-model-row ${isOk ? "is-ok" : "is-fail"}">
+              <div class="health-model-left">
+                <input type="checkbox" class="health-result-cb" value="${esc(r.model)}" ${isOk ? "checked" : ""}>
+                <span class="health-model-name num">${esc(r.model)}</span>
+              </div>
+              <div class="health-model-right">
+                <span class="pill ${isOk ? "pill-positive" : "pill-negative"}">${isOk ? "Healthy" : "Failed"}</span>
+                <span class="faint sm detail" title="${esc(r.detail || "")}">${esc(r.detail || "")}</span>
+              </div>
+            </div>`;
+          }).join("")}
+        </div>
+      `;
+
+      const bodyHtml = bannerHtml + `<p class="field-hint" style="margin-bottom:8px;">Choose which healthy models to activate in your fallback rotation:</p>` + listHtml;
+
+      openSheet(
+        "Health Check Results",
+        bodyHtml,
+        [
+          {
+            label: "Apply Selected to Rotation",
+            kind: "primary",
+            onClick: () => {
+              const cbs = Array.from(document.querySelectorAll(".health-result-cb:checked"));
+              const selected = cbs.map((cb) => cb.value.trim()).filter(Boolean);
+              if (!selected.length) {
+                toast("Select at least 1 healthy model.");
+                return;
+              }
+              const newChain = selected.join(",");
+              $("ai-model").value = newChain;
+              runAction("model", { value: newChain });
+              renderModelChips(cachedEndpointModels.length ? cachedEndpointModels : selected, selected);
+              toast(`Set active rotation (${selected.length} model(s)): ${newChain}`);
+            },
+          },
+          { label: "Close" },
+        ]
+      );
+    }
+
+    // Health check candidate models
     async function checkModelsHealth() {
       const btn = $("ai-check");
       const baseurl = $("ai-baseurl").value.trim();
@@ -1746,7 +1907,7 @@
 
       btn.disabled = true;
       btn.textContent = "Checking...";
-      toast("Pinging candidate models for live health...");
+      toast("Pinging models for live endpoint health...");
 
       const box = $("test-results-box");
       const badge = $("test-badge");
@@ -1774,12 +1935,14 @@
           modelEl.textContent = `Active rotation: ${res.active_model}`;
           replyEl.textContent = `"${res.reply}"`;
 
-          $("ai-model").value = res.active_model;
+          if (res.auto_applied) {
+            $("ai-model").value = res.active_model;
+          }
           if (!cachedEndpointModels.length && res.results) {
             cachedEndpointModels = res.results.map((r) => r.model);
             $("models-fetched-count").textContent = `(${cachedEndpointModels.length})`;
           }
-          renderModelChips(cachedEndpointModels.length ? cachedEndpointModels : res.working_models, res.working_models);
+          renderModelChips(cachedEndpointModels.length ? cachedEndpointModels : res.working_models);
 
           const pills = (res.results || []).map((r) => {
             const cls = r.ok ? "test-pill ok" : "test-pill fail";
@@ -1790,7 +1953,7 @@
           });
           summaryEl.innerHTML = pills.join("");
 
-          toast(`Auto-configured ${res.working_models.length} healthy model(s): ${res.active_model}`);
+          showHealthResultsPopup(res);
         } else {
           badge.className = "pill pill-negative";
           badge.textContent = "Failed";
@@ -1802,7 +1965,11 @@
             return `<span class="test-pill fail">${failSvg}${esc(r.model)}: ${esc(r.detail)}</span>`;
           });
           summaryEl.innerHTML = pills.join("");
-          toast("Health check found 0 working models");
+          if (res && res.results) {
+            showHealthResultsPopup(res);
+          } else {
+            toast("Health check found 0 working models");
+          }
         }
       } catch (e) {
         badge.className = "pill pill-negative";
@@ -1816,7 +1983,7 @@
     }
     $("ai-check").addEventListener("click", checkModelsHealth);
 
-    // Fetch models from endpoint
+    // Fetch models from endpoint with interactive selection popup
     async function fetchModels() {
       const btn = $("ai-fetch-models");
       const baseurl = $("ai-baseurl").value.trim();
@@ -1830,15 +1997,11 @@
           return;
         }
         const models = res.models || [];
-        cachedEndpointModels = models;
-        $("models-fetched-count").textContent = `(${models.length})`;
         if (!models.length) {
-          $("ai-model-chips").innerHTML = `<div class="empty sm">Endpoint returned 0 models.</div>`;
+          toast("Endpoint returned 0 models.");
           return;
         }
-
-        renderModelChips(cachedEndpointModels);
-        toast(`Loaded ${models.length} models from endpoint`);
+        showFetchModelsPopup(models);
       } catch (e) {
         toast("Error fetching models: " + e.message);
       } finally {
