@@ -669,6 +669,63 @@ def test_save_available_models_and_manual_rotation(tmp_path):
     assert api.handle_state()["models_manually_set"] is True
 
 
+def test_chat_cooldown_action_and_chats_payload(tmp_path):
+    ctx, _ = make_ctx(tmp_path, authorized=(555000111,))
+    api = MiniAppAPI(ctx)
+
+    # Initial chats call has empty cooldown_str for chat 111
+    chats = api.handle_chats()["chats"]
+    c = next(x for x in chats if x["id"] == 111)
+    assert c["cooldown_min"] is None
+    assert c["cooldown_max"] is None
+    assert c["cooldown_str"] == ""
+
+    # Set custom cooldown
+    res = api.handle_action(555000111, "chat_cooldown", {"chat_id": 111, "min": 15, "max": 45})
+    assert res["ok"] is True
+    assert "15s - 45s" in res["response"]
+
+    # Verify chats payload reflects custom cooldown
+    chats_after = api.handle_chats()["chats"]
+    c_after = next(x for x in chats_after if x["id"] == 111)
+    assert c_after["cooldown_min"] == 15.0
+    assert c_after["cooldown_max"] == 45.0
+    assert c_after["cooldown_str"] == "15s - 45s"
+
+    # Reset cooldown to global default
+    res_reset = api.handle_action(555000111, "chat_cooldown", {"chat_id": 111, "reset": True})
+    assert res_reset["ok"] is True
+    assert "reset to global default" in res_reset["response"]
+
+    chats_reset = api.handle_chats()["chats"]
+    c_reset = next(x for x in chats_reset if x["id"] == 111)
+    assert c_reset["cooldown_min"] is None
+    assert c_reset["cooldown_str"] == ""
+
+
+def test_handle_activity_includes_msg_url(tmp_path):
+    ctx, _ = make_ctx(tmp_path, authorized=(555000111,))
+    api = MiniAppAPI(ctx)
+
+    # Record outgoing message with username in known_chats
+    ctx.db.record_chat_metadata(-1001987654321, title="Startup Supergroup", username="startupindia", chat_type="supergroup")
+    with ctx.db._get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO chat_messages (chat_id, message_id, sender_id, sender_name, text, is_outgoing)
+            VALUES (?, ?, ?, ?, ?, 1)
+            """,
+            (-1001987654321, 555, 111, "TeleAutomator", "Test reply with link"),
+        )
+
+    acts = api.handle_activity()["activity"]
+    assert len(acts) > 0
+    first = acts[0]
+    assert first["chat_id"] == -1001987654321
+    assert first["message_id"] == 555
+    assert first["msg_url"] == "https://t.me/startupindia/555"
+
+
 
 
 

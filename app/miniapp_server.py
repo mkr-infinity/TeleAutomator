@@ -339,6 +339,19 @@ class MiniAppAPI:
             clean_user = username.lstrip("@").strip()
             avatar_url = f"https://t.me/i/userpic/320/{clean_user}.jpg" if clean_user else ""
 
+            c_min_str = ctx.db.get_state(f"chat_cooldown_min_{cid}") or ""
+            c_max_str = ctx.db.get_state(f"chat_cooldown_max_{cid}") or ""
+            cooldown_min = None
+            cooldown_max = None
+            cooldown_str = ""
+            if c_min_str and c_max_str:
+                try:
+                    cooldown_min = float(c_min_str)
+                    cooldown_max = float(c_max_str)
+                    cooldown_str = f"{int(cooldown_min)}s - {int(cooldown_max)}s"
+                except (ValueError, TypeError):
+                    pass
+
             chats.append({
                 "id": cid,
                 "name": title,
@@ -351,6 +364,9 @@ class MiniAppAPI:
                 "style": ctx.db.get_state(f"chat_style_{cid}") or "",
                 "prompt": ctx.db.get_state(f"chat_prompt_{cid}") or "",
                 "context": perm.get("notes") or "",
+                "cooldown_min": cooldown_min,
+                "cooldown_max": cooldown_max,
+                "cooldown_str": cooldown_str,
                 "voice_profile": bool(ctx.db.get_state(f"chat_voice_profile_{cid}")),
                 "blocked": cid in blocked,
             })
@@ -389,8 +405,9 @@ class MiniAppAPI:
         with self.ctx.db._get_connection() as conn:
             rows = conn.execute(
                 """
-                SELECT m.chat_id, m.sender_name, m.text, m.created_at,
-                       COALESCE(k.title, '') AS title
+                SELECT m.chat_id, m.message_id, m.sender_name, m.text, m.created_at,
+                       COALESCE(k.title, '') AS title,
+                       COALESCE(k.username, '') AS username
                 FROM chat_messages m
                 LEFT JOIN known_chats k ON k.chat_id = m.chat_id
                 WHERE m.is_outgoing = 1
@@ -400,9 +417,24 @@ class MiniAppAPI:
             ).fetchall()
         items = []
         for r in rows:
+            cid = r["chat_id"]
+            mid = r["message_id"]
+            username = (r["username"] or "").lstrip("@").strip()
+            msg_url = ""
+            if mid and mid > 0:
+                if username:
+                    msg_url = f"https://t.me/{username}/{mid}"
+                elif str(cid).startswith("-100"):
+                    clean_cid = str(cid)[4:]
+                    msg_url = f"https://t.me/c/{clean_cid}/{mid}"
+                elif cid > 0:
+                    msg_url = f"https://t.me/c/{cid}/{mid}"
+
             items.append({
-                "chat": r["title"] or f"Chat {r['chat_id']}",
-                "chat_id": r["chat_id"],
+                "chat": r["title"] or f"Chat {cid}",
+                "chat_id": cid,
+                "message_id": mid,
+                "msg_url": msg_url,
                 "text": r["text"] or "",
                 "sender": r["sender_name"] or "",
                 "ts": r["created_at"] or "",
@@ -548,6 +580,25 @@ class MiniAppAPI:
             pct = max(0, min(100, int(float(value))))
             ctx.db.set_state(f"chat_chatty_{cid}", str(pct / 100.0))
             return {"ok": True, "response": f"Chatty for chat {cid} set to {pct}%."}
+        if action == "chat_cooldown":
+            cid = int(params.get("chat_id", 0))
+            is_reset = str(params.get("reset", "")).lower() in ("1", "true", "yes") or "reset" in str(params.get("min", "")).lower()
+            if is_reset:
+                ctx.db.set_state(f"chat_cooldown_min_{cid}", "")
+                ctx.db.set_state(f"chat_cooldown_max_{cid}", "")
+                return {"ok": True, "response": f"Cooldown for chat {cid} reset to global default."}
+            try:
+                c_min = float(params.get("min", 5))
+                c_max = float(params.get("max", 60))
+                if c_min < 0:
+                    c_min = 0.0
+                if c_max < c_min:
+                    c_max = c_min
+                ctx.db.set_state(f"chat_cooldown_min_{cid}", str(round(c_min, 1)))
+                ctx.db.set_state(f"chat_cooldown_max_{cid}", str(round(c_max, 1)))
+                return {"ok": True, "response": f"Cooldown for chat {cid} set to {int(c_min)}s - {int(c_max)}s."}
+            except (ValueError, TypeError) as e:
+                return {"ok": False, "response": f"Invalid cooldown values: {e}"}
         command = self.map_action_to_command(action, params)
         if not command:
             return {"ok": False, "response": f"Unknown action: {action}"}

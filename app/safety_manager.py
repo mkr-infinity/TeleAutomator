@@ -202,10 +202,25 @@ class SafetyManager:
             return float(self.config.global_cooldown_seconds)
         return max(self.min_global_cooldown, float(base))
 
-    def _pick_random_chat_cooldown(self) -> float:
-        """Choose a random cooldown between min (default 5s) and max (default 60s)."""
+    def _get_chat_cooldown_range(self, chat_id: Optional[int] = None) -> tuple[float, float]:
+        """Return (min_seconds, max_seconds) cooldown range for chat_id, falling back to global range."""
         lo = self.min_chat_cooldown
         hi = self.max_chat_cooldown
+        if chat_id is not None and self.db and hasattr(self.db, "get_state"):
+            try:
+                min_s = self.db.get_state(f"chat_cooldown_min_{chat_id}")
+                max_s = self.db.get_state(f"chat_cooldown_max_{chat_id}")
+                if min_s and max_s:
+                    lo = max(0.0, float(min_s))
+                    hi = max(lo, float(max_s))
+                    return lo, hi
+            except (ValueError, TypeError):
+                pass
+        return lo, hi
+
+    def _pick_random_chat_cooldown(self, chat_id: Optional[int] = None) -> float:
+        """Choose a random cooldown between min (default 5s) and max (default 60s) for a chat."""
+        lo, hi = self._get_chat_cooldown_range(chat_id)
         return random.uniform(lo, hi) if hi >= lo else lo
 
     def _pick_random_global_cooldown(self) -> float:
@@ -378,7 +393,7 @@ class SafetyManager:
             wait_time = max(1, int(round(global_cd - time_since_global)))
             return False, f"Global cooldown active ({wait_time}s remaining)"
 
-        # Per-chat cooldown check (minimum 5s hard floor + randomized interval)
+        # Per-chat cooldown check (custom per-chat range or global floor + randomized interval)
         last_chat_time = self._last_chat_reply_time.get(chat_id)
         if last_chat_time is None:
             last_chat_time = (
@@ -388,12 +403,13 @@ class SafetyManager:
             )
             self._last_chat_reply_time[chat_id] = last_chat_time
         time_since_chat = now - last_chat_time
-        floor_chat = min(5.0, self.min_chat_cooldown)
+        chat_min, _ = self._get_chat_cooldown_range(chat_id)
+        floor_chat = min(5.0, chat_min)
         if time_since_chat < floor_chat:
             wait_time = max(1, int(round(floor_chat - time_since_chat)))
             return False, f"Per-chat cooldown active for chat {chat_id} ({wait_time}s remaining)"
 
-        chat_cd = max(floor_chat, self._next_chat_cooldown.get(chat_id) or self._pick_random_chat_cooldown())
+        chat_cd = max(floor_chat, self._next_chat_cooldown.get(chat_id) or self._pick_random_chat_cooldown(chat_id))
         if time_since_chat < chat_cd:
             wait_time = max(1, int(round(chat_cd - time_since_chat)))
             return False, f"Per-chat cooldown active for chat {chat_id} ({wait_time}s remaining)"
@@ -406,7 +422,7 @@ class SafetyManager:
         self._last_global_reply_time = now
         self._last_chat_reply_time[chat_id] = now
         self._next_global_cooldown = self._pick_random_global_cooldown()
-        self._next_chat_cooldown[chat_id] = self._pick_random_chat_cooldown()
+        self._next_chat_cooldown[chat_id] = self._pick_random_chat_cooldown(chat_id)
         if self.db and hasattr(self.db, "record_reply_event"):
             try:
                 self.db.record_reply_event(chat_id, now)

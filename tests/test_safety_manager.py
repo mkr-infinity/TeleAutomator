@@ -227,3 +227,39 @@ def test_cooldown_persists_across_restarts(tmp_path: Path):
     can_reply2, reason2 = safety2.can_reply(777, "same chat")
     assert can_reply2 is False
     assert "cooldown active" in reason2
+
+
+def test_per_chat_custom_cooldown(tmp_path: Path):
+    """Verify per-chat cooldown customization and global fallback."""
+    cfg = AppConfig(
+        api_id=123,
+        api_hash="dummy_hash",
+        data_dir=tmp_path,
+        global_cooldown_seconds=10,
+        per_chat_cooldown_seconds=30,
+    )
+    db = Database(tmp_path / "test_custom_cd.db")
+    safety = SafetyManager(cfg, db)
+
+    # By default, chat 123 uses global range
+    lo, hi = safety._get_chat_cooldown_range(123)
+    assert lo == safety.min_chat_cooldown
+    assert hi == safety.max_chat_cooldown
+
+    # Set custom cooldown for chat 123
+    db.set_state("chat_cooldown_min_123", "20.0")
+    db.set_state("chat_cooldown_max_123", "50.0")
+
+    lo_custom, hi_custom = safety._get_chat_cooldown_range(123)
+    assert lo_custom == 20.0
+    assert hi_custom == 50.0
+
+    # Another chat still falls back to global
+    lo_other, hi_other = safety._get_chat_cooldown_range(456)
+    assert lo_other == safety.min_chat_cooldown
+    assert hi_other == safety.max_chat_cooldown
+
+    # Picked cooldown for 123 is in custom range
+    for _ in range(10):
+        val = safety._pick_random_chat_cooldown(123)
+        assert 20.0 <= val <= 50.0
