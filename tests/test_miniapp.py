@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import hmac
+import io
 import json
 import time
 import urllib.request
@@ -724,6 +725,47 @@ def test_handle_activity_includes_msg_url(tmp_path):
     assert first["chat_id"] == -1001987654321
     assert first["message_id"] == 555
     assert first["msg_url"] == "https://t.me/startupindia/555"
+
+
+def test_handle_fetch_models_base_url_normalization_and_errors(tmp_path, monkeypatch):
+    """Test Base URL normalization (scheme, trailing slash, /chat/completions) and rich error messages."""
+    ctx, _ = make_ctx(tmp_path)
+    api = MiniAppAPI(ctx)
+
+    called_urls = []
+
+    def mock_urlopen_401(req, timeout=10.0):
+        called_urls.append(req.full_url)
+        raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, io.BytesIO(b'{"error": "Invalid API key provided"}'))
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen_401)
+
+    # 1. Base URL without scheme + with /chat/completions suffix
+    res = api.handle_fetch_models(base_url="api.groq.com/openai/v1/chat/completions", api_key="bad-key")
+    assert res["ok"] is False
+    assert called_urls[0] == "https://api.groq.com/openai/v1/models"
+    assert "Unauthorized" in res["error"]
+    assert "Invalid API key" in res["error"]
+
+    # 2. HTTP 404 Not Found error
+    def mock_urlopen_404(req, timeout=10.0):
+        raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, io.BytesIO(b'{"error": {"message": "Resource missing"}}'))
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen_404)
+    res404 = api.handle_fetch_models(base_url="https://api.example.com/v1/wrong_path", api_key="any-key")
+    assert res404["ok"] is False
+    assert "Not Found: verify Base URL" in res404["error"]
+
+    # 3. Connection / URLError error
+    def mock_urlopen_url_err(req, timeout=10.0):
+        raise urllib.error.URLError("Name or service not known")
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen_url_err)
+    res_conn = api.handle_fetch_models(base_url="https://bad-dns-typo.internal", api_key="any-key")
+    assert res_conn["ok"] is False
+    assert "Connection error" in res_conn["error"]
+    assert "verify that base url" in res_conn["error"].lower()
+
 
 
 

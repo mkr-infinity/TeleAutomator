@@ -2075,25 +2075,29 @@ h1.brand-name {
   left: 50%;
   transform: translateX(-50%);
   z-index: 9999;
-  background: rgba(20, 24, 34, 0.94);
-  -webkit-backdrop-filter: blur(16px);
-  backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(20, 24, 34, 0.96);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   color: var(--text);
-  padding: 10px 18px;
-  border-radius: 999px;
+  padding: 12px 16px;
+  border-radius: 18px;
   font-size: 13px;
   font-weight: 500;
-  max-width: 90vw;
+  width: calc(100% - 32px);
+  max-width: 440px;
+  box-sizing: border-box;
   display: flex;
-  align-items: center;
-  gap: 10px;
+  align-items: flex-start;
+  gap: 12px;
   box-shadow: 
-    0 10px 30px rgba(0, 0, 0, 0.65),
-    inset 1px 1px 1.5px rgba(255, 255, 255, 0.15);
+    0 12px 32px rgba(0, 0, 0, 0.7),
+    0 0 16px rgba(99, 102, 241, 0.15),
+    inset 1px 1px 1.5px rgba(255, 255, 255, 0.2);
   animation: toast-drop 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   cursor: pointer;
   pointer-events: auto;
+  transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
 @keyframes toast-drop {
@@ -2111,6 +2115,7 @@ h1.brand-name {
   font-size: 12px;
   font-weight: 700;
   flex-shrink: 0;
+  margin-top: 1px;
 }
 
 .toast.toast-ok .toast-icon {
@@ -2132,9 +2137,12 @@ h1.brand-name {
 }
 
 .toast-msg {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  overflow: visible;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.45;
 }
 
 /* ------------------------------------------------ Markdown formatting */

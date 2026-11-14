@@ -560,9 +560,11 @@
     else el.textContent = plainText;
 
     el.classList.remove("hidden");
+    el.onclick = () => { el.classList.add("hidden"); clearTimeout(toastTimer); };
     haptic(statusKind === "err" ? "err" : (statusKind === "ok" ? "ok" : "light"));
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.add("hidden"), 3200);
+    const duration = plainText.length > 50 ? Math.min(6000, 3200 + (plainText.length - 50) * 35) : 3400;
+    toastTimer = setTimeout(() => el.classList.add("hidden"), duration);
   }
 
   function haptic(kind) {

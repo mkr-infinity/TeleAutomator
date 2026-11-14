@@ -263,3 +263,46 @@ def test_per_chat_custom_cooldown(tmp_path: Path):
     for _ in range(10):
         val = safety._pick_random_chat_cooldown(123)
         assert 20.0 <= val <= 50.0
+
+
+def test_zero_cooldown_no_wait_and_antispam_preserved(tmp_path: Path):
+    """Zero cooldown allows immediate replies without waiting, but anti-spam limits remain strictly enforced."""
+    import time as _time
+    cfg = AppConfig(
+        api_id=123,
+        api_hash="dummy_hash",
+        data_dir=tmp_path,
+        global_cooldown_seconds=10,
+        per_chat_cooldown_seconds=20,
+    )
+    db = Database(tmp_path / "test_zero_cd.db")
+    safety = SafetyManager(cfg, db)
+
+    # 1. Configure chat 999 with 0s - 0s cooldown
+    db.set_state("chat_cooldown_min_999", "0")
+    db.set_state("chat_cooldown_max_999", "0")
+
+    assert safety._pick_random_chat_cooldown(999) == 0.0
+
+    # 2. First message passes
+    can_reply, reason = safety.can_reply(999, "First fast reply")
+    assert can_reply is True
+    safety.mark_reply_sent(999)
+
+    # 3. Immediately send second message: no cooldown wait (bypasses global & chat timers)
+    can_reply2, reason2 = safety.can_reply(999, "Second fast reply")
+    assert can_reply2 is True
+    assert reason2 == "OK"
+
+    # 4. Anti-spam safety is STILL enforced: rolling burst cap stops spamming
+    db.set_state("max_replies_per_minute", "2")
+    safety._minute_cap = 2
+    safety._minute_cap_ts = _time.time() + 3600.0
+
+    safety.mark_reply_sent(999)
+
+    # Third message hits the rolling burst cap even though cooldown is 0
+    can_reply3, reason3 = safety.can_reply(999, "Spam burst reply")
+    assert can_reply3 is False
+    assert "Anti-spam burst limit reached" in reason3
+

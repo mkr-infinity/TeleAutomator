@@ -730,6 +730,8 @@ class MiniAppAPI:
         db_base = (self.ctx.db.get_state("ai_base_url") or "").strip().rstrip("/")
         config_base = (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_base_url", "") or "").strip().rstrip("/")
         effective_base = user_base or db_base or config_base
+        if effective_base and not effective_base.startswith(("http://", "https://")):
+            effective_base = f"https://{effective_base}"
 
         if effective_base:
             is_gemini = "googleapis.com" in effective_base
@@ -788,15 +790,28 @@ class MiniAppAPI:
                 err_msg = f"HTTP {e.code}"
                 try:
                     eb = json.loads(e.read().decode("utf-8"))
-                    if isinstance(eb, dict) and "error" in eb:
-                        err_msg = f"HTTP {e.code}: {eb['error'].get('message', eb['error'])}"
+                    if isinstance(eb, dict):
+                        if "error" in eb:
+                            err_obj = eb["error"]
+                            err_msg = f"HTTP {e.code}: {err_obj.get('message', err_obj) if isinstance(err_obj, dict) else err_obj}"
+                        elif "message" in eb:
+                            err_msg = f"HTTP {e.code}: {eb['message']}"
                 except Exception:
                     pass
+                if e.code == 400 and "api_key_invalid" in err_msg.lower():
+                    err_msg = "Invalid Gemini API Key"
+                elif e.code == 401:
+                    err_msg += " (Unauthorized: check your Gemini API key)"
                 return {"ok": False, "error": err_msg, "url": "https://generativelanguage.googleapis.com/v1beta/models"}
+            except urllib.error.URLError as e:
+                reason = getattr(e, "reason", str(e))
+                return {"ok": False, "error": f"Connection error: {reason}. Check your internet connection.", "url": "https://generativelanguage.googleapis.com/v1beta/models"}
             except Exception as e:
                 return {"ok": False, "error": str(e), "url": "https://generativelanguage.googleapis.com/v1beta/models"}
 
-        raw_url = effective_base or "https://api.openai.com/v1"
+        raw_url = (effective_base or "https://api.openai.com/v1").rstrip("/")
+        if not raw_url.startswith(("http://", "https://")):
+            raw_url = f"https://{raw_url}"
         if raw_url.endswith("/chat/completions"):
             raw_url = raw_url[:-len("/chat/completions")].rstrip("/")
         models_url = raw_url if raw_url.endswith("/models") else f"{raw_url}/models"
@@ -841,13 +856,30 @@ class MiniAppAPI:
             err_msg = f"HTTP {e.code}"
             try:
                 eb = json.loads(e.read().decode("utf-8"))
-                if isinstance(eb, dict) and "error" in eb:
-                    err_msg = f"HTTP {e.code}: {eb['error'].get('message', eb['error'])}"
+                if isinstance(eb, dict):
+                    if "error" in eb:
+                        err_obj = eb["error"]
+                        err_msg = f"HTTP {e.code}: {err_obj.get('message', err_obj) if isinstance(err_obj, dict) else err_obj}"
+                    elif "message" in eb:
+                        err_msg = f"HTTP {e.code}: {eb['message']}"
             except Exception:
                 pass
+            if e.code == 401:
+                err_msg += " (Unauthorized: check API key)"
+            elif e.code == 404:
+                err_msg += f" (Not Found: verify Base URL '{models_url}')"
+            elif e.code == 429:
+                err_msg += " (Quota or Rate Limit Exceeded)"
             return {"ok": False, "error": err_msg, "url": models_url}
+        except urllib.error.URLError as e:
+            reason = getattr(e, "reason", str(e))
+            return {
+                "ok": False,
+                "error": f"Connection error: {reason}. Verify that Base URL '{models_url}' is correct and reachable.",
+                "url": models_url,
+            }
         except Exception as e:
-            return {"ok": False, "error": str(e), "url": models_url}
+            return {"ok": False, "error": f"Failed to fetch models: {e}", "url": models_url}
 
     def handle_test_model(
         self,
@@ -876,6 +908,8 @@ class MiniAppAPI:
         db_base = (self.ctx.db.get_state("ai_base_url") or "").strip().rstrip("/")
         config_base = (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_base_url", "") or "").strip().rstrip("/")
         effective_base = user_base or db_base or config_base
+        if effective_base and not effective_base.startswith(("http://", "https://")):
+            effective_base = f"https://{effective_base}"
 
         if effective_base:
             is_gemini = "googleapis.com" in effective_base
@@ -928,22 +962,34 @@ class MiniAppAPI:
                                         reply_text = str(raw_text).strip().strip('"')
                                         first_working_model = clean_m
                                     continue
-                        results.append({"model": clean_m, "ok": False, "detail": "Empty response"})
+                        results.append({"model": clean_m, "ok": False, "detail": "Empty response from Gemini"})
                 except urllib.error.HTTPError as e:
                     detail = f"HTTP {e.code}"
                     try:
                         eb = json.loads(e.read().decode("utf-8"))
                         if isinstance(eb, dict) and "error" in eb:
-                            detail = f"HTTP {e.code}: {eb['error'].get('message', eb['error'])}"[:45]
+                            err_obj = eb["error"]
+                            detail = f"HTTP {e.code}: {err_obj.get('message', err_obj) if isinstance(err_obj, dict) else err_obj}"
                     except Exception:
                         pass
-                    results.append({"model": clean_m, "ok": False, "detail": detail})
+                    if e.code == 400 and "api_key_invalid" in detail.lower():
+                        detail = "Invalid Gemini API Key"
+                    elif e.code == 404:
+                        detail = f"Model '{clean_m}' not found for key"
+                    results.append({"model": clean_m, "ok": False, "detail": detail[:120]})
+                except urllib.error.URLError as e:
+                    reason = getattr(e, "reason", str(e))
+                    results.append({"model": clean_m, "ok": False, "detail": f"Network error: {reason}"[:120]})
                 except Exception as e:
-                    results.append({"model": clean_m, "ok": False, "detail": str(e)[:45]})
+                    results.append({"model": clean_m, "ok": False, "detail": str(e)[:120]})
         else:
-            endpoint = (effective_base or "https://api.openai.com/v1").rstrip("/")
-            if not endpoint.endswith("/chat/completions"):
-                endpoint = f"{endpoint}/chat/completions"
+            raw_endpoint = (effective_base or "https://api.openai.com/v1").rstrip("/")
+            if raw_endpoint.endswith("/models"):
+                raw_endpoint = raw_endpoint[:-len("/models")].rstrip("/")
+            if not raw_endpoint.endswith("/chat/completions"):
+                endpoint = f"{raw_endpoint}/chat/completions"
+            else:
+                endpoint = raw_endpoint
 
             for m in candidates:
                 payload = {
@@ -973,18 +1019,31 @@ class MiniAppAPI:
                                     reply_text = content
                                     first_working_model = m
                                 continue
-                        results.append({"model": m, "ok": False, "detail": "Empty response"})
+                        results.append({"model": m, "ok": False, "detail": "Empty choices response"})
                 except urllib.error.HTTPError as e:
                     detail = f"HTTP {e.code}"
                     try:
                         eb = json.loads(e.read().decode("utf-8"))
-                        if isinstance(eb, dict) and "error" in eb:
-                            detail = f"HTTP {e.code}: {eb['error'].get('message', eb['error'])}"[:45]
+                        if isinstance(eb, dict):
+                            if "error" in eb:
+                                err_obj = eb["error"]
+                                detail = f"HTTP {e.code}: {err_obj.get('message', err_obj) if isinstance(err_obj, dict) else err_obj}"
+                            elif "message" in eb:
+                                detail = f"HTTP {e.code}: {eb['message']}"
                     except Exception:
                         pass
-                    results.append({"model": m, "ok": False, "detail": detail})
+                    if e.code == 401 and "unauthorized" not in detail.lower():
+                        detail += " (Invalid API key)"
+                    elif e.code == 404 and "not found" not in detail.lower():
+                        detail += f" (Endpoint '{endpoint}' or model not found)"
+                    elif e.code == 429 and "quota" not in detail.lower():
+                        detail += " (Quota or Rate Limit)"
+                    results.append({"model": m, "ok": False, "detail": detail[:120]})
+                except urllib.error.URLError as e:
+                    reason = getattr(e, "reason", str(e))
+                    results.append({"model": m, "ok": False, "detail": f"Network error: {reason}. Check Base URL '{endpoint}'"[:120]})
                 except Exception as e:
-                    results.append({"model": m, "ok": False, "detail": str(e)[:45]})
+                    results.append({"model": m, "ok": False, "detail": str(e)[:120]})
 
         manually_set = self.ctx.db.get_state("models_manually_set", "0") == "1"
         should_auto_apply = not manually_set or bool(auto_apply)
@@ -1001,9 +1060,11 @@ class MiniAppAPI:
             if api_key:
                 self.ctx.db.set_state("ai_api_key", api_key)
 
+        primary_err = results[0]["detail"] if results else "All candidate models failed."
         return {
             "ok": len(working_models) > 0,
             "reply": reply_text or "No reply received.",
+            "error": "" if working_models else primary_err,
             "model_used": first_working_model,
             "working_models": working_models,
             "failed_models": [r["model"] for r in results if not r["ok"]],
