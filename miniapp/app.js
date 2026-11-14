@@ -44,21 +44,21 @@
       owner_name: "Kaif", ai_engine: "Gemini", ai_model: "gemini-2.5-flash-lite", ai_base_url: "",
       chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "2.9.0",
       auto_reactions: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
-      thinking: "default", temperature: "0.7", lang: "dynamic", max_tokens: "512",
+      thinking: "default", temperature: "0.7", lang: "english", max_tokens: "512",
       quiet_hours_start: "02:00", quiet_hours_end: "08:00", quiet_hours_schedule: "02:00 AM – 08:00 AM IST",
       rules: ["pricing => We update our rates monthly, DM for catalog!", "help => How can I assist you today?"],
     },
     chats: [
-      { id: 123456789, name: "Rohan Sharma", username: "@rohan_s", type: "Private", chatty: "", style: "", prompt: "", voice_profile: true, blocked: false },
-      { id: -1001987654321, name: "Startup India Founders", username: "", type: "Group", chatty: "0.4", style: "humorous", prompt: "You help founders swap tools. Keep it practical.", voice_profile: false, blocked: false },
-      { id: -1001765432109, name: "Delhi Tech Meetup", username: "@delhitech", type: "Group", chatty: "0", style: "", prompt: "", voice_profile: false, blocked: false },
-      { id: 987654321, name: "Aarav", username: "@aaravv", type: "Private", chatty: "0.6", style: "", prompt: "", voice_profile: false, blocked: false },
-      { id: -1001654321098, name: "Crypto Signals Hub", username: "", type: "Group", chatty: "", style: "concise", prompt: "", voice_profile: false, blocked: true },
-      { id: 876543210, name: "Mom", username: "", type: "Private", chatty: "0.25", style: "", prompt: "Never send links here.", voice_profile: false, blocked: false },
+      { id: 123456789, name: "Rohan Sharma", username: "@rohan_s", avatar_url: "https://t.me/i/userpic/320/rohan_s.jpg", initials: "RS", type: "Private", chatty: "", style: "", prompt: "", voice_profile: true, blocked: false },
+      { id: -1001987654321, name: "Startup India Founders", username: "startupindia", avatar_url: "https://t.me/i/userpic/320/startupindia.jpg", initials: "SI", type: "Group", chatty: "0.4", style: "humorous", prompt: "You help founders swap tools. Keep it practical.", voice_profile: false, blocked: false },
+      { id: -1001765432109, name: "Delhi Tech Meetup", username: "@delhitech", avatar_url: "https://t.me/i/userpic/320/delhitech.jpg", initials: "DT", type: "Group", chatty: "0", style: "", prompt: "", voice_profile: false, blocked: false },
+      { id: 987654321, name: "Aarav", username: "@aaravv", avatar_url: "https://t.me/i/userpic/320/aaravv.jpg", initials: "AA", type: "Private", chatty: "0.6", style: "", prompt: "", voice_profile: false, blocked: false },
+      { id: -1001654321098, name: "Crypto Signals Hub", username: "", avatar_url: "", initials: "CS", type: "Group", chatty: "", style: "concise", prompt: "", voice_profile: false, blocked: true },
+      { id: 876543210, name: "Mom", username: "", avatar_url: "", initials: "MO", type: "Private", chatty: "0.25", style: "", prompt: "Never send links here.", voice_profile: false, blocked: false },
     ],
     pending: [
-      { id: 41, chat_id: -1001987654321, chat_title: "Startup India Founders", text: "btw are you joining the demo day on friday? wanted to show you the pitch deck before we send it out", created: "2026-11-13 14:22" },
-      { id: 40, chat_id: 987654321, chat_title: "Aarav", text: "🎙️ Reached home! Call me when free, need to ask about the weekend plan.", created: "2026-11-13 13:05", is_voice: true, voice_dur: "0:21" },
+      { id: 41, chat_id: -1001987654321, chat_title: "Startup India Founders", username: "startupindia", avatar_url: "https://t.me/i/userpic/320/startupindia.jpg", initials: "SI", sender_id: 11223344, incoming_text: "btw are you joining the demo day on friday? wanted to show you the pitch deck before we send it out", text: "yeah definitely planning to join! send the deck over, will review it tonight.", created: "2026-11-13 14:22" },
+      { id: 40, chat_id: 987654321, chat_title: "Aarav", username: "aaravv", avatar_url: "https://t.me/i/userpic/320/aaravv.jpg", initials: "AA", sender_id: 987654321, incoming_text: "Reached home! Call me when free, need to ask about the weekend plan.", text: "🎙️ Reached home! Call me when free, need to ask about the weekend plan.", created: "2026-11-13 13:05", is_voice: true, voice_dur: "0:21" },
     ],
     activity: [
       { chat: "Delhi Tech Meetup", chat_id: -1001765432109, sender: "TeleAutomator", text: "yeah the venue shifted to Hauz Khas this month, same 7pm slot", ts: "2026-11-13 14:18" },
@@ -597,6 +597,15 @@
     });
   }
 
+  function formatMode(m) {
+    if (!m) return "Restricted Auto";
+    if (m === "restricted_auto") return "Restricted Auto";
+    if (m === "full_auto") return "Full Auto";
+    if (m === "approval") return "Approval Required";
+    if (m === "off") return "Automation Off";
+    return String(m).replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
+  }
+
   function renderState(s) {
     const pill = $("state-pill");
     if (s.state === "stopped") { pill.textContent = "Stopped"; pill.className = "pill pill-negative"; }
@@ -606,11 +615,12 @@
       pill.className = "pill pill-warning";
     } else { pill.textContent = s.quiet_hours ? "Active · quiet hours" : "Active"; pill.className = "pill pill-positive"; }
 
-    $("ov-mode").textContent = `Mode: ${s.mode} · style ${s.style}`;
+    $("ov-mode").textContent = formatMode(s.mode);
     const bits = [];
-    if (s.safe_mode) bits.push("safe mode");
-    if (s.emergency) bits.push("emergency stop");
-    bits.push(`${s.ai_engine} engine`);
+    bits.push(`Style: ${(s.style || "casual").charAt(0).toUpperCase() + (s.style || "casual").slice(1)}`);
+    if (s.safe_mode) bits.push("Safe Mode");
+    if (s.emergency) bits.push("Emergency Stop");
+    bits.push(`${s.ai_engine || "AI"} Engine`);
     bits.push(s.chats_allowed === 1 ? "1 chat" : `${s.chats_allowed} chats`);
     $("ov-sub").textContent = bits.join(" · ");
 
@@ -620,7 +630,7 @@
     if ($("kpi-engine")) $("kpi-engine").textContent = s.ai_engine || "Local";
 
     if ($("ov-engine-badge")) {
-      $("ov-engine-badge").textContent = `${s.ai_engine || "AI"} Engine`;
+      $("ov-engine-badge").textContent = `${s.ai_engine || "AI"}`;
       if ($("ov-status-pill")) {
         const statusText = s.emergency ? "Stopped" : (s.safe_mode ? "Safe Mode" : (s.state === "paused" ? "Paused" : "Active"));
         $("ov-status-pill").textContent = statusText;
@@ -631,7 +641,7 @@
         $("ov-persona-val").textContent = (s.style || "casual").charAt(0).toUpperCase() + (s.style || "casual").slice(1);
       }
       $("ov-qh-sched").textContent = formatQuietSchedule(s.quiet_hours_schedule);
-      $("ov-req-count").textContent = (s.token_requests || 0).toLocaleString();
+      $("ov-req-count").textContent = (s.token_requests || s.tokens_today || 0).toLocaleString();
     }
 
     $("act-pause").classList.toggle("hidden", s.state !== "active");
@@ -675,15 +685,21 @@
   function chatRowHtml(c) {
     const initials = c.initials || (c.type === "Group" ? "GP" : "DM");
     const avatarBg = c.avatar_bg || "linear-gradient(135deg, #153421 0%, #1E3F2A 100%)";
-    const userDisplay = c.username ? (c.username.startsWith("@") ? c.username : "@" + c.username) : "";
+    const cleanUser = c.username ? c.username.replace(/^@/, "").trim() : "";
+    const userDisplay = cleanUser
+      ? `<a href="https://t.me/${encodeURIComponent(cleanUser)}" target="_blank" rel="noopener noreferrer" class="pill pill-neutral chat-user chat-user-link" title="Open @${esc(cleanUser)} in Telegram">@${esc(cleanUser)} ↗</a>`
+      : "";
 
     return `<div class="chat-capsule ${c.blocked ? "is-blocked" : ""}" data-cid="${c.id}">
       <div class="chat-capsule-head">
-        <div class="chat-avatar" style="background: ${avatarBg}">${esc(initials)}</div>
+        <div class="chat-avatar-wrap">
+          ${c.avatar_url ? `<img src="${esc(c.avatar_url)}" alt="${esc(c.name)}" class="chat-avatar-img" loading="lazy" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />` : ""}
+          <div class="chat-avatar fallback" style="background: ${avatarBg}; ${c.avatar_url ? 'display:none;' : ''}">${esc(initials)}</div>
+        </div>
         <div class="chat-info">
           <div class="chat-title-row">
             <span class="chat-name">${esc(c.name)}</span>
-            ${userDisplay ? `<span class="pill pill-neutral chat-user">${esc(userDisplay)}</span>` : ""}
+            ${userDisplay}
             <span class="pill pill-neutral num chat-id">${esc(String(c.id))}</span>
           </div>
           <div class="chat-badges">
@@ -697,11 +713,11 @@
           </div>
         </div>
       </div>
-      <div class="chat-actions">
-        <button class="btn small" data-op="prompt">Prompt</button>
-        <button class="btn small" data-op="context">Context</button>
-        <button class="btn small" data-op="chatty">Chatty</button>
-        <button class="btn small danger" data-op="remove">Remove</button>
+      <div class="chat-actions chat-actions-grid">
+        <button type="button" class="btn small action-btn-prompt" data-op="prompt"><span class="btn-icon">✏️</span> Prompt</button>
+        <button type="button" class="btn small action-btn-context" data-op="context"><span class="btn-icon">🧠</span> Context</button>
+        <button type="button" class="btn small action-btn-chatty" data-op="chatty"><span class="btn-icon">💬</span> Chatty</button>
+        <button type="button" class="btn small danger action-btn-remove" data-op="remove"><span class="btn-icon">🗑️</span> Remove</button>
       </div>
     </div>`;
   }
@@ -906,6 +922,9 @@
       ? `<div class="media-badge"><span>📷 Media Draft</span></div>`
       : "";
 
+    const cleanUser = p.username ? p.username.replace(/^@/, "").trim() : "";
+    const initials = p.initials || "TG";
+
     return `<div class="approval-card-wrap" data-id="${p.id}">
       <div class="approval-swipe-underlay">
         <div class="swipe-hint swipe-hint-approve">
@@ -918,13 +937,38 @@
         </div>
       </div>
       <div class="approval-card-content">
-        <div class="approval-head">
-          <span class="pill pill-warning">Draft #${p.id}</span>
-          <span class="feed-ts num">${esc(formatIST(p.created))}</span>
+        <div class="approval-card-header">
+          <div class="approval-avatar-wrap">
+            ${p.avatar_url ? `<img src="${esc(p.avatar_url)}" alt="${esc(p.chat_title || '')}" class="approval-avatar-img" loading="lazy" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />` : ""}
+            <div class="chat-avatar fallback-avatar" style="${p.avatar_url ? 'display:none;' : ''}">${esc(initials)}</div>
+          </div>
+          <div class="approval-user-meta">
+            <div class="approval-name-row">
+              <span class="approval-user-name">${esc(p.chat_title || `Chat ${p.chat_id}`)}</span>
+              ${cleanUser ? `<a href="https://t.me/${encodeURIComponent(cleanUser)}" target="_blank" rel="noopener noreferrer" class="pill pill-neutral chat-user-link" title="Open @${esc(cleanUser)} in Telegram">@${esc(cleanUser)} ↗</a>` : ""}
+            </div>
+            <div class="approval-sub-row">
+              <span class="pill pill-neutral num">ID: ${esc(String(p.sender_id || p.chat_id))}</span>
+              <span class="pill pill-warning">Draft #${p.id}</span>
+              <span class="feed-ts num">${esc(formatIST(p.created))}</span>
+            </div>
+          </div>
         </div>
-        <p class="approval-chat-title">${esc(p.chat_title || String(p.chat_id))}</p>
+
         ${voiceBadge}${mediaBadge}
-        <div class="approval-draft-bubble">${esc(p.text)}</div>
+
+        ${p.incoming_text ? `
+          <div class="approval-msg-section">
+            <span class="approval-section-tag">Incoming Message</span>
+            <div class="approval-incoming-bubble">${esc(p.incoming_text)}</div>
+          </div>
+        ` : ""}
+
+        <div class="approval-msg-section">
+          <span class="approval-section-tag">Draft AI Reply</span>
+          <div class="approval-draft-bubble">${esc(p.text)}</div>
+        </div>
+
         <div class="approval-actions">
           <button class="btn small primary" data-ap="approve" data-id="${p.id}">✓ Approve</button>
           <button class="btn small danger" data-ap="reject" data-id="${p.id}">✕ Reject</button>
@@ -1079,7 +1123,7 @@
     };
     setSegActive("seg-thinking", s.thinking || "default");
     setSegActive("seg-temp", s.temperature || "0.7");
-    setSegActive("seg-lang", s.lang || "dynamic");
+    setSegActive("seg-lang", s.lang || "english");
     setSegActive("seg-maxtokens", s.max_tokens || "512");
 
     // 4. Keyword Rules
@@ -1383,23 +1427,11 @@
       }
     });
 
-    // Android Material 3 Expressive Fluid Wave Touch Ripple + Instant Tactile Haptic
+    // Instant Tactile Haptic on buttons
     document.addEventListener("pointerdown", (e) => {
       const target = e.target.closest(".btn, .pay-btn, .pay-check-btn, .chip, .seg, .model-chip, .preset-chip, .clay-switch, .m3-nav-item, .sheet-close-btn, .linklike, .kpi[data-goto], .usage-cell[data-goto]");
       if (!target) return;
       haptic("light");
-      const rect = target.getBoundingClientRect();
-      const size = Math.max(rect.width, rect.height) * 2;
-      const x = e.clientX - rect.left - size / 2;
-      const y = e.clientY - rect.top - size / 2;
-      const ripple = document.createElement("span");
-      ripple.className = "m3-wave-ripple";
-      ripple.style.width = `${size}px`;
-      ripple.style.height = `${size}px`;
-      ripple.style.left = `${x}px`;
-      ripple.style.top = `${y}px`;
-      target.appendChild(ripple);
-      setTimeout(() => ripple.remove(), 550);
     }, { passive: true });
 
     // Swipe down on bottom sheet to dismiss

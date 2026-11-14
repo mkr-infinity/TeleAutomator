@@ -603,9 +603,7 @@ h1.brand-name {
   align-self: stretch;
   height: 48px;
   border-radius: var(--radius-control);
-  background: linear-gradient(115deg, #0088cc 0%, #38BDF8 28%, #6366F1 70%, #0088cc 100%);
-  background-size: 260% 100%;
-  animation: m3-wavy-sheen 6s ease-in-out infinite;
+  background: linear-gradient(135deg, #0088cc 0%, #38BDF8 50%, #6366F1 100%);
   color: #FFFFFF;
   font-weight: 600;
   font-size: 15px;
@@ -729,6 +727,106 @@ h1.brand-name {
   background: var(--pill-neutral-bg);
   color: var(--pill-neutral-ink);
   border-color: rgba(148, 163, 184, 0.25);
+}
+
+/* ------------------------------------------------ Unified Executive Dashboard Hub Card */
+.ov-hub-card {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-highlight);
+  border-radius: var(--radius-card);
+  box-shadow: var(--clay-card-shadow);
+  margin-top: 4px;
+}
+
+.hub-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hub-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.hub-eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-bright);
+}
+
+.hub-title {
+  font-size: clamp(17px, 4.4vw, 22px);
+  font-weight: 800;
+  color: var(--text);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hub-status-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.hub-sub {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.ov-hub-card #kpi-strip {
+  margin-top: 0;
+  border-radius: var(--radius-inner);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--clay-input-shadow);
+}
+
+.ov-hub-card #ov-usage-card {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  gap: 0;
+}
+
+.kpi-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.kpi-icon {
+  font-size: 14px;
+}
+
+.hub-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.hub-actions .btn {
+  flex: 1 1 110px;
+  min-height: 38px;
+  font-size: 13px;
 }
 
 /* ------------------------------------------------------------- KPI Strip */
@@ -953,37 +1051,7 @@ h1.brand-name {
   padding: 0 4px;
 }
 
-/* ------------------------------------------------ Expressive Wavy Motion Keyframes */
-@keyframes m3-wavy-sheen {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
-}
-
-@keyframes m3-wavy-pulse {
-  0%, 100% {
-    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35), inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.3);
-  }
-  50% {
-    box-shadow: 0 6px 20px rgba(129, 140, 248, 0.55), inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.45);
-  }
-}
-
-@keyframes m3-wave-ripple-expand {
-  0% { transform: scale(0); opacity: 0.75; }
-  100% { transform: scale(2.8); opacity: 0; }
-}
-
-/* Fluid Wave Touch Ripple Container */
-.m3-wave-ripple {
-  position: absolute;
-  border-radius: 50%;
-  pointer-events: none;
-  transform: scale(0);
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0.15) 50%, transparent 75%);
-  animation: m3-wave-ripple-expand 0.55s cubic-bezier(0.1, 0.9, 0.2, 1) forwards;
-  z-index: 3;
-}
+/* ------------------------------------------------ Material 3 Expressive Tactile Buttons */
 
 /* ------------------------------------------------ Colorful Wavy Clay Buttons */
 .section-h {
@@ -1019,47 +1087,48 @@ h1.brand-name {
   position: relative;
   overflow: hidden;
   min-height: var(--control-height);
-  padding: 0 18px;
+  padding: 8px 14px;
   border-radius: var(--radius-control);
-  background: linear-gradient(115deg, #242B3A 0%, #2D374D 40%, #1A202D 75%, #242B3A 100%);
-  background-size: 240% 100%;
+  background: linear-gradient(135deg, #242B3A 0%, #1A202D 100%);
   color: var(--text);
-  font-size: var(--fs-body);
+  font-size: clamp(12px, 3.4vw, 14px);
+  line-height: 1.25;
   font-weight: 600;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  white-space: nowrap;
+  text-align: center;
+  gap: 6px;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: break-word;
   border: 1px solid var(--border-highlight);
   box-shadow: var(--clay-btn-neutral-shadow);
   cursor: pointer;
-  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), border-radius 0.22s ease, filter 0.15s ease, box-shadow 0.2s ease;
+  transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), border-radius 0.18s ease, filter 0.15s ease, box-shadow 0.18s ease;
   user-select: none;
 }
 
 .btn:hover {
-  background-position: 100% 50%;
+  filter: brightness(1.06);
 }
 
 .btn:active {
-  transform: scale(0.95);
-  border-radius: 24px 18px 24px 18px; /* Android Expressive squircle morph */
+  transform: scale(0.96);
+  border-radius: 22px 14px 22px 14px; /* Android Expressive squircle morph */
   box-shadow: 
     0 2px 6px rgba(0, 0, 0, 0.45),
     inset 2px 2px 4px rgba(0, 0, 0, 0.55);
 }
 
-/* Primary: Vibrant Indigo Clay with Wavy Animated Sheen */
+/* Primary: Vibrant Indigo Clay */
 .btn.primary {
-  background: linear-gradient(115deg, #6366F1 0%, #818CF8 28%, #4F46E5 70%, #6366F1 100%);
-  background-size: 260% 100%;
-  animation: m3-wavy-sheen 6s ease-in-out infinite;
+  background: linear-gradient(135deg, #6366F1 0%, #4F46E5 100%);
   color: #FFFFFF;
   border-color: rgba(255, 255, 255, 0.28);
   box-shadow: 
-    0 6px 18px var(--accent-shadow),
-    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.45),
+    0 4px 14px var(--accent-shadow),
+    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.4),
     inset -2px -2px 3px rgba(0, 0, 0, 0.35);
 }
 
@@ -1068,86 +1137,79 @@ h1.brand-name {
 }
 
 .btn.primary:active {
-  transform: scale(0.95);
-  border-radius: 24px 18px 24px 18px;
+  transform: scale(0.96);
+  border-radius: 22px 14px 22px 14px;
 }
 
-/* Stop/Danger: Radiant Coral Clay with Flame Wave */
+/* Stop/Danger: Radiant Coral Clay */
 .btn.danger, #act-stop {
-  background: linear-gradient(115deg, #EF4444 0%, #F87171 28%, #DC2626 70%, #EF4444 100%);
-  background-size: 260% 100%;
-  animation: m3-wavy-sheen 6s ease-in-out infinite;
+  background: linear-gradient(135deg, #EF4444 0%, #DC2626 100%);
   color: #FFFFFF;
   border-color: rgba(255, 255, 255, 0.28);
   box-shadow: 
-    0 6px 18px var(--negative-shadow),
-    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.45),
+    0 4px 14px var(--negative-shadow),
+    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.4),
     inset -2px -2px 3px rgba(0, 0, 0, 0.35);
 }
 
 .btn.danger:active, #act-stop:active {
-  transform: scale(0.95);
-  border-radius: 24px 18px 24px 18px;
+  transform: scale(0.96);
+  border-radius: 22px 14px 22px 14px;
 }
 
-/* Pause: Warm Amber Clay with Golden Wave */
+/* Pause: Warm Amber Clay */
 #act-pause {
-  background: linear-gradient(115deg, #F59E0B 0%, #FBBF24 28%, #D97706 70%, #F59E0B 100%);
-  background-size: 260% 100%;
-  animation: m3-wavy-sheen 6s ease-in-out infinite;
+  background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%);
   color: #FFFFFF;
   border-color: rgba(255, 255, 255, 0.28);
   box-shadow: 
-    0 6px 18px var(--warning-shadow),
-    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.45),
+    0 4px 14px var(--warning-shadow),
+    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.4),
     inset -2px -2px 3px rgba(0, 0, 0, 0.35);
 }
 
 #act-pause:active {
-  transform: scale(0.95);
-  border-radius: 24px 18px 24px 18px;
+  transform: scale(0.96);
+  border-radius: 22px 14px 22px 14px;
 }
 
-/* Resume: Mint Emerald Clay with Radiant Wave */
+/* Resume: Mint Emerald Clay */
 #act-resume {
-  background: linear-gradient(115deg, #10B981 0%, #34D399 28%, #059669 70%, #10B981 100%);
-  background-size: 260% 100%;
-  animation: m3-wavy-sheen 6s ease-in-out infinite;
+  background: linear-gradient(135deg, #10B981 0%, #059669 100%);
   color: #FFFFFF;
   border-color: rgba(255, 255, 255, 0.28);
   box-shadow: 
-    0 6px 18px var(--positive-shadow),
-    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.45),
+    0 4px 14px var(--positive-shadow),
+    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.4),
     inset -2px -2px 3px rgba(0, 0, 0, 0.35);
 }
 
 #act-resume:active {
-  transform: scale(0.95);
-  border-radius: 24px 18px 24px 18px;
+  transform: scale(0.96);
+  border-radius: 22px 14px 22px 14px;
 }
 
-/* Mode: Cool Sky/Cyan Clay with Oceanic Wave */
+/* Mode: Cool Sky/Cyan Clay */
 #act-mode {
-  background: linear-gradient(115deg, #1C2638 0%, #25364F 35%, #111A28 70%, #1C2638 100%);
-  background-size: 260% 100%;
-  animation: m3-wavy-sheen 7s ease-in-out infinite;
+  background: linear-gradient(135deg, #1E293B 0%, #0F172A 100%);
   color: var(--cyan-bright);
   border-color: rgba(56, 189, 248, 0.35);
   box-shadow: 
-    0 6px 16px rgba(6, 182, 212, 0.28),
-    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.25),
+    0 4px 14px rgba(6, 182, 212, 0.25),
+    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.2),
     inset -2px -2px 3px rgba(0, 0, 0, 0.45);
 }
 
 #act-mode:active {
-  transform: scale(0.95);
-  border-radius: 24px 18px 24px 18px;
+  transform: scale(0.96);
+  border-radius: 22px 14px 22px 14px;
 }
 
 .btn.small {
-  min-height: 36px;
-  padding: 0 14px;
-  font-size: var(--fs-small);
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: clamp(11px, 3vw, 12.5px);
+  border-radius: 12px;
 }
 
 .linklike {
@@ -1439,20 +1501,71 @@ h1.brand-name {
   will-change: transform;
 }
 
-.approval-head {
+.approval-card-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 12px;
+  min-width: 0;
 }
 
-.approval-chat-title {
-  font-size: 14px;
+.approval-user-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.approval-name-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.approval-user-name {
+  font-size: 15px;
   font-weight: 700;
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.approval-sub-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.approval-msg-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.approval-section-tag {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--faint);
+}
+
+.approval-incoming-bubble {
+  background: rgba(30, 41, 59, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-left: 3px solid var(--muted);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.45;
+  word-break: break-word;
+  box-shadow: var(--clay-input-shadow);
 }
 
 .approval-draft-bubble {
@@ -1644,12 +1757,10 @@ h1.brand-name {
 }
 
 .seg.active {
-  background: linear-gradient(115deg, #6366F1 0%, #818CF8 30%, #4F46E5 70%, #6366F1 100%);
-  background-size: 240% 100%;
-  animation: m3-wavy-sheen 5s ease-in-out infinite;
+  background: linear-gradient(135deg, #6366F1 0%, #4F46E5 100%);
   color: #FFFFFF;
   border-color: rgba(255, 255, 255, 0.28);
-  box-shadow: 0 4px 14px var(--accent-shadow), inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.35);
+  box-shadow: 0 4px 12px var(--accent-shadow), inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.3);
 }
 
 /* -------------------------------------------------------- Chip Grid */
@@ -2044,12 +2155,10 @@ h1.brand-name {
 }
 
 .model-chip.active {
-  background: linear-gradient(115deg, rgba(99, 102, 241, 0.35) 0%, rgba(129, 140, 248, 0.25) 50%, rgba(99, 102, 241, 0.35) 100%);
-  background-size: 200% 100%;
-  animation: m3-wavy-sheen 5s ease-in-out infinite;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.35) 0%, rgba(79, 70, 229, 0.35) 100%);
   border-color: var(--accent-bright);
   color: #FFFFFF;
-  box-shadow: 0 0 14px rgba(99, 102, 241, 0.4), inset 1px 1px 1.5px rgba(255, 255, 255, 0.2);
+  box-shadow: 0 2px 10px rgba(99, 102, 241, 0.3), inset 1px 1px 1.5px rgba(255, 255, 255, 0.2);
   font-weight: 600;
 }
 
@@ -2168,6 +2277,24 @@ h1.brand-name {
   min-width: 0;
 }
 
+.chat-avatar-wrap, .approval-avatar-wrap {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  position: relative;
+  flex-shrink: 0;
+  overflow: hidden;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4), inset 1px 1px 1px rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.chat-avatar-img, .approval-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
 .chat-avatar {
   width: 44px;
   height: 44px;
@@ -2181,6 +2308,13 @@ h1.brand-name {
   flex-shrink: 0;
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4), inset 1px 1px 1px rgba(255, 255, 255, 0.2);
   border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.chat-avatar.fallback, .chat-avatar.fallback-avatar {
+  width: 100%;
+  height: 100%;
+  box-shadow: none;
+  border: none;
 }
 
 .chat-info {
@@ -2214,6 +2348,25 @@ h1.brand-name {
   font-weight: 500;
 }
 
+.chat-user-link {
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.chat-user-link:hover {
+  background: rgba(99, 102, 241, 0.25);
+  border-color: rgba(129, 140, 248, 0.5);
+  color: #FFFFFF;
+}
+
+.chat-user-link:active {
+  transform: scale(0.95);
+}
+
 .chat-id {
   font-size: 11px;
   color: var(--faint);
@@ -2231,13 +2384,43 @@ h1.brand-name {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  padding-left: 56px;
 }
 
-@media (max-width: 600px) {
-  .chat-actions {
-    padding-left: 0;
+.chat-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  width: 100%;
+  margin-top: 6px;
+  padding-left: 0;
+}
+
+@media (max-width: 460px) {
+  .chat-actions-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
   }
+}
+
+.chat-actions-grid .btn {
+  min-height: 36px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #1E2838 0%, #161F2C 100%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3), inset 1px 1px 1px rgba(255, 255, 255, 0.15);
+}
+
+.chat-actions-grid .btn .btn-icon {
+  font-size: 13px;
+}
+
+.chat-actions-grid .action-btn-remove {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.25) 0%, rgba(185, 28, 28, 0.2) 100%);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: #FCA5A5;
 }
 
 /* ---------------------------------------------------- Loading Screen */
@@ -2306,7 +2489,7 @@ h1.brand-name {
   background: linear-gradient(90deg, #6366F1, #818CF8, #38BDF8, #6366F1);
   background-size: 200% 100%;
   border-radius: 999px;
-  animation: loading-bar-move 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite, m3-wavy-sheen 3s linear infinite;
+  animation: loading-bar-move 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
 @keyframes loading-bar-move {
