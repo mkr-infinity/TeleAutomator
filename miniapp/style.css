@@ -499,10 +499,14 @@ h1.brand-name {
 }
 
 .pay-btn {
+  position: relative;
+  overflow: hidden;
   align-self: stretch;
   height: 48px;
   border-radius: var(--radius-control);
-  background: var(--accent-gradient);
+  background: linear-gradient(115deg, #0088cc 0%, #38BDF8 28%, #6366F1 70%, #0088cc 100%);
+  background-size: 260% 100%;
+  animation: m3-wavy-sheen 6s ease-in-out infinite;
   color: #FFFFFF;
   font-weight: 600;
   font-size: 15px;
@@ -510,21 +514,25 @@ h1.brand-name {
   align-items: center;
   justify-content: center;
   box-shadow: 
-    0 6px 18px var(--accent-shadow),
-    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.35),
+    0 6px 18px rgba(0, 136, 204, 0.45),
+    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.45),
     inset -2px -2px 3px rgba(0, 0, 0, 0.35);
-  transition: transform 0.12s ease, filter 0.15s ease;
+  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), border-radius 0.22s ease, filter 0.15s ease;
 }
 
 .pay-btn:active {
-  transform: scale(0.97);
+  transform: scale(0.95);
+  border-radius: 24px 18px 24px 18px;
 }
 
 .pay-check-btn {
+  position: relative;
+  overflow: hidden;
   align-self: stretch;
   height: 48px;
   border-radius: var(--radius-control);
-  background: var(--surface-raised);
+  background: linear-gradient(115deg, #1C2230 0%, #252D3D 40%, #161B26 75%, #1C2230 100%);
+  background-size: 240% 100%;
   border: 1px solid var(--border-highlight);
   color: var(--text);
   font-weight: 600;
@@ -534,11 +542,12 @@ h1.brand-name {
   justify-content: center;
   cursor: pointer;
   box-shadow: var(--clay-btn-neutral-shadow);
-  transition: transform 0.12s ease;
+  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), border-radius 0.22s ease;
 }
 
 .pay-check-btn:active {
-  transform: scale(0.97);
+  transform: scale(0.95);
+  border-radius: 24px 18px 24px 18px;
 }
 
 /* ---------------------------------------------------- Dashboard Headers */
@@ -758,7 +767,39 @@ h1.brand-name {
   }
 }
 
-/* ------------------------------------------------ Colorful Clay Buttons */
+/* ------------------------------------------------ Expressive Wavy Motion Keyframes */
+@keyframes m3-wavy-sheen {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes m3-wavy-pulse {
+  0%, 100% {
+    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35), inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.3);
+  }
+  50% {
+    box-shadow: 0 6px 20px rgba(129, 140, 248, 0.55), inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.45);
+  }
+}
+
+@keyframes m3-wave-ripple-expand {
+  0% { transform: scale(0); opacity: 0.75; }
+  100% { transform: scale(2.8); opacity: 0; }
+}
+
+/* Fluid Wave Touch Ripple Container */
+.m3-wave-ripple {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  transform: scale(0);
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0.15) 50%, transparent 75%);
+  animation: m3-wave-ripple-expand 0.55s cubic-bezier(0.1, 0.9, 0.2, 1) forwards;
+  z-index: 3;
+}
+
+/* ------------------------------------------------ Colorful Wavy Clay Buttons */
 .section-h {
   font-size: 15px;
   font-weight: 700;
@@ -789,10 +830,13 @@ h1.brand-name {
 }
 
 .btn {
+  position: relative;
+  overflow: hidden;
   min-height: var(--control-height);
   padding: 0 18px;
   border-radius: var(--radius-control);
-  background: linear-gradient(135deg, #242B3A 0%, #1A202D 100%);
+  background: linear-gradient(115deg, #242B3A 0%, #2D374D 40%, #1A202D 75%, #242B3A 100%);
+  background-size: 240% 100%;
   color: var(--text);
   font-size: var(--fs-body);
   font-weight: 600;
@@ -804,25 +848,32 @@ h1.brand-name {
   border: 1px solid var(--border-highlight);
   box-shadow: var(--clay-btn-neutral-shadow);
   cursor: pointer;
-  transition: transform 0.12s ease, filter 0.15s ease, box-shadow 0.12s ease;
+  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), border-radius 0.22s ease, filter 0.15s ease, box-shadow 0.2s ease;
   user-select: none;
 }
 
+.btn:hover {
+  background-position: 100% 50%;
+}
+
 .btn:active {
-  transform: scale(0.96);
+  transform: scale(0.95);
+  border-radius: 24px 18px 24px 18px; /* Android Expressive squircle morph */
   box-shadow: 
     0 2px 6px rgba(0, 0, 0, 0.45),
     inset 2px 2px 4px rgba(0, 0, 0, 0.55);
 }
 
-/* Primary: Vibrant Indigo Clay */
+/* Primary: Vibrant Indigo Clay with Wavy Animated Sheen */
 .btn.primary {
-  background: var(--accent-gradient);
+  background: linear-gradient(115deg, #6366F1 0%, #818CF8 28%, #4F46E5 70%, #6366F1 100%);
+  background-size: 260% 100%;
+  animation: m3-wavy-sheen 6s ease-in-out infinite;
   color: #FFFFFF;
-  border-color: rgba(255, 255, 255, 0.25);
+  border-color: rgba(255, 255, 255, 0.28);
   box-shadow: 
     0 6px 18px var(--accent-shadow),
-    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.4),
+    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.45),
     inset -2px -2px 3px rgba(0, 0, 0, 0.35);
 }
 
@@ -830,48 +881,81 @@ h1.brand-name {
   filter: brightness(1.08);
 }
 
-/* Stop/Danger: Radiant Coral Clay */
+.btn.primary:active {
+  transform: scale(0.95);
+  border-radius: 24px 18px 24px 18px;
+}
+
+/* Stop/Danger: Radiant Coral Clay with Flame Wave */
 .btn.danger, #act-stop {
-  background: var(--negative-gradient);
+  background: linear-gradient(115deg, #EF4444 0%, #F87171 28%, #DC2626 70%, #EF4444 100%);
+  background-size: 260% 100%;
+  animation: m3-wavy-sheen 6s ease-in-out infinite;
   color: #FFFFFF;
-  border-color: rgba(255, 255, 255, 0.25);
+  border-color: rgba(255, 255, 255, 0.28);
   box-shadow: 
     0 6px 18px var(--negative-shadow),
-    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.4),
+    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.45),
     inset -2px -2px 3px rgba(0, 0, 0, 0.35);
 }
 
-/* Pause: Warm Amber Clay */
+.btn.danger:active, #act-stop:active {
+  transform: scale(0.95);
+  border-radius: 24px 18px 24px 18px;
+}
+
+/* Pause: Warm Amber Clay with Golden Wave */
 #act-pause {
-  background: var(--warning-gradient);
+  background: linear-gradient(115deg, #F59E0B 0%, #FBBF24 28%, #D97706 70%, #F59E0B 100%);
+  background-size: 260% 100%;
+  animation: m3-wavy-sheen 6s ease-in-out infinite;
   color: #FFFFFF;
-  border-color: rgba(255, 255, 255, 0.25);
+  border-color: rgba(255, 255, 255, 0.28);
   box-shadow: 
     0 6px 18px var(--warning-shadow),
-    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.4),
+    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.45),
     inset -2px -2px 3px rgba(0, 0, 0, 0.35);
 }
 
-/* Resume: Mint Emerald Clay */
+#act-pause:active {
+  transform: scale(0.95);
+  border-radius: 24px 18px 24px 18px;
+}
+
+/* Resume: Mint Emerald Clay with Radiant Wave */
 #act-resume {
-  background: var(--positive-gradient);
+  background: linear-gradient(115deg, #10B981 0%, #34D399 28%, #059669 70%, #10B981 100%);
+  background-size: 260% 100%;
+  animation: m3-wavy-sheen 6s ease-in-out infinite;
   color: #FFFFFF;
-  border-color: rgba(255, 255, 255, 0.25);
+  border-color: rgba(255, 255, 255, 0.28);
   box-shadow: 
     0 6px 18px var(--positive-shadow),
-    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.4),
+    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.45),
     inset -2px -2px 3px rgba(0, 0, 0, 0.35);
 }
 
-/* Mode: Cool Sky/Cyan Clay Pill */
+#act-resume:active {
+  transform: scale(0.95);
+  border-radius: 24px 18px 24px 18px;
+}
+
+/* Mode: Cool Sky/Cyan Clay with Oceanic Wave */
 #act-mode {
-  background: linear-gradient(135deg, #1C2638 0%, #111A28 100%);
+  background: linear-gradient(115deg, #1C2638 0%, #25364F 35%, #111A28 70%, #1C2638 100%);
+  background-size: 260% 100%;
+  animation: m3-wavy-sheen 7s ease-in-out infinite;
   color: var(--cyan-bright);
-  border-color: rgba(56, 189, 248, 0.3);
+  border-color: rgba(56, 189, 248, 0.35);
   box-shadow: 
-    0 6px 16px rgba(6, 182, 212, 0.25),
-    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.2),
+    0 6px 16px rgba(6, 182, 212, 0.28),
+    inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.25),
     inset -2px -2px 3px rgba(0, 0, 0, 0.45);
+}
+
+#act-mode:active {
+  transform: scale(0.95);
+  border-radius: 24px 18px 24px 18px;
 }
 
 .btn.small {
@@ -885,6 +969,7 @@ h1.brand-name {
   font-size: var(--fs-small);
   font-weight: 600;
   padding: 4px 8px;
+  cursor: pointer;
 }
 
 .field-hint {
@@ -1040,44 +1125,71 @@ h1.brand-name {
 }
 
 .seg {
-  height: 36px;
-  padding: 0 16px;
+  position: relative;
+  overflow: hidden;
+  height: 38px;
+  padding: 0 18px;
   border-radius: var(--radius-control);
   background: var(--surface-raised);
   color: var(--muted);
   font-size: var(--fs-small);
   font-weight: 600;
   border: 1px solid var(--border);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
-  transition: all 0.15s ease;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25), inset 1px 1px 1px rgba(255, 255, 255, 0.08);
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), all 0.2s ease;
+  cursor: pointer;
+  user-select: none;
+}
+
+.seg:active {
+  transform: scale(0.94);
+  border-radius: 20px 14px 20px 14px;
 }
 
 .seg.active {
-  background: var(--accent-gradient);
+  background: linear-gradient(115deg, #6366F1 0%, #818CF8 30%, #4F46E5 70%, #6366F1 100%);
+  background-size: 240% 100%;
+  animation: m3-wavy-sheen 5s ease-in-out infinite;
   color: #FFFFFF;
-  border-color: rgba(255, 255, 255, 0.2);
-  box-shadow: 0 4px 12px var(--accent-shadow);
+  border-color: rgba(255, 255, 255, 0.28);
+  box-shadow: 0 4px 14px var(--accent-shadow), inset 1.5px 1.5px 2px rgba(255, 255, 255, 0.35);
 }
 
 /* -------------------------------------------------------- Chip Grid */
 .chipgrid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 8px;
+  gap: 10px;
 }
 
 .chip {
-  background: var(--surface-raised);
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-card);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 10px 12px;
+  border-radius: 14px;
+  padding: 12px 14px;
   text-align: left;
   font-size: 13px;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--clay-card-shadow);
+  cursor: pointer;
+  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.chip:hover {
+  border-color: var(--accent);
+  color: var(--text);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45), 0 0 14px rgba(99, 102, 241, 0.3);
+}
+
+.chip:active {
+  transform: scale(0.96);
+  border-radius: 18px 12px 18px 12px;
 }
 
 .chip strong {
@@ -1318,14 +1430,16 @@ h1.brand-name {
 }
 
 .model-chip {
-  padding: 6px 14px;
+  position: relative;
+  overflow: hidden;
+  padding: 7px 15px;
   border-radius: var(--radius-control);
   background: var(--surface-raised);
   color: var(--muted);
   font-size: 12px;
   font-weight: 500;
   border: 1px solid var(--border);
-  transition: all 0.15s ease;
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), all 0.15s ease;
   user-select: none;
   cursor: pointer;
   max-width: 100%;
@@ -1338,13 +1452,21 @@ h1.brand-name {
 .model-chip:hover {
   border-color: var(--accent);
   color: var(--text);
+  transform: translateY(-1px);
+}
+
+.model-chip:active {
+  transform: scale(0.95);
+  border-radius: 18px 12px 18px 12px;
 }
 
 .model-chip.active {
-  background: rgba(99, 102, 241, 0.25);
+  background: linear-gradient(115deg, rgba(99, 102, 241, 0.35) 0%, rgba(129, 140, 248, 0.25) 50%, rgba(99, 102, 241, 0.35) 100%);
+  background-size: 200% 100%;
+  animation: m3-wavy-sheen 5s ease-in-out infinite;
   border-color: var(--accent-bright);
   color: #FFFFFF;
-  box-shadow: 0 0 12px rgba(99, 102, 241, 0.35);
+  box-shadow: 0 0 14px rgba(99, 102, 241, 0.4), inset 1px 1px 1.5px rgba(255, 255, 255, 0.2);
   font-weight: 600;
 }
 
@@ -1583,13 +1705,13 @@ h1.brand-name {
 }
 
 .loading-bar {
-  width: 180px;
-  height: 5px;
-  background: var(--surface-raised);
+  width: 200px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
   border-radius: 999px;
   overflow: hidden;
   position: relative;
-  box-shadow: inset 1px 1px 2px rgba(0, 0, 0, 0.4);
+  box-shadow: inset 1px 1px 2px rgba(0, 0, 0, 0.5);
 }
 
 .loading-bar-fill {
@@ -1597,19 +1719,28 @@ h1.brand-name {
   top: 0;
   bottom: 0;
   left: 0;
-  width: 40%;
-  background: var(--accent-gradient);
+  width: 45%;
+  background: linear-gradient(90deg, #6366F1, #818CF8, #38BDF8, #6366F1);
+  background-size: 200% 100%;
   border-radius: 999px;
-  animation: loading-bar-move 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  animation: loading-bar-move 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite, m3-wavy-sheen 3s linear infinite;
 }
 
 @keyframes loading-bar-move {
-  0% { left: -40%; width: 30%; }
-  50% { width: 60%; }
-  100% { left: 100%; width: 30%; }
+  0% { left: -45%; width: 35%; }
+  50% { width: 65%; }
+  100% { left: 100%; width: 35%; }
 }
 
 .loading-sub {
   font-size: 13px;
   color: var(--muted);
+}
+
+/* ------------------------------------------------ Accessibility */
+@media (prefers-reduced-motion: reduce) {
+  .btn, .pay-btn, .pay-check-btn, .seg, .chip, .model-chip, .loading-bar-fill, .m3-indicator, .loading-logo {
+    animation: none !important;
+    transition: none !important;
+  }
 }

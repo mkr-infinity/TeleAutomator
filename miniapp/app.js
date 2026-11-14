@@ -524,7 +524,9 @@
     $("cmd-chips").querySelectorAll(".chip").forEach((chip) =>
       chip.addEventListener("click", () => {
         const cmd = chip.dataset.cmd;
-        openSheet(`/${cmd}`, `<input id="sheet-input" placeholder="Arguments (leave empty to run bare)">`,
+        const target = src.find((x) => x.command === cmd);
+        const desc = target ? plain(target.description) : "";
+        openSheet(`/${cmd}`, `${desc ? `<p class="field-hint" style="margin-top:0;margin-bottom:10px">${esc(desc)}</p>` : ""}<input id="sheet-input" placeholder="Arguments (leave empty to run bare)">`,
           [{ label: "Run", kind: "primary", onClick: () => runCmd(`/${cmd} ${$("sheet-input").value.trim()}`.trim()), keepOpen: false }, { label: "Cancel" }]);
       }));
   }
@@ -644,6 +646,24 @@
 
     const toastEl = $("toast");
     if (toastEl) toastEl.addEventListener("click", () => toastEl.classList.add("hidden"));
+
+    // Android Material 3 Expressive Fluid Wave Touch Ripple
+    document.addEventListener("pointerdown", (e) => {
+      const target = e.target.closest(".btn, .pay-btn, .pay-check-btn, .chip, .seg, .model-chip, .m3-nav-item, .sheet-close-btn");
+      if (!target) return;
+      const rect = target.getBoundingClientRect();
+      const size = Math.max(rect.width, rect.height) * 2;
+      const x = e.clientX - rect.left - size / 2;
+      const y = e.clientY - rect.top - size / 2;
+      const ripple = document.createElement("span");
+      ripple.className = "m3-wave-ripple";
+      ripple.style.width = `${size}px`;
+      ripple.style.height = `${size}px`;
+      ripple.style.left = `${x}px`;
+      ripple.style.top = `${y}px`;
+      target.appendChild(ripple);
+      setTimeout(() => ripple.remove(), 580);
+    }, { passive: true });
 
     // Swipe down on bottom sheet to dismiss
     const sheetEl = $("sheet");
