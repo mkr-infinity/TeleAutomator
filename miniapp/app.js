@@ -67,8 +67,8 @@
       { chat: "Mom", chat_id: 876543210, sender: "TeleAutomator", text: "📷 [photo] Lunch pic sent, looks great!", ts: "2026-11-13 11:04", is_media: true },
     ],
     access: [
-      { id: 555000111, name: "Kaif", username: "@mkr_infinity", main: true, perms: "all" },
-      { id: 777000222, name: "Manager", username: "@manager_h", main: false, perms: "all" },
+      { id: 555000111, name: "Kaif", username: "@mkr_infinity", avatar_url: "https://t.me/i/userpic/320/mkr_infinity.jpg", main: true, perms: "all" },
+      { id: 777000222, name: "Manager", username: "@manager_h", avatar_url: "https://t.me/i/userpic/320/manager_h.jpg", main: false, perms: "all" },
     ],
     commands: [
       { command: "status", description: "Live status: mode, AI engine, chat rules" },
@@ -1054,14 +1054,22 @@
     $("access-list").innerHTML = (data.users || []).length
       ? data.users.map((u) => {
           const initials = (u.name || "U").slice(0, 2).toUpperCase();
+          const cleanUser = u.username ? u.username.replace(/^@/, "").trim() : "";
+          const userLink = cleanUser
+            ? `<a href="https://t.me/${encodeURIComponent(cleanUser)}" target="_blank" rel="noopener noreferrer" class="pill pill-neutral chat-user-link" title="Open in Telegram">@${esc(cleanUser)} ↗</a>`
+            : "";
           return `<div class="user-capsule">
-            <div class="user-avatar-circle">${esc(initials)}</div>
+            <div class="user-avatar-wrap">
+              ${u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="${esc(u.name)}" class="user-avatar-img" loading="lazy" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />` : ""}
+              <div class="user-avatar-circle" style="${u.avatar_url ? 'display:none;' : ''}">${esc(initials)}</div>
+            </div>
             <div class="capsule-main">
               <div class="capsule-head">
                 <span class="capsule-title">${esc(u.name)}</span>
+                ${userLink}
                 ${u.main ? '<span class="pill pill-positive">Owner</span>' : '<span class="pill pill-neutral">Authorized</span>'}
               </div>
-              <p class="capsule-sub num">${esc(String(u.id))}${u.username ? " · @" + esc(u.username) : ""}</p>
+              <p class="capsule-sub num">ID: ${esc(String(u.id))}</p>
             </div>
             <div class="capsule-side">
               ${u.main ? "" : `<button class="btn small danger" data-unauth="${u.id}">Remove</button>`}
@@ -1433,6 +1441,17 @@
       if (!target) return;
       haptic("light");
     }, { passive: true });
+
+    // Native Telegram link navigation bridge
+    document.addEventListener("click", (e) => {
+      const link = e.target.closest(".chat-user-link");
+      if (!link) return;
+      const href = link.getAttribute("href");
+      if (href && href.startsWith("https://t.me/") && window.Telegram && window.Telegram.WebApp && typeof window.Telegram.WebApp.openTelegramLink === "function") {
+        e.preventDefault();
+        window.Telegram.WebApp.openTelegramLink(href);
+      }
+    });
 
     // Swipe down on bottom sheet to dismiss
     const sheetEl = $("sheet");

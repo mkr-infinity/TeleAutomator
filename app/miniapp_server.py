@@ -376,10 +376,14 @@ class MiniAppAPI:
         users = []
         for uid in ids:
             meta = self.ctx.db.get_chat_metadata(uid) or {}
+            username = meta.get("username") or ""
+            clean_user = username.lstrip("@").strip()
+            avatar_url = f"https://t.me/i/userpic/320/{clean_user}.jpg" if clean_user else ""
             users.append({
                 "id": uid,
                 "name": meta.get("title") or f"User {uid}",
-                "username": meta.get("username") or "",
+                "username": username,
+                "avatar_url": avatar_url,
                 "main": uid == main_id,
                 "perms": self.ctx.db.get_state(f"bot_granted_cmds_{uid}", "all"),
             })
