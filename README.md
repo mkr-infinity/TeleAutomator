@@ -5,8 +5,12 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MTProto Telethon](https://img.shields.io/badge/protocol-MTProto%20Telethon-informational.svg)](https://github.com/LonamiWebs/Telethon)
 [![AI Supported](https://img.shields.io/badge/AI-Gemini%20%7C%20OpenAI%20%7C%20Custom-orange.svg)](DEPLOYMENT.md)
+[![Setup Requirements](https://img.shields.io/badge/Setup-Requirements%20Guide-blueviolet.svg)](REQUIREMENTS.md)
 [![License](https://img.shields.io/badge/license-Source--Available-red.svg)](LICENSE)
 [![Tests Passing](https://img.shields.io/badge/tests-191%2F191%20passed-brightgreen.svg)](test.sh)
+
+> 🔑 **First Time Setup & Requirements Guide**  
+> Wondering which API keys, Telegram IDs, and environment settings are required? Read **[REQUIREMENTS.md](REQUIREMENTS.md)** for a beginner-friendly walkthrough on where to get your `TG_API_ID`, `TG_API_HASH`, bot token, and free AI key.
 
 > 🚀 **Deploying to Railway, Render, or Cloud VPS 24/7?**  
 > For complete step-by-step cloud deployment walkthroughs, automated build guides, and environment variable configurations, see **[DEPLOYMENT.md](DEPLOYMENT.md)**.
@@ -15,11 +19,13 @@
 
 ## ⚡ Quickstart (Local)
 
+> 📖 Before starting, configure your credentials in `.env`. See **[REQUIREMENTS.md](REQUIREMENTS.md)** for where to find each value.
+
 ```bash
 # 1. Clone repository
 git clone https://github.com/mkr-infinity/TeleAutomator.git && cd TeleAutomator
 
-# 2. Universal automated setup
+# 2. Universal automated setup (installs dependencies and creates .env)
 ./setup.sh
 
 # 3. Authenticate with your Telegram account (Phone, OTP, 2FA)
