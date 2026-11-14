@@ -57,6 +57,18 @@ PAYWALL = {
 }
 
 
+def _format_ampm(time_str: str) -> str:
+    try:
+        parts = time_str.strip().split(":")
+        h = int(parts[0])
+        m = parts[1] if len(parts) > 1 else "00"
+        ampm = "PM" if h >= 12 else "AM"
+        h12 = h % 12 or 12
+        return f"{h12:02d}:{m} {ampm}"
+    except Exception:
+        return time_str
+
+
 def validate_init_data(init_data: str, bot_token: str) -> Optional[dict]:
     """Validate Telegram Mini App initData. Returns the user dict, or None when invalid."""
     if not init_data or not bot_token:
@@ -221,7 +233,7 @@ class MiniAppAPI:
             "quiet_hours": in_quiet,
             "quiet_hours_start": qh_start,
             "quiet_hours_end": qh_end,
-            "quiet_hours_schedule": f"{qh_start} – {qh_end} IST",
+            "quiet_hours_schedule": f"{_format_ampm(qh_start)} – {_format_ampm(qh_end)} IST",
             "safe_mode": safe_mode,
             "chatty_global": chatty_global,
             "style": ctx.generator.style,

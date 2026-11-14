@@ -170,6 +170,60 @@
     return `${f}%`;
   }
 
+  // ------------------------------------------------------------ IST & AM/PM Dates
+  function formatIST(raw, showDate = true) {
+    if (!raw) return "—";
+    let str = String(raw).trim();
+    if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(str) && !str.endsWith("Z") && !str.includes("+")) {
+      str = str.replace(" ", "T") + "Z";
+    }
+    const date = new Date(str);
+    if (isNaN(date.getTime())) return String(raw);
+    try {
+      const formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Kolkata",
+        month: showDate ? "short" : undefined,
+        day: showDate ? "numeric" : undefined,
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      });
+      return `${formatter.format(date)} IST`;
+    } catch (_) {
+      const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
+      const ist = new Date(utc + (3600000 * 5.5));
+      let hours = ist.getHours();
+      const minutes = String(ist.getMinutes()).padStart(2, "0");
+      const ampm = hours >= 12 ? "PM" : "AM";
+      hours = hours % 12 || 12;
+      const timeStr = `${hours}:${minutes} ${ampm} IST`;
+      if (!showDate) return timeStr;
+      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      return `${months[ist.getMonth()]} ${ist.getDate()}, ${timeStr}`;
+    }
+  }
+
+  function formatTime12h(timeStr) {
+    if (!timeStr) return "";
+    const match = String(timeStr).trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!match) return timeStr;
+    let h = parseInt(match[1], 10);
+    const m = match[2];
+    const ampm = h >= 12 ? "PM" : "AM";
+    h = h % 12 || 12;
+    return `${String(h).padStart(2, "0")}:${m} ${ampm}`;
+  }
+
+  function formatQuietSchedule(raw) {
+    if (!raw) return "02:00 AM – 08:00 AM IST";
+    const cleaned = String(raw).replace(/\s*IST\s*$/i, "").trim();
+    const parts = cleaned.split(/\s*[-–—]\s*/);
+    if (parts.length === 2) {
+      return `${formatTime12h(parts[0])} – ${formatTime12h(parts[1])} IST`;
+    }
+    return raw;
+  }
+
   // ------------------------------------------------------------ chrome ui
 
   let toastTimer = null;
@@ -391,7 +445,7 @@
       if ($("ov-persona-val")) {
         $("ov-persona-val").textContent = (s.style || "casual").charAt(0).toUpperCase() + (s.style || "casual").slice(1);
       }
-      $("ov-qh-sched").textContent = s.quiet_hours_schedule || "02:00 – 08:00 IST";
+      $("ov-qh-sched").textContent = formatQuietSchedule(s.quiet_hours_schedule);
       $("ov-req-count").textContent = (s.token_requests || 0).toLocaleString();
     }
 
@@ -401,7 +455,7 @@
 
   function feedRowHtml(a) {
     return `<div class="feed-row">
-      <div class="feed-top"><span class="feed-chat">${esc(a.chat)}</span><span class="feed-ts num">${esc(String(a.ts || "").slice(5, 16))}</span></div>
+      <div class="feed-top"><span class="feed-chat">${esc(a.chat)}</span><span class="feed-ts num">${esc(formatIST(a.ts))}</span></div>
       <span class="feed-text">${esc(a.text)}</span>
     </div>`;
   }
@@ -656,7 +710,7 @@
       <div class="approval-card-content">
         <div class="approval-head">
           <span class="pill pill-warning">Draft #${p.id}</span>
-          <span class="feed-ts num">${esc(String(p.created || "").slice(0, 16))}</span>
+          <span class="feed-ts num">${esc(formatIST(p.created))}</span>
         </div>
         <p class="approval-chat-title">${esc(p.chat_title || String(p.chat_id))}</p>
         <div class="approval-draft-bubble">${esc(p.text)}</div>

@@ -7,53 +7,55 @@
 */
 
 :root {
-  /* Telegram Theme Variable Integration with Charcoal Clay Fallbacks */
-  --ground: var(--tg-theme-bg-color, #0B0E14);
-  --surface: var(--tg-theme-secondary-bg-color, #141722);
-  --surface-raised: #1C2230;
-  --surface-card: #161A26;
-  --surface-inset: #0E1119;
+  /* Refined Midnight Obsidian & Jewel-Tone Palette */
+  --ground: var(--tg-theme-bg-color, #0A0D15);
+  --surface: var(--tg-theme-secondary-bg-color, #121624);
+  --surface-raised: #1A2033;
+  --surface-card: #151A2B;
+  --surface-inset: #0C0F1A;
 
   --border: rgba(255, 255, 255, 0.08);
   --border-subtle: rgba(255, 255, 255, 0.05);
-  --border-highlight: rgba(255, 255, 255, 0.16);
-  --rule: rgba(255, 255, 255, 0.06);
-  --control: #232B3B;
+  --border-highlight: rgba(255, 255, 255, 0.18);
+  --rule: rgba(255, 255, 255, 0.07);
+  --control: #20273D;
 
   /* Typography Colors */
-  --text: var(--tg-theme-text-color, #F8FAFC);
-  --muted: #94A3B8;
-  --faint: var(--tg-theme-hint-color, #64748B);
+  --text: var(--tg-theme-text-color, #FFFFFF);
+  --muted: #A0ABBA;
+  --faint: var(--tg-theme-hint-color, #6B7A90);
 
-  /* Colorful Accent Gradients & Hues */
+  /* Colorful Jewel Accent Gradients & Hues */
   --accent: #6366F1;
   --accent-bright: #818CF8;
-  --accent-gradient: linear-gradient(135deg, #6366F1 0%, #4F46E5 100%);
-  --accent-shadow: rgba(99, 102, 241, 0.4);
+  --accent-gradient: linear-gradient(135deg, #6366F1 0%, #8B5CF6 50%, #4F46E5 100%);
+  --accent-shadow: rgba(99, 102, 241, 0.45);
 
   --positive: #10B981;
   --positive-bright: #34D399;
   --positive-gradient: linear-gradient(135deg, #10B981 0%, #059669 100%);
-  --positive-shadow: rgba(16, 185, 129, 0.35);
+  --positive-shadow: rgba(16, 185, 129, 0.4);
 
-  --negative: #EF4444;
-  --negative-bright: #F87171;
-  --negative-gradient: linear-gradient(135deg, #EF4444 0%, #DC2626 100%);
-  --negative-shadow: rgba(239, 68, 68, 0.35);
+  --negative: #F43F5E;
+  --negative-bright: #FB7185;
+  --negative-gradient: linear-gradient(135deg, #F43F5E 0%, #E11D48 100%);
+  --negative-shadow: rgba(244, 63, 94, 0.4);
 
   --warning: #F59E0B;
   --warning-bright: #FBBF24;
   --warning-gradient: linear-gradient(135deg, #F59E0B 0%, #D97706 100%);
-  --warning-shadow: rgba(245, 158, 11, 0.35);
+  --warning-shadow: rgba(245, 158, 11, 0.4);
 
   --cyan: #06B6D4;
   --cyan-bright: #38BDF8;
+  --cyan-gradient: linear-gradient(135deg, #06B6D4 0%, #0284C7 100%);
+  --cyan-shadow: rgba(6, 182, 212, 0.4);
 
   /* Status Pills */
-  --pill-positive-bg: rgba(16, 185, 129, 0.14); --pill-positive-ink: #34D399;
-  --pill-negative-bg: rgba(239, 68, 68, 0.14); --pill-negative-ink: #F87171;
-  --pill-warning-bg:  rgba(245, 158, 11, 0.14); --pill-warning-ink:  #FBBF24;
-  --pill-neutral-bg:  rgba(148, 163, 184, 0.12); --pill-neutral-ink:  #E2E8F0;
+  --pill-positive-bg: rgba(16, 185, 129, 0.16); --pill-positive-ink: #34D399;
+  --pill-negative-bg: rgba(244, 63, 94, 0.16);  --pill-negative-ink: #FB7185;
+  --pill-warning-bg:  rgba(245, 158, 11, 0.16);  --pill-warning-ink:  #FBBF24;
+  --pill-neutral-bg:  rgba(148, 163, 184, 0.14); --pill-neutral-ink:  #E2E8F0;
 
   /* Claymorphic 3D Surfaces (Dual Inner Highlights + Outer Depth) */
   --clay-card-shadow:
