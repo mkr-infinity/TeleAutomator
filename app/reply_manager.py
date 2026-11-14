@@ -62,6 +62,8 @@ class ReplyManager(CommandRouterMixin):
         self._debounce_tasks: dict[int, asyncio.Task] = {}
         self._debounce_last_time: dict[int, float] = {}
         self._debounce_first_time: dict[int, float] = {}
+        self._chat_send_locks: dict[int, asyncio.Lock] = {}
+        self._pending_deferred_replies: dict[int, asyncio.Task] = {}
         self._next_reaction_cooldown: float = random.uniform(
             float(self.db.get_state("reaction_min_cooldown_seconds", str(getattr(config, "reaction_min_cooldown_seconds", 15.0)))),
             float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(config, "reaction_max_cooldown_seconds", 60.0)))),
@@ -106,6 +108,12 @@ class ReplyManager(CommandRouterMixin):
     def set_telegram_client(self, client: Any) -> None:
         """Attach the active Telethon client."""
         self._client = client
+
+    def _get_chat_send_lock(self, chat_id: int) -> asyncio.Lock:
+        """Return a per-chat send lock ensuring sequential, non-overlapping message delivery."""
+        if chat_id not in self._chat_send_locks:
+            self._chat_send_locks[chat_id] = asyncio.Lock()
+        return self._chat_send_locks[chat_id]
 
     async def sync_owner_name_from_telegram(self) -> str:
         """Fetch current name from Telegram account and update owner persona name.
@@ -563,13 +571,27 @@ class ReplyManager(CommandRouterMixin):
                     # Schedule deferred reply after cooldown/rate-limit so reply is strictly sent after cooldown period
                     m = re.search(r"\((\d+)s remaining\)", reason)
                     wait_secs = float(m.group(1)) if m else 5.0
+                    chat_min, _ = self.safety._get_chat_cooldown_range(chat_id)
+                    if chat_min > 0:
+                        wait_secs = max(wait_secs, chat_min)
+
+                    # Cancel any existing pending deferred reply for this chat to avoid double-sends
+                    old_task = self._pending_deferred_replies.get(chat_id)
+                    if old_task and not old_task.done():
+                        old_task.cancel()
+                        logger.info(
+                            f"[DEFERRED SUPERSEDED] Cancelled previous pending reply for chat {chat_id} "
+                            f"because a newer message arrived."
+                        )
+
                     logger.info(
-                        f"[REPLY QUEUED] Cooldown/rate-limit active for chat {chat_id} ({wait_secs}s). "
+                        f"[REPLY QUEUED] Cooldown/rate-limit active for chat {chat_id} ({wait_secs:.1f}s). "
                         f"Scheduling deferred reply so the message is sent after the min cooldown period."
                     )
-                    asyncio.create_task(
+                    task = asyncio.create_task(
                         self._schedule_deferred_reply(chat_id, message_id, draft, wait_secs, is_mention=is_mention)
                     )
+                    self._pending_deferred_replies[chat_id] = task
                     return
                 await self._notify_issue_to_saved_messages(
                     chat_id=chat_id,
@@ -579,6 +601,12 @@ class ReplyManager(CommandRouterMixin):
                     incoming_text=clean_text,
                 )
                 return
+
+            # Cancel any pending deferred reply task for this chat before sending directly
+            old_task = self._pending_deferred_replies.get(chat_id)
+            if old_task and not old_task.done():
+                old_task.cancel()
+                self._pending_deferred_replies.pop(chat_id, None)
 
             sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True, is_mention=is_mention)
             if sent:
@@ -698,7 +726,9 @@ class ReplyManager(CommandRouterMixin):
     ) -> None:
         """Queue and send a deferred reply after cooldown expires so no reply is sent prematurely or dropped."""
         try:
-            await asyncio.sleep(max(1.0, wait_seconds + 0.5))
+            chat_min, _ = self.safety._get_chat_cooldown_range(chat_id)
+            effective_wait = max(wait_seconds, chat_min if chat_min > 0 else 0.0)
+            await asyncio.sleep(max(1.0, effective_wait))
             if self.safety.is_emergency_stopped or self.safety.get_remaining_pause_seconds() > 0:
                 logger.warning(f"Deferred reply to chat {chat_id} aborted: emergency stop or pause active.")
                 return
@@ -723,8 +753,13 @@ class ReplyManager(CommandRouterMixin):
             if sent:
                 asyncio.create_task(self.refresh_single_chat_summary(chat_id))
             logger.info(f"[DEFERRED REPLY SENT] Successfully replied to chat {chat_id} after cooldown.")
+        except asyncio.CancelledError:
+            logger.debug(f"[DEFERRED REPLY CANCELLED] Deferred reply task for chat {chat_id} was cancelled.")
         except Exception as e:
             logger.error(f"Error in deferred reply: {e}")
+        finally:
+            if self._pending_deferred_replies.get(chat_id) is asyncio.current_task():
+                self._pending_deferred_replies.pop(chat_id, None)
 
     async def _schedule_spontaneous_followup(
         self,
@@ -1561,349 +1596,365 @@ class ReplyManager(CommandRouterMixin):
             logger.error("Cannot send reply: Telegram client is not attached.")
             return False
 
-        # Human burst guard: never machine-gun >3 reply sequences into one chat within 10s.
-        # Counts one sequence per _send_reply call (multi-bubble parts stay inside the same moment).
-        burst_wait = self.safety.burst_wait_needed(chat_id)
-        if burst_wait > 0:
-            logger.info(f"[BURST GUARD] Pausing {burst_wait:.1f}s before next reply in chat {chat_id} (human burst cap {self.safety.burst_max_sends}/{self.safety.burst_window_seconds:.0f}s).")
-            await asyncio.sleep(burst_wait)
+        async with self._get_chat_send_lock(chat_id):
+            # Cancel any pending deferred reply task for this chat to avoid double-sends
+            curr_task = asyncio.current_task()
+            old_task = self._pending_deferred_replies.get(chat_id)
+            if old_task and old_task is not curr_task and not old_task.done():
+                old_task.cancel()
+                self._pending_deferred_replies.pop(chat_id, None)
 
-        multibubble_enabled = self.db.get_state("multibubble_enabled", "1") == "1"
-        msg_parts = self.split_reply_messages(text, enabled=multibubble_enabled)
-        if not msg_parts:
-            return False
+            # Human burst guard: never machine-gun >3 reply sequences into one chat within 10s.
+            # Counts one sequence per _send_reply call (multi-bubble parts stay inside the same moment).
+            burst_wait = self.safety.burst_wait_needed(chat_id)
+            if burst_wait > 0:
+                logger.info(f"[BURST GUARD] Pausing {burst_wait:.1f}s before next reply in chat {chat_id} (human burst cap {self.safety.burst_max_sends}/{self.safety.burst_window_seconds:.0f}s).")
+                await asyncio.sleep(burst_wait)
 
-        first_part = msg_parts[0]
-        edit_fix_original: Optional[str] = None
-        typo_enabled = (
-            self.db.get_state("typo_correction_enabled", "1") == "1"
-            or self.db.get_state("editfix_enabled", "1") == "1"
-        )
-        if typo_enabled and len(msg_parts) == 1 and not is_mention:
-            # Human mobile texting simulation: occasionally sends a natural typo,
-            # then edits the same message clean 1.5–3s later (never sends *correction as a separate message).
-            typo_variant, _ = self.maybe_inject_typo_correction(first_part, probability=0.05)
-            if typo_variant != first_part:
-                edit_fix_original = first_part
-                first_part = typo_variant
+            # Anti-Flooding: In group chats (chat_id < 0), NEVER send multiple message bubbles simultaneously.
+            # Multi-bubble splitting is strictly restricted to private 1-on-1 DMs (chat_id > 0).
+            multibubble_enabled = (self.db.get_state("multibubble_enabled", "1") == "1") and (chat_id > 0)
+            msg_parts = self.split_reply_messages(text, enabled=multibubble_enabled)
+            if not msg_parts:
+                return False
 
-        try:
-            chat_min, _ = self.safety._get_chat_cooldown_range(chat_id)
-            # Calculate human-like delay adapting to group/DM environment and mentions (5-30s)
-            if adaptive_delay and (self.min_delay > 0 or self.max_delay > 0 or chat_min > 0):
-                total_delay = self.calculate_adaptive_delay(chat_id, first_part, is_mention=is_mention)
-            else:
-                total_delay = self.typing_delay
+            first_part = msg_parts[0]
+            edit_fix_original: Optional[str] = None
+            typo_enabled = (
+                self.db.get_state("typo_correction_enabled", "1") == "1"
+                or self.db.get_state("editfix_enabled", "1") == "1"
+            )
+            if typo_enabled and len(msg_parts) == 1 and not is_mention:
+                # Human mobile texting simulation: occasionally sends a natural typo,
+                # then edits the same message clean 1.5–3s later (never sends *correction as a separate message).
+                typo_variant, _ = self.maybe_inject_typo_correction(first_part, probability=0.05)
+                if typo_variant != first_part:
+                    edit_fix_original = first_part
+                    first_part = typo_variant
 
-            if adaptive_delay and (self.typing_delay > 0 or self.min_delay > 0 or self.max_delay > 0 or chat_min > 0):
-                if chat_min <= 0.0 and self.min_delay <= 0.0:
-                    total_delay = 0.0
-                elif chat_min > 0.0:
-                    total_delay = max(total_delay, chat_min)
-                else:
-                    # Human floor: never reply instantly — always at least a ~3-4.5s random thinking pause
-                    total_delay = max(total_delay, random.uniform(3.0, 4.5))
+            try:
+                chat_min, _ = self.safety._get_chat_cooldown_range(chat_id)
 
-            if total_delay > 0:
-                # Realistic human simulation: pause for reading/thinking, then show typing action
-                # Dynamic typing delay scaling based on 1 to 5 word responses
-                word_count = len(first_part.split())
-                if word_count <= 2:
-                    target_typing = random.uniform(1.2, 2.2)
-                elif word_count <= 5:
-                    target_typing = random.uniform(2.2, 3.8)
-                else:
-                    target_typing = random.uniform(3.8, 5.5)
+                # Strict per-chat minimum cooldown check
+                now_check = time.time()
+                last_reply_t = self.safety._last_chat_reply_time.get(chat_id)
+                if last_reply_t is None:
+                    last_reply_t = (
+                        self.db.get_last_reply_timestamp(chat_id)
+                        if (self.db and hasattr(self.db, "get_last_reply_timestamp"))
+                        else 0.0
+                    )
+                    self.safety._last_chat_reply_time[chat_id] = last_reply_t
 
-                typing_duration = min(total_delay, target_typing) if total_delay > 1.5 else total_delay
-                reading_delay = max(0.0, total_delay - typing_duration)
+                time_since_last = (now_check - last_reply_t) if last_reply_t > 0 else 999999.0
+                needed_cooldown_wait = max(0.0, chat_min - time_since_last) if (last_reply_t > 0 and chat_min > 0) else 0.0
 
-                env_type = "Group" if chat_id < 0 else "Private DM"
-                mention_str = " (Mention 5-30s Delay)" if is_mention else ""
-                logger.info(
-                    f"[{env_type} Delay{mention_str}] Waiting {total_delay:.1f}s (reading: {reading_delay:.1f}s, typing: {typing_duration:.1f}s) before replying to chat {chat_id}."
+                is_zero_delay = (
+                    (self.min_delay <= 0 and self.max_delay <= 0 and chat_min <= 0)
+                    or (not adaptive_delay and self.typing_delay <= 0 and needed_cooldown_wait <= 0)
                 )
 
-                # Phase 1: Reading/thinking pause
-                if reading_delay > 0:
-                    await asyncio.sleep(reading_delay)
+                if is_zero_delay:
+                    total_delay = 0.0
+                    typing_duration = 0.0
+                    reading_delay = 0.0
+                elif not adaptive_delay:
+                    typing_duration = max(0.0, self.typing_delay)
+                    reading_delay = max(0.0, needed_cooldown_wait - typing_duration)
+                    total_delay = reading_delay + typing_duration
+                else:
+                    # Adaptive delay: randomly choose typing indicator duration between 3.0 and 10.0 seconds
+                    typing_duration = round(random.uniform(3.0, 10.0), 1)
+                    calc_delay = self.calculate_adaptive_delay(chat_id, first_part, is_mention=is_mention)
+                    target_wait = max(needed_cooldown_wait, calc_delay, chat_min if chat_min > 0 else 0.0)
+                    if target_wait > typing_duration:
+                        reading_delay = round(target_wait - typing_duration, 1)
+                    else:
+                        reading_delay = 0.0
+                    total_delay = reading_delay + typing_duration
 
-                # Abort if emergency stop was triggered during reading delay
-                if self.safety.is_emergency_stopped:
-                    logger.warning(f"Reply to chat {chat_id} aborted: emergency stop triggered during delay.")
-                    return False
+                if total_delay > 0:
+                    env_type = "Group" if chat_id < 0 else "Private DM"
+                    mention_str = " (Mention)" if is_mention else ""
+                    logger.info(
+                        f"[{env_type} Delay{mention_str}] Total delay: {total_delay:.1f}s "
+                        f"(reading: {reading_delay:.1f}s, typing indicator: {typing_duration:.1f}s) "
+                        f"for chat {chat_id} (chat_min={chat_min}s)."
+                    )
 
-                # Phase 2: Active typing indicator with realistic rhythm & pause bursts
-                try:
-                    if hasattr(self._client, "action") and callable(self._client.action):
-                        if typing_duration >= 3.5:
-                            burst1 = round(typing_duration * 0.5, 1)
-                            pause = round(random.uniform(0.8, 1.4), 1)
-                            burst2 = max(0.8, round(typing_duration - burst1, 1))
+                    # Phase 1: Reading/thinking pause
+                    if reading_delay > 0:
+                        await asyncio.sleep(reading_delay)
 
-                            act1 = self._client.action(chat_id, "typing")
-                            if hasattr(act1, "__aenter__"):
-                                async with act1:
-                                    await asyncio.sleep(burst1)
+                    # Abort if emergency stop was triggered during reading delay
+                    if self.safety.is_emergency_stopped:
+                        logger.warning(f"Reply to chat {chat_id} aborted: emergency stop triggered during delay.")
+                        return False
+
+                    # Phase 2: Active typing indicator before sending (3-10s)
+                    if typing_duration > 0:
+                        try:
+                            if hasattr(self._client, "action") and callable(self._client.action):
+                                if typing_duration >= 3.5:
+                                    burst1 = round(typing_duration * 0.5, 1)
+                                    pause = round(random.uniform(0.8, 1.4), 1)
+                                    burst2 = max(0.8, round(typing_duration - burst1, 1))
+
+                                    act1 = self._client.action(chat_id, "typing")
+                                    if hasattr(act1, "__aenter__"):
+                                        async with act1:
+                                            await asyncio.sleep(burst1)
+                                    else:
+                                        if asyncio.iscoroutine(act1):
+                                            try:
+                                                await act1
+                                            except Exception:
+                                                pass
+                                        await asyncio.sleep(burst1)
+
+                                    # Brief hesitation/pause
+                                    await asyncio.sleep(pause)
+
+                                    act2 = self._client.action(chat_id, "typing")
+                                    if hasattr(act2, "__aenter__"):
+                                        async with act2:
+                                            await asyncio.sleep(burst2)
+                                    else:
+                                        if asyncio.iscoroutine(act2):
+                                            try:
+                                                await act2
+                                            except Exception:
+                                                pass
+                                        await asyncio.sleep(burst2)
+                                else:
+                                    act = self._client.action(chat_id, "typing")
+                                    if hasattr(act, "__aenter__"):
+                                        async with act:
+                                            await asyncio.sleep(typing_duration)
+                                    else:
+                                        if asyncio.iscoroutine(act):
+                                            try:
+                                                await act
+                                            except Exception:
+                                                pass
+                                        await asyncio.sleep(typing_duration)
                             else:
-                                if asyncio.iscoroutine(act1):
-                                    try:
-                                        await act1
-                                    except Exception:
-                                        pass
-                                await asyncio.sleep(burst1)
+                                await asyncio.sleep(typing_duration)
+                        except Exception as e:
+                            logger.debug(f"[TYPING ACTION] Error: {e}")
+                            await asyncio.sleep(typing_duration)
 
-                            # Brief hesitation/thinking pause where user stops typing
-                            await asyncio.sleep(pause)
+                # Strict final guarantee: verify min cooldown has 100% elapsed before sending
+                if last_reply_t > 0 and chat_min > 0:
+                    remaining_sec = chat_min - (time.time() - last_reply_t)
+                    if remaining_sec > 0:
+                        logger.info(
+                            f"[COOLDOWN STRICT WAIT] Enforcing strict remaining {remaining_sec:.1f}s cooldown before sending to chat {chat_id}."
+                        )
+                        await asyncio.sleep(remaining_sec)
 
-                            act2 = self._client.action(chat_id, "typing")
-                            if hasattr(act2, "__aenter__"):
-                                async with act2:
-                                    await asyncio.sleep(burst2)
-                            else:
-                                if asyncio.iscoroutine(act2):
-                                    try:
-                                        await act2
-                                    except Exception:
-                                        pass
-                                await asyncio.sleep(burst2)
+                # Send first message part
+                # In DMs always swipe-to-reply; in groups swipe-to-reply to message being answered,
+                # except for room broadcasts / greetings for everyone (e.g. "good morning", "gm", "gn")
+                # or rare general stream chime-in.
+                actual_reply_to = None
+                if reply_to_msg_id and reply_to_msg_id > 0:
+                    if chat_id > 0:
+                        actual_reply_to = reply_to_msg_id
+                    else:
+                        # Group chat: check if message is a general greeting or broadcast intended for everyone
+                        clean_lower = first_part.strip().lower()
+                        is_room_broadcast = bool(re.search(
+                            r"\b(?:good\s*morning|good\s*night|good\s*afternoon|good\s*evening|gm|gn|hello\s+everyone|hey\s+everyone|hi\s+everyone|sup\s+everyone|hello\s+guys|hey\s+guys|hi\s+guys|bye\s+guys|bye\s+all|goodbye\s+all|gg\s+all|gm\s+all|gn\s+all)\b",
+                            clean_lower
+                        )) or ("everyone" in clean_lower or "all" in clean_lower.split())
+
+                        if is_mention:
+                            actual_reply_to = reply_to_msg_id
+                        elif is_room_broadcast:
+                            actual_reply_to = None
                         else:
+                            actual_reply_to = reply_to_msg_id
+                try:
+                    first_sent = await self._client.send_message(chat_id, first_part, reply_to=actual_reply_to)
+                except Exception as send_err:
+                    if actual_reply_to and "reply" in str(send_err).lower():
+                        logger.warning(
+                            f"Failed to reply_to message {actual_reply_to} in chat {chat_id} (deleted?), retrying without reply_to: {send_err}"
+                        )
+                        first_sent = await self._client.send_message(chat_id, first_part)
+                    else:
+                        raise
+                self.safety.mark_reply_sent(chat_id)
+                self.safety.record_burst_send(chat_id)
+                self._last_sent_reply_by_chat[chat_id] = first_part
+                if chat_id not in self._recent_replies_history:
+                    self._recent_replies_history[chat_id] = []
+                self._recent_replies_history[chat_id].append(first_part)
+                while len(self._recent_replies_history[chat_id]) > 12:
+                    self._recent_replies_history[chat_id].pop(0)
+                self._save_recent_replies_history()
+                if chat_id < 0:
+                    self.mark_group_activity(chat_id)
+                first_msg_id = getattr(first_sent, "id", 0)
+                if not isinstance(first_msg_id, int):
+                    first_msg_id = 0
+                self.db.record_chat_message(
+                    chat_id=chat_id,
+                    message_id=first_msg_id,
+                    sender_id=None,
+                    sender_name=self.generator.prompt_manager.owner_name,
+                    text=first_part,
+                    is_outgoing=True,
+                )
+                logger.info(f"Successfully sent reply part 1/{len(msg_parts)} to chat {chat_id}.")
+
+                # Human touch: occasionally react to your own message just like a real person (20%)
+                if (first_msg_id and self.current_mode == "restricted_auto" and not self.safety.is_emergency_stopped
+                        and self.db.get_state("ownreact_enabled", "1") == "1"
+                        and random.random() < 0.20):
+                    try:
+                        reacted = await self.maybe_send_reaction(chat_id, first_msg_id, first_part, allow_any_emoji=True)
+                        if reacted:
+                            logger.info(f"[OWN-REPLY REACTION] Reacted to own message {first_msg_id} in chat {chat_id}.")
+                    except Exception as e:
+                        logger.debug(f"[OWN-REPLY REACTION] Could not react to own message: {e}")
+
+                # Quick-fire typo self-edit: seamlessly edit the sent message clean ~1.5-3s later (human in-place edit)
+                if edit_fix_original is not None and first_msg_id and not self.safety.is_emergency_stopped:
+                    self._last_sent_reply_by_chat[chat_id] = edit_fix_original
+                    if self._recent_replies_history.get(chat_id):
+                        self._recent_replies_history[chat_id][-1] = edit_fix_original
+                    await asyncio.sleep(random.uniform(1.5, 3.0))
+                    try:
+                        await self._client.edit_message(chat_id, first_msg_id, edit_fix_original)
+                        logger.info(f"[SELF EDIT] Edited own message {first_msg_id} in chat {chat_id} to fix the typo.")
+                        self.db.record_chat_message(
+                            chat_id=chat_id,
+                            message_id=first_msg_id,
+                            sender_id=None,
+                            sender_name=self.generator.prompt_manager.owner_name,
+                            text=edit_fix_original,
+                            is_outgoing=True,
+                        )
+                    except Exception as e:
+                        logger.debug(f"[SELF EDIT] Could not edit message {first_msg_id}: {e}")
+
+                # Spontaneous Delayed Follow-Ups (10–20s later for 1–3 word single-message replies in private DMs only)
+                followup_enabled = (
+                    self.db.get_state("spontaneous_followup_enabled", "1") == "1"
+                    and (chat_id > 0)
+                )
+                if (
+                    followup_enabled
+                    and len(msg_parts) == 1
+                    and edit_fix_original is None
+                    and not is_mention
+                    and len(first_part.split()) <= 3
+                    and self.current_mode == "restricted_auto"
+                ):
+                    if random.random() < 0.18:
+                        asyncio.create_task(
+                            self._schedule_spontaneous_followup(
+                                chat_id=chat_id,
+                                sent_text=first_part,
+                            )
+                        )
+
+                # Send subsequent message parts (2 or 3) with short natural typing pause (DMs only)
+                for idx, part in enumerate(msg_parts[1:], start=2):
+                    if self.safety.is_emergency_stopped:
+                        logger.warning(f"Follow-up message to chat {chat_id} aborted: emergency stop triggered.")
+                        break
+
+                    # Multi-bubble human typing pause (minimum 2.0s) between bubbles - humans take minimum 2 seconds
+                    if self.min_delay == 0 and self.max_delay == 0:
+                        followup_delay = 0.0
+                        followup_typing = 0.0
+                        followup_pause = 0.0
+                    else:
+                        followup_delay = random.uniform(2.5, 4.0)
+                        followup_typing = min(followup_delay, max(2.0, min(3.5, len(part.split()) * 0.4)))
+                        followup_pause = max(0.0, followup_delay - followup_typing)
+
+                    if followup_pause > 0:
+                        await asyncio.sleep(followup_pause)
+
+                    try:
+                        if hasattr(self._client, "action") and callable(self._client.action):
                             act = self._client.action(chat_id, "typing")
                             if hasattr(act, "__aenter__"):
                                 async with act:
-                                    await asyncio.sleep(typing_duration)
+                                    await asyncio.sleep(followup_typing)
                             else:
                                 if asyncio.iscoroutine(act):
                                     try:
                                         await act
                                     except Exception:
                                         pass
-                                await asyncio.sleep(typing_duration)
-                    else:
-                        await asyncio.sleep(typing_duration)
-                except Exception:
-                    await asyncio.sleep(typing_duration)
-
-            # Strict safety guarantee: ensure min cooldown has elapsed since the last reply in this chat
-            now_check = time.time()
-            last_reply_t = self.safety._last_chat_reply_time.get(chat_id)
-            if last_reply_t is None:
-                last_reply_t = (
-                    self.db.get_last_reply_timestamp(chat_id)
-                    if (self.db and hasattr(self.db, "get_last_reply_timestamp"))
-                    else 0.0
-                )
-                self.safety._last_chat_reply_time[chat_id] = last_reply_t
-
-            if last_reply_t > 0 and chat_min > 0:
-                elapsed_chat = now_check - last_reply_t
-                if elapsed_chat < chat_min:
-                    remain_cooldown = chat_min - elapsed_chat
-                    logger.info(
-                        f"[COOLDOWN STRICT WAIT] Waiting {remain_cooldown:.1f}s before sending to chat {chat_id} "
-                        f"so message is strictly sent after min cooldown period ({chat_min}s)."
-                    )
-                    await asyncio.sleep(remain_cooldown)
-
-            # Send first message part
-            # In DMs always swipe-to-reply; in groups swipe-to-reply to message being answered,
-            # except for room broadcasts / greetings for everyone (e.g. "good morning", "gm", "gn")
-            # or rare general stream chime-in.
-            actual_reply_to = None
-            if reply_to_msg_id and reply_to_msg_id > 0:
-                if chat_id > 0:
-                    actual_reply_to = reply_to_msg_id
-                else:
-                    # Group chat: check if message is a general greeting or broadcast intended for everyone
-                    clean_lower = first_part.strip().lower()
-                    is_room_broadcast = bool(re.search(
-                        r"\b(?:good\s*morning|good\s*night|good\s*afternoon|good\s*evening|gm|gn|hello\s+everyone|hey\s+everyone|hi\s+everyone|sup\s+everyone|hello\s+guys|hey\s+guys|hi\s+guys|bye\s+guys|bye\s+all|goodbye\s+all|gg\s+all|gm\s+all|gn\s+all)\b",
-                        clean_lower
-                    )) or ("everyone" in clean_lower or "all" in clean_lower.split())
-
-                    if is_mention:
-                        actual_reply_to = reply_to_msg_id
-                    elif is_room_broadcast:
-                        actual_reply_to = None
-                    else:
-                        actual_reply_to = reply_to_msg_id
-            try:
-                first_sent = await self._client.send_message(chat_id, first_part, reply_to=actual_reply_to)
-            except Exception as send_err:
-                if actual_reply_to and "reply" in str(send_err).lower():
-                    logger.warning(
-                        f"Failed to reply_to message {actual_reply_to} in chat {chat_id} (deleted?), retrying without reply_to: {send_err}"
-                    )
-                    first_sent = await self._client.send_message(chat_id, first_part)
-                else:
-                    raise
-            self.safety.mark_reply_sent(chat_id)
-            self.safety.record_burst_send(chat_id)
-            self._last_sent_reply_by_chat[chat_id] = first_part
-            if chat_id not in self._recent_replies_history:
-                self._recent_replies_history[chat_id] = []
-            self._recent_replies_history[chat_id].append(first_part)
-            while len(self._recent_replies_history[chat_id]) > 12:
-                self._recent_replies_history[chat_id].pop(0)
-            self._save_recent_replies_history()
-            if chat_id < 0:
-                self.mark_group_activity(chat_id)
-            first_msg_id = getattr(first_sent, "id", 0)
-            if not isinstance(first_msg_id, int):
-                first_msg_id = 0
-            self.db.record_chat_message(
-                chat_id=chat_id,
-                message_id=first_msg_id,
-                sender_id=None,
-                sender_name=self.generator.prompt_manager.owner_name,
-                text=first_part,
-                is_outgoing=True,
-            )
-            logger.info(f"Successfully sent reply part 1/{len(msg_parts)} to chat {chat_id}.")
-
-            # Human touch: occasionally react to your own message just like a real person (20%)
-            if (first_msg_id and self.current_mode == "restricted_auto" and not self.safety.is_emergency_stopped
-                    and self.db.get_state("ownreact_enabled", "1") == "1"
-                    and random.random() < 0.20):
-                try:
-                    reacted = await self.maybe_send_reaction(chat_id, first_msg_id, first_part, allow_any_emoji=True)
-                    if reacted:
-                        logger.info(f"[OWN-REPLY REACTION] Reacted to own message {first_msg_id} in chat {chat_id}.")
-                except Exception as e:
-                    logger.debug(f"[OWN-REPLY REACTION] Could not react to own message: {e}")
-
-            # Quick-fire typo self-edit: seamlessly edit the sent message clean ~1.5-3s later (human in-place edit)
-            if edit_fix_original is not None and first_msg_id and not self.safety.is_emergency_stopped:
-                self._last_sent_reply_by_chat[chat_id] = edit_fix_original
-                if self._recent_replies_history.get(chat_id):
-                    self._recent_replies_history[chat_id][-1] = edit_fix_original
-                await asyncio.sleep(random.uniform(1.5, 3.0))
-                try:
-                    await self._client.edit_message(chat_id, first_msg_id, edit_fix_original)
-                    logger.info(f"[SELF EDIT] Edited own message {first_msg_id} in chat {chat_id} to fix the typo.")
-                    self.db.record_chat_message(
-                        chat_id=chat_id,
-                        message_id=first_msg_id,
-                        sender_id=None,
-                        sender_name=self.generator.prompt_manager.owner_name,
-                        text=edit_fix_original,
-                        is_outgoing=True,
-                    )
-                except Exception as e:
-                    logger.debug(f"[SELF EDIT] Could not edit message {first_msg_id}: {e}")
-
-            # Spontaneous Delayed Follow-Ups (10–20s later for 1–3 word single-message replies)
-            followup_enabled = self.db.get_state("spontaneous_followup_enabled", "1") == "1"
-            if (
-                followup_enabled
-                and len(msg_parts) == 1
-                and edit_fix_original is None
-                and not is_mention
-                and len(first_part.split()) <= 3
-                and self.current_mode == "restricted_auto"
-            ):
-                if random.random() < 0.18:
-                    asyncio.create_task(
-                        self._schedule_spontaneous_followup(
-                            chat_id=chat_id,
-                            sent_text=first_part,
-                        )
-                    )
-
-            # Send subsequent message parts (2 or 3) with short natural typing pause
-            for idx, part in enumerate(msg_parts[1:], start=2):
-                if self.safety.is_emergency_stopped:
-                    logger.warning(f"Follow-up message to chat {chat_id} aborted: emergency stop triggered.")
-                    break
-
-                # Multi-bubble human typing pause (minimum 2.0s) between bubbles - humans take minimum 2 seconds
-                if self.min_delay == 0 and self.max_delay == 0:
-                    followup_delay = 0.0
-                    followup_typing = 0.0
-                    followup_pause = 0.0
-                else:
-                    followup_delay = random.uniform(2.5, 4.0)
-                    followup_typing = min(followup_delay, max(2.0, min(3.5, len(part.split()) * 0.4)))
-                    followup_pause = max(0.0, followup_delay - followup_typing)
-
-                if followup_pause > 0:
-                    await asyncio.sleep(followup_pause)
-
-                try:
-                    if hasattr(self._client, "action") and callable(self._client.action):
-                        act = self._client.action(chat_id, "typing")
-                        if hasattr(act, "__aenter__"):
-                            async with act:
                                 await asyncio.sleep(followup_typing)
                         else:
-                            if asyncio.iscoroutine(act):
-                                try:
-                                    await act
-                                except Exception:
-                                    pass
                             await asyncio.sleep(followup_typing)
-                    else:
+                    except Exception:
                         await asyncio.sleep(followup_typing)
-                except Exception:
-                    await asyncio.sleep(followup_typing)
 
-                sub_sent = await self._client.send_message(chat_id, part)
-                self.safety.mark_reply_sent(chat_id)
-                sub_msg_id = getattr(sub_sent, "id", 0)
-                if not isinstance(sub_msg_id, int):
-                    sub_msg_id = 0
-                self.db.record_chat_message(
-                    chat_id=chat_id,
-                    message_id=sub_msg_id,
-                    sender_id=None,
-                    sender_name=self.generator.prompt_manager.owner_name,
-                    text=part,
-                    is_outgoing=True,
-                )
-                logger.info(f"Successfully sent reply part {idx}/{len(msg_parts)} to chat {chat_id}.")
+                    sub_sent = await self._client.send_message(chat_id, part)
+                    self.safety.mark_reply_sent(chat_id)
+                    sub_msg_id = getattr(sub_sent, "id", 0)
+                    if not isinstance(sub_msg_id, int):
+                        sub_msg_id = 0
+                    self.db.record_chat_message(
+                        chat_id=chat_id,
+                        message_id=sub_msg_id,
+                        sender_id=None,
+                        sender_name=self.generator.prompt_manager.owner_name,
+                        text=part,
+                        is_outgoing=True,
+                    )
+                    logger.info(f"Successfully sent reply part {idx}/{len(msg_parts)} to chat {chat_id}.")
 
-            return True
-        except Exception as e:
-            # Check for Telegram FloodWaitError
-            if (FloodWaitError and isinstance(e, FloodWaitError)) or "floodwait" in e.__class__.__name__.lower():
-                wait_time = getattr(e, "seconds", 60)
-                self.safety.set_timed_pause(wait_time + 5.0)
-                logger.warning(
-                    f"[TELEGRAM FLOODWAIT] Telegram anti-spam FloodWait triggered! "
-                    f"Pausing all automated actions for {wait_time + 5}s."
-                )
+                return True
+            except Exception as e:
+                # Check for Telegram FloodWaitError
+                if (FloodWaitError and isinstance(e, FloodWaitError)) or "floodwait" in e.__class__.__name__.lower():
+                    wait_time = getattr(e, "seconds", 60)
+                    self.safety.set_timed_pause(wait_time + 5.0)
+                    logger.warning(
+                        f"[TELEGRAM FLOODWAIT] Telegram anti-spam FloodWait triggered! "
+                        f"Pausing all automated actions for {wait_time + 5}s."
+                    )
+                    await self._notify_issue_to_saved_messages(
+                        chat_id=chat_id,
+                        chat_title="",
+                        sender_name="",
+                        error_msg=f"Telegram FloodWaitError: Pausing automated replies for {wait_time}s as required by Telegram anti-spam guidelines.",
+                        incoming_text=text,
+                    )
+                    return False
+
+                # Check for Telegram PeerFloodError (account restricted by Telegram anti-spam)
+                if (PeerFloodError and isinstance(e, PeerFloodError)) or "peerflood" in e.__class__.__name__.lower():
+                    self.safety.set_emergency_stop(True)
+                    logger.critical(
+                        f"[TELEGRAM PEERFLOOD] Telegram anti-spam restriction triggered (PeerFloodError)! "
+                        f"Emergency stop activated to protect account from ban."
+                    )
+                    await self._notify_issue_to_saved_messages(
+                        chat_id=chat_id,
+                        chat_title="",
+                        sender_name="",
+                        error_msg="Telegram PeerFloodError: Account was restricted by Telegram anti-spam (@SpamBot). All automated actions stopped safely.",
+                        incoming_text=text,
+                    )
+                    return False
+
+                self.safety.record_error()
+                logger.error(f"Failed to send message to chat {chat_id}: {e}")
                 await self._notify_issue_to_saved_messages(
                     chat_id=chat_id,
                     chat_title="",
                     sender_name="",
-                    error_msg=f"Telegram FloodWaitError: Pausing automated replies for {wait_time}s as required by Telegram anti-spam guidelines.",
+                    error_msg=f"Message delivery error: {e}",
                     incoming_text=text,
                 )
                 return False
-
-            # Check for Telegram PeerFloodError (account restricted by Telegram anti-spam)
-            if (PeerFloodError and isinstance(e, PeerFloodError)) or "peerflood" in e.__class__.__name__.lower():
-                self.safety.set_emergency_stop(True)
-                logger.critical(
-                    f"[TELEGRAM PEERFLOOD] Telegram anti-spam restriction triggered (PeerFloodError)! "
-                    f"Emergency stop activated to protect account from ban."
-                )
-                await self._notify_issue_to_saved_messages(
-                    chat_id=chat_id,
-                    chat_title="",
-                    sender_name="",
-                    error_msg="Telegram PeerFloodError: Account was restricted by Telegram anti-spam (@SpamBot). All automated actions stopped safely.",
-                    incoming_text=text,
-                )
-                return False
-
-            self.safety.record_error()
-            logger.error(f"Failed to send message to chat {chat_id}: {e}")
-            await self._notify_issue_to_saved_messages(
-                chat_id=chat_id,
-                chat_title="",
-                sender_name="",
-                error_msg=f"Message delivery error: {e}",
-                incoming_text=text,
-            )
-            return False

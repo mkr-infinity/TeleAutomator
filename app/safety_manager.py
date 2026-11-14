@@ -415,24 +415,7 @@ class SafetyManager:
         zero_chat_cooldown = (chat_min <= 0.0 and chat_max <= 0.0)
         zero_global_cooldown = (self.min_global_cooldown <= 0.0 and self.max_global_cooldown <= 0.0)
 
-        # Global cooldown check (skipped if zero cooldown configured: sending requires no wait)
-        if not zero_chat_cooldown and not zero_global_cooldown:
-            time_since_global = now - self._last_global_reply_time
-            if self.min_global_cooldown > 0 and time_since_global < self.min_global_cooldown:
-                wait_time = max(1, int(round(self.min_global_cooldown - time_since_global)))
-                return False, f"Global cooldown active ({wait_time}s remaining)"
-
-            next_global = self._next_global_cooldown
-            if next_global is None or next_global < self.min_global_cooldown:
-                next_global = self._pick_random_global_cooldown()
-                self._next_global_cooldown = next_global
-
-            target_global = max(self.min_global_cooldown, next_global)
-            if target_global > 0 and time_since_global < target_global:
-                wait_time = max(1, int(round(target_global - time_since_global)))
-                return False, f"Global cooldown active ({wait_time}s remaining)"
-
-        # Per-chat cooldown check (custom per-chat range or global floor + randomized interval)
+        # 1. Per-chat cooldown check (custom per-chat range or global floor + randomized interval)
         if not zero_chat_cooldown:
             last_chat_time = self._last_chat_reply_time.get(chat_id)
             if last_chat_time is None:
@@ -458,6 +441,23 @@ class SafetyManager:
             if target_cd > 0 and time_since_chat < target_cd:
                 wait_time = max(1, int(round(target_cd - time_since_chat)))
                 return False, f"Per-chat cooldown active for chat {chat_id} ({wait_time}s remaining)"
+
+        # 2. Global cooldown check (skipped if zero cooldown configured: sending requires no wait)
+        if not zero_chat_cooldown and not zero_global_cooldown:
+            time_since_global = now - self._last_global_reply_time
+            if self.min_global_cooldown > 0 and time_since_global < self.min_global_cooldown:
+                wait_time = max(1, int(round(self.min_global_cooldown - time_since_global)))
+                return False, f"Global cooldown active ({wait_time}s remaining)"
+
+            next_global = self._next_global_cooldown
+            if next_global is None or next_global < self.min_global_cooldown:
+                next_global = self._pick_random_global_cooldown()
+                self._next_global_cooldown = next_global
+
+            target_global = max(self.min_global_cooldown, next_global)
+            if target_global > 0 and time_since_global < target_global:
+                wait_time = max(1, int(round(target_global - time_since_global)))
+                return False, f"Global cooldown active ({wait_time}s remaining)"
 
         return True, "OK"
 
