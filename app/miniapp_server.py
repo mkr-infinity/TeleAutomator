@@ -344,11 +344,14 @@ class MiniAppAPI:
             cooldown_min = None
             cooldown_max = None
             cooldown_str = ""
-            if c_min_str and c_max_str:
+            if c_min_str != "" and c_max_str != "":
                 try:
                     cooldown_min = float(c_min_str)
                     cooldown_max = float(c_max_str)
-                    cooldown_str = f"{int(cooldown_min)}s - {int(cooldown_max)}s"
+                    if cooldown_min == 0.0 and cooldown_max == 0.0:
+                        cooldown_str = "0s (Instant - No Wait)"
+                    else:
+                        cooldown_str = f"{int(cooldown_min)}s - {int(cooldown_max)}s"
                 except (ValueError, TypeError):
                     pass
 
@@ -594,6 +597,8 @@ class MiniAppAPI:
             if is_reset:
                 ctx.db.set_state(f"chat_cooldown_min_{cid}", "")
                 ctx.db.set_state(f"chat_cooldown_max_{cid}", "")
+                if hasattr(ctx, "safety") and ctx.safety and hasattr(ctx.safety, "reset_chat_cooldown"):
+                    ctx.safety.reset_chat_cooldown(cid)
                 return {"ok": True, "response": f"Cooldown for chat {cid} reset to global default."}
             try:
                 c_min = float(params.get("min", 5))
@@ -604,6 +609,10 @@ class MiniAppAPI:
                     c_max = c_min
                 ctx.db.set_state(f"chat_cooldown_min_{cid}", str(round(c_min, 1)))
                 ctx.db.set_state(f"chat_cooldown_max_{cid}", str(round(c_max, 1)))
+                if hasattr(ctx, "safety") and ctx.safety and hasattr(ctx.safety, "set_chat_cooldown"):
+                    ctx.safety.set_chat_cooldown(cid, c_min, c_max)
+                if c_min == 0.0 and c_max == 0.0:
+                    return {"ok": True, "response": f"Cooldown for chat {cid} set to 0s (Instant - No Wait)."}
                 return {"ok": True, "response": f"Cooldown for chat {cid} set to {int(c_min)}s - {int(c_max)}s."}
             except (ValueError, TypeError) as e:
                 return {"ok": False, "response": f"Invalid cooldown values: {e}"}

@@ -248,6 +248,13 @@ def test_adaptive_delay_group_and_private(tmp_path: Path):
     assert zero_mgr.calculate_adaptive_delay(group_chat_id, "yo") == 0.0
     assert zero_mgr.calculate_adaptive_delay(private_chat_id, "yo") == 0.0
 
+    # 4. Custom per-chat cooldown strictly overrides default ranges
+    db.set_state("chat_cooldown_min_99999", "35.0")
+    db.set_state("chat_cooldown_max_99999", "55.0")
+    for _ in range(20):
+        cd_delay = mgr.calculate_adaptive_delay(99999, "Hey")
+        assert 35.0 <= cd_delay <= 55.0, f"Custom cooldown delay out of range: {cd_delay}"
+
 
 def test_send_reply_abort_on_emergency_stop(tmp_path: Path):
     """Verify _send_reply aborts without sending if emergency stop is triggered."""

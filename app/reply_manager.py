@@ -560,17 +560,16 @@ class ReplyManager(CommandRouterMixin):
                     # Sleep schedule active: quietly suppress auto-reply without disturbing Saved Messages
                     return
                 if "cooldown" in reason.lower() or "limit" in reason.lower():
-                    # NEVER skip mention messages: schedule deferred reply after cooldown/rate-limit!
-                    if is_mention:
-                        m = re.search(r"\((\d+)s remaining\)", reason)
-                        wait_secs = float(m.group(1)) if m else 5.0
-                        logger.info(
-                            f"[MENTION QUEUED] Cooldown/rate-limit active for chat {chat_id} ({wait_secs}s). "
-                            f"Scheduling deferred reply so mention is NEVER skipped."
-                        )
-                        asyncio.create_task(
-                            self._schedule_deferred_reply(chat_id, message_id, draft, wait_secs)
-                        )
+                    # Schedule deferred reply after cooldown/rate-limit so reply is strictly sent after cooldown period
+                    m = re.search(r"\((\d+)s remaining\)", reason)
+                    wait_secs = float(m.group(1)) if m else 5.0
+                    logger.info(
+                        f"[REPLY QUEUED] Cooldown/rate-limit active for chat {chat_id} ({wait_secs}s). "
+                        f"Scheduling deferred reply so the message is sent after the min cooldown period."
+                    )
+                    asyncio.create_task(
+                        self._schedule_deferred_reply(chat_id, message_id, draft, wait_secs, is_mention=is_mention)
+                    )
                     return
                 await self._notify_issue_to_saved_messages(
                     chat_id=chat_id,
@@ -695,12 +694,13 @@ class ReplyManager(CommandRouterMixin):
         message_id: int,
         draft: str,
         wait_seconds: float,
+        is_mention: bool = False,
     ) -> None:
-        """Queue and send a deferred reply after cooldown expires so mentions are never dropped."""
+        """Queue and send a deferred reply after cooldown expires so no reply is sent prematurely or dropped."""
         try:
-            await asyncio.sleep(max(1.0, wait_seconds + 1.0))
+            await asyncio.sleep(max(1.0, wait_seconds + 0.5))
             if self.safety.is_emergency_stopped or self.safety.get_remaining_pause_seconds() > 0:
-                logger.warning(f"Deferred mention reply to chat {chat_id} aborted: emergency stop or pause active.")
+                logger.warning(f"Deferred reply to chat {chat_id} aborted: emergency stop or pause active.")
                 return
 
             can_send, reason = self.safety.can_reply(chat_id, draft)
@@ -708,23 +708,23 @@ class ReplyManager(CommandRouterMixin):
                 if "cooldown" in reason.lower() or "limit" in reason.lower():
                     m = re.search(r"\((\d+)s remaining\)", reason)
                     retry_wait = float(m.group(1)) if m else 3.0
-                    await asyncio.sleep(retry_wait + 1.0)
+                    await asyncio.sleep(retry_wait + 0.5)
                     if self.safety.is_emergency_stopped or self.safety.get_remaining_pause_seconds() > 0:
                         return
                     can_send, reason = self.safety.can_reply(chat_id, draft)
                     if not can_send:
-                        logger.warning(f"Deferred mention reply to chat {chat_id} aborted: {reason}")
+                        logger.warning(f"Deferred reply to chat {chat_id} aborted: {reason}")
                         return
                 else:
-                    logger.warning(f"Deferred mention reply to chat {chat_id} aborted: {reason}")
+                    logger.warning(f"Deferred reply to chat {chat_id} aborted: {reason}")
                     return
 
-            sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True, is_mention=True)
+            sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=False, is_mention=is_mention)
             if sent:
                 asyncio.create_task(self.refresh_single_chat_summary(chat_id))
-            logger.info(f"[DEFERRED MENTION SENT] Successfully replied to mention in chat {chat_id} after cooldown.")
+            logger.info(f"[DEFERRED REPLY SENT] Successfully replied to chat {chat_id} after cooldown.")
         except Exception as e:
-            logger.error(f"Error in deferred mention reply: {e}")
+            logger.error(f"Error in deferred reply: {e}")
 
     async def _schedule_spontaneous_followup(
         self,
@@ -1057,16 +1057,35 @@ class ReplyManager(CommandRouterMixin):
         incoming_text: str = "",
         is_mention: bool = False,
     ) -> float:
-        """Calculate human-like randomized delay adapting to group vs DM, message complexity, and mentions."""
-        if self.min_delay <= 0 and self.max_delay <= 0:
+        """Calculate human-like randomized delay adapting to per-chat cooldown, group vs DM, and mentions."""
+        chat_min, chat_max = self.safety._get_chat_cooldown_range(chat_id)
+        if chat_min <= 0.0 and chat_max <= 0.0:
             return 0.0
 
-        # When mentioned: randomized response cooldown strictly between 5 and 30 seconds
+        if self.min_delay <= 0 and self.max_delay <= 0 and chat_min <= 0:
+            return 0.0
+
+        has_custom_chat_cd = (
+            self.db
+            and hasattr(self.db, "get_state")
+            and (self.db.get_state(f"chat_cooldown_min_{chat_id}") != "" or self.db.get_state(f"chat_cooldown_max_{chat_id}") != "")
+        )
+
+        # When mentioned: randomized response cooldown strictly between 5 and 30 seconds (or custom chat cooldown if configured)
         if is_mention:
-            delay = random.uniform(5.0, 30.0)
+            if has_custom_chat_cd:
+                delay = random.uniform(chat_min, max(chat_min, chat_max))
+            else:
+                delay = random.uniform(5.0, 30.0)
             return round(delay, 2)
 
         is_group = chat_id < 0
+
+        if has_custom_chat_cd:
+            low = chat_min
+            high = max(chat_min, chat_max)
+            delay = random.uniform(low, high) if high > low else low
+            return round(delay, 2)
 
         # Group chats move quickly in public channels: tighter delay window (5-25s)
         # 1-on-1 private DMs are relaxed personal chats: broader delay window (10-60s)
@@ -1569,15 +1588,21 @@ class ReplyManager(CommandRouterMixin):
                 first_part = typo_variant
 
         try:
+            chat_min, _ = self.safety._get_chat_cooldown_range(chat_id)
             # Calculate human-like delay adapting to group/DM environment and mentions (5-30s)
-            if adaptive_delay and (self.min_delay > 0 or self.max_delay > 0):
+            if adaptive_delay and (self.min_delay > 0 or self.max_delay > 0 or chat_min > 0):
                 total_delay = self.calculate_adaptive_delay(chat_id, first_part, is_mention=is_mention)
             else:
                 total_delay = self.typing_delay
 
-            if adaptive_delay and (self.typing_delay > 0 or self.min_delay > 0 or self.max_delay > 0):
-                # Human floor: never reply instantly — always at least a ~3-4.5s random thinking pause
-                total_delay = max(total_delay, random.uniform(3.0, 4.5))
+            if adaptive_delay and (self.typing_delay > 0 or self.min_delay > 0 or self.max_delay > 0 or chat_min > 0):
+                if chat_min <= 0.0 and self.min_delay <= 0.0:
+                    total_delay = 0.0
+                elif chat_min > 0.0:
+                    total_delay = max(total_delay, chat_min)
+                else:
+                    # Human floor: never reply instantly — always at least a ~3-4.5s random thinking pause
+                    total_delay = max(total_delay, random.uniform(3.0, 4.5))
 
             if total_delay > 0:
                 # Realistic human simulation: pause for reading/thinking, then show typing action
@@ -1658,6 +1683,27 @@ class ReplyManager(CommandRouterMixin):
                         await asyncio.sleep(typing_duration)
                 except Exception:
                     await asyncio.sleep(typing_duration)
+
+            # Strict safety guarantee: ensure min cooldown has elapsed since the last reply in this chat
+            now_check = time.time()
+            last_reply_t = self.safety._last_chat_reply_time.get(chat_id)
+            if last_reply_t is None:
+                last_reply_t = (
+                    self.db.get_last_reply_timestamp(chat_id)
+                    if (self.db and hasattr(self.db, "get_last_reply_timestamp"))
+                    else 0.0
+                )
+                self.safety._last_chat_reply_time[chat_id] = last_reply_t
+
+            if last_reply_t > 0 and chat_min > 0:
+                elapsed_chat = now_check - last_reply_t
+                if elapsed_chat < chat_min:
+                    remain_cooldown = chat_min - elapsed_chat
+                    logger.info(
+                        f"[COOLDOWN STRICT WAIT] Waiting {remain_cooldown:.1f}s before sending to chat {chat_id} "
+                        f"so message is strictly sent after min cooldown period ({chat_min}s)."
+                    )
+                    await asyncio.sleep(remain_cooldown)
 
             # Send first message part
             # In groups, swipe-to-reply directly if mentioned; in DMs always reply_to; otherwise chime into stream

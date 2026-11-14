@@ -34,6 +34,15 @@ class FakeSafety:
     is_emergency_stopped = False
     quiet_hours_enabled = True
 
+    def __init__(self):
+        self._next_chat_cooldown = {}
+
+    def set_chat_cooldown(self, chat_id, c_min, c_max):
+        self._next_chat_cooldown[chat_id] = (c_min + c_max) / 2
+
+    def reset_chat_cooldown(self, chat_id):
+        self._next_chat_cooldown.pop(chat_id, None)
+
     def get_remaining_pause_seconds(self):
         return 0
 
@@ -713,6 +722,8 @@ def test_chat_cooldown_action_and_chats_payload(tmp_path):
     res = api.handle_action(555000111, "chat_cooldown", {"chat_id": 111, "min": 15, "max": 45})
     assert res["ok"] is True
     assert "15s - 45s" in res["response"]
+    if hasattr(ctx, "safety") and ctx.safety:
+        assert 15.0 <= ctx.safety._next_chat_cooldown[111] <= 45.0
 
     # Verify chats payload reflects custom cooldown
     chats_after = api.handle_chats()["chats"]
@@ -721,10 +732,21 @@ def test_chat_cooldown_action_and_chats_payload(tmp_path):
     assert c_after["cooldown_max"] == 45.0
     assert c_after["cooldown_str"] == "15s - 45s"
 
+    # Set zero cooldown: Instant (no wait)
+    res_zero = api.handle_action(555000111, "chat_cooldown", {"chat_id": 111, "min": 0, "max": 0})
+    assert res_zero["ok"] is True
+    assert "0s (Instant - No Wait)" in res_zero["response"]
+    c_zero = next(x for x in api.handle_chats()["chats"] if x["id"] == 111)
+    assert c_zero["cooldown_min"] == 0.0
+    assert c_zero["cooldown_max"] == 0.0
+    assert c_zero["cooldown_str"] == "0s (Instant - No Wait)"
+
     # Reset cooldown to global default
     res_reset = api.handle_action(555000111, "chat_cooldown", {"chat_id": 111, "reset": True})
     assert res_reset["ok"] is True
     assert "reset to global default" in res_reset["response"]
+    if hasattr(ctx, "safety") and ctx.safety:
+        assert 111 not in ctx.safety._next_chat_cooldown
 
     chats_reset = api.handle_chats()["chats"]
     c_reset = next(x for x in chats_reset if x["id"] == 111)
