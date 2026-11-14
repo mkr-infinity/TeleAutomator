@@ -141,6 +141,7 @@ class ReplyGenerator:
             permanent_context=permanent_context,
             is_group=is_group,
             is_mention=is_mention,
+            persona_override=persona_override,
         )
         instructions = self.prompt_manager.get_system_instructions(
             style_override=style_override,
@@ -150,7 +151,14 @@ class ReplyGenerator:
         try:
             draft = self.provider.generate_reply(prompt, instructions)
             custom_limit = self.prompt_manager.get_custom_word_limit(persona_override)
-            return self.prompt_manager.clean_reply(draft, sender_name=sender_name, custom_limit=custom_limit)
+            active_custom = (persona_override or "").strip() or (self.prompt_manager.custom_prompt if not is_group else "")
+            allow_mentions = bool(active_custom and re.search(r"\b(?:mention|tag|@\w+)\b", active_custom, re.IGNORECASE))
+            return self.prompt_manager.clean_reply(
+                draft,
+                sender_name=sender_name,
+                custom_limit=custom_limit,
+                allow_mentions=allow_mentions,
+            )
         except Exception as e:
             logger.error(f"Failed to generate draft reply: {e}")
             # Never return fallbacks to groups or peer chats; raise so caller alerts Saved Messages exclusively

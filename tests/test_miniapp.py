@@ -817,6 +817,48 @@ def test_handle_fetch_models_base_url_normalization_and_errors(tmp_path, monkeyp
     assert "verify that base url" in res_conn["error"].lower()
 
 
+def test_handle_action_chat_prompt_and_context(tmp_path):
+    ctx, _ = make_ctx(tmp_path, authorized=(555000111,))
+    api = MiniAppAPI(ctx)
+
+    # 1. Save custom prompt for chat
+    res_p = api.handle_action(555000111, "chatprompt", {"chat_id": 111, "value": "Talk like a friendly crypto dev"})
+    assert res_p["ok"] is True
+    assert "Custom prompt saved" in res_p["response"]
+    assert ctx.db.get_state("chat_prompt_111") == "Talk like a friendly crypto dev"
+
+    # Verify handle_chats returns it
+    c = next(x for x in api.handle_chats()["chats"] if x["id"] == 111)
+    assert c["prompt"] == "Talk like a friendly crypto dev"
+
+    # 2. Reset custom prompt
+    res_pr = api.handle_action(555000111, "chatprompt", {"chat_id": 111, "value": "default"})
+    assert res_pr["ok"] is True
+    assert ctx.db.get_state("chat_prompt_111") == ""
+
+    # 3. Save permanent context notes
+    res_ctx = api.handle_action(555000111, "setcontext", {"chat_id": 111, "value": "Admin is @john, launch date is Dec 1"})
+    assert res_ctx["ok"] is True
+    assert "Context notes saved" in res_ctx["response"]
+    perm = ctx.db.get_permanent_context(111)
+    assert perm.get("notes") == "Admin is @john, launch date is Dec 1"
+
+    c = next(x for x in api.handle_chats()["chats"] if x["id"] == 111)
+    assert c["context"] == "Admin is @john, launch date is Dec 1"
+
+    # 4. Clear permanent context notes
+    res_del = api.handle_action(555000111, "delcontext", {"chat_id": 111})
+    assert res_del["ok"] is True
+    perm_after = ctx.db.get_permanent_context(111)
+    assert perm_after.get("notes") in ("", None)
+
+    # 5. Set custom chat style
+    res_style = api.handle_action(555000111, "chatstyle", {"chat_id": 111, "value": "concise"})
+    assert res_style["ok"] is True
+    assert ctx.db.get_state("chat_style_111") == "concise"
+
+
+
 
 
 

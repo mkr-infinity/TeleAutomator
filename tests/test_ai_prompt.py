@@ -509,3 +509,29 @@ def test_dynamic_owner_name_without_hardcoding(tmp_path: Path):
     assert pm.clean_reply("Rohan: what's up") == "what's up"
 
 
+def test_custom_prompt_with_mentions_and_clean_reply():
+    """Verify custom prompt requesting user mentions enables mentioning in instructions and preserves @mentions in replies."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+
+    # 1. In-text mentions preserved by default
+    assert pm.clean_reply("contact @support for help") == "contact @support for help"
+
+    # 2. Leading mentions preserved when allow_mentions=True
+    assert pm.clean_reply("@alice check this out", allow_mentions=True) == "@alice check this out"
+
+    # 3. Leading mentions cleaned when allow_mentions=False
+    assert pm.clean_reply("@alice check this out", allow_mentions=False) == "check this out"
+
+    # 4. Custom prompt with mention directive allows mentioning in system instructions
+    custom_persona = "You are an assistant. When asked about help, mention @helpdesk."
+    instructions = pm.get_system_instructions(persona_override=custom_persona, is_group=True)
+    assert "MENTIONS: When your custom prompt instructs to mention or tag users" in instructions
+    assert "NEVER write anyone's name, user name, or @username" not in instructions
+
+    # 5. build_user_prompt with persona_override permitting mentions
+    prompt = pm.build_user_prompt("Bob", "how do I get help", persona_override=custom_persona)
+    assert "When your prompt instructions ask to mention or tag people" in prompt
+    assert "follow custom prompt for user mentions" in prompt
+
+
+

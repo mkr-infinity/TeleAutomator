@@ -240,6 +240,12 @@ class PromptManager:
             else:
                 lang_rule = "- LANGUAGE: Follow the custom language requirement specified above."
 
+            allow_mentions = bool(re.search(r"\b(?:mention|tag|@\w+)\b", lower_custom))
+            if allow_mentions:
+                mention_guardrail = "- MENTIONS: When your custom prompt instructs to mention or tag users, you may write @usernames or names as requested."
+            else:
+                mention_guardrail = "- NEVER write anyone's name, user name, or @username in message text (swipe-to-reply quote threading only)."
+
             core_guardrails = (
                 f"\n\nCORE ANTI-AI & DEFAULT RULES (APPLIED FOR ANYTHING NOT MENTIONED ABOVE):\n"
                 f"- Text directly as {self.owner_name} from your personal phone in Telegram.\n"
@@ -248,7 +254,7 @@ class PromptManager:
                 f"{lang_rule}\n"
                 f"- STRICT ON-TOPIC MANDATE: Read the ongoing chat context and stay 100% on-topic with what is currently being discussed. Engage like an authentic human friend, answer questions directly, and never send detached generic filler.\n"
                 f"- CONTEXTUAL VOCABULARY & SLANG MIRRORING: Naturally mirror the exact vocabulary, abbreviations, casual slang, casing, and message energy of the person or group you are talking to.\n"
-                f"- NEVER write anyone's name, user name, or @username in message text (swipe-to-reply quote threading only).\n"
+                f"{mention_guardrail}\n"
                 f"- CASUAL MOBILE TEXTING (NO SLANG OVERLOAD): Casual texting tone without slang overload.\n"
                 f"- NO CODE: Never write code, paths, or brackets [] {{}}, no question marks (?).\n"
                 f"- Never write 'haha', 'lol', or 'lmao' as text (use emoji reactions or real thoughts).\n"
@@ -279,7 +285,13 @@ class PromptManager:
         """Deprecated: Dynamic fallback is disabled per rule 'never reply if AI is not sending response'."""
         return ""
 
-    def clean_reply(self, raw_text: str, sender_name: Optional[str] = None, custom_limit: Optional[int] = None) -> str:
+    def clean_reply(
+        self,
+        raw_text: str,
+        sender_name: Optional[str] = None,
+        custom_limit: Optional[int] = None,
+        allow_mentions: bool = False,
+    ) -> str:
         """Remove any accidental AI meta-commentary, labels, brackets, or robotic filler."""
         text = raw_text.strip().strip('"').strip("'")
 
@@ -364,8 +376,9 @@ class PromptManager:
         # Strip any leading Name: or Name, or Name -
         text = re.sub(r"^[A-Za-z0-9_]{2,25}[:,\-]\s*", "", text)
 
-        # Strip any @username anywhere in the reply
-        text = re.sub(r"@\w+[:,\s]*", "", text)
+        # Strip leading @mentions unless explicitly allowed by custom prompt
+        if not allow_mentions:
+            text = re.sub(r"^(?:@\w+[:,\s]*)+", "", text)
 
         # Suppress standalone laughter responses (e.g. "haha", "hahaha", "lol", "lmao", "rofl", "xd")
         pure_laughter = re.sub(r"[^a-zA-Z]", "", text).lower()
@@ -406,6 +419,7 @@ class PromptManager:
         permanent_context: Optional[str] = None,
         is_group: bool = False,
         is_mention: bool = False,
+        persona_override: Optional[str] = None,
     ) -> str:
         """Create prompt containing message context, history, permanent chat context, language rule, and dynamic owner identity."""
         parts: List[str] = []
@@ -458,11 +472,22 @@ class PromptManager:
         else:
             lang_instruction = f"CRITICAL: User configured language is {self._language.capitalize()}. You MUST reply ONLY in {self._language.capitalize()}."
 
-        # Natural human engagement without writing user names or @usernames
+        # Natural human engagement without writing user names or @usernames (unless instructed by custom prompt)
+        active_custom = (persona_override or "").strip() or (self.custom_prompt if not is_group else "")
+        allow_mentions = bool(active_custom and re.search(r"\b(?:mention|tag|@\w+)\b", active_custom, re.IGNORECASE))
+        if allow_mentions:
+            mention_rule = "Mentions: When your prompt instructions ask to mention or tag people, you may write @usernames or names as requested."
+            mention_tail = "follow custom prompt for user mentions"
+        else:
+            mention_rule = (
+                "CRITICAL: NEVER write the user's name, sender's name, or @username in your messages (no '@Alice', no 'Alice:', no 'Alice,'). "
+                "In Telegram, mentioning means swiping to reply (quote-threading); you do NOT type the person's name in text."
+            )
+            mention_tail = "never write any user names or @usernames [swiping to reply links the message]"
+
         engagement_instruction = (
             "In groups and chats, be an active Telegram user. When you understand discussions, chime in naturally with thoughts. "
-            "CRITICAL: NEVER write the user's name, sender's name, or @username in your messages (no '@Alice', no 'Alice:', no 'Alice,'). "
-            "In Telegram, mentioning means swiping to reply (quote-threading); you do NOT type the person's name in text. "
+            f"{mention_rule} "
             "NEVER send messages saying 'haha', 'lol', or 'lmao' as text; use emoji reactions or express real thoughts. "
             "Read chat context first to see what conversations are ongoing before replying. "
             "Match conversational length and vibe naturally: vary from ONE word to a few words to one short line, exactly as the moment calls for — never the same length every time. "
@@ -515,6 +540,6 @@ class PromptManager:
             f"Punctuation & Emojis: Pick ANY emoji that matches the meaning of your words. Use as many or as few as the vibe genuinely calls for (a hyped human stacks several, a calm one sends none) — vary placement: end, mid-line, or none. Only ONE emotion per message — never mix two feelings. NEVER use question marks (?).\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, natural human length — one word to one short line as the conversation calls for, no useless conversation, mirror the humor slang and energy of the chat exactly, never explain like an AI, never write any user names or @usernames [swiping to reply links the message], no 'haha'/'lol' text, read context first and build on it, natural typing, no question marks, natural emoji use that fits the vibe with varied placement, one emotion per reply, no repetition, no canned phrases, no AI talk, no code, no brackets):"
+            f"Reply as {self.owner_name} (in English by default, casual human mobile texting, natural human length — one word to one short line as the conversation calls for, no useless conversation, mirror the humor slang and energy of the chat exactly, never explain like an AI, {mention_tail}, no 'haha'/'lol' text, read context first and build on it, natural typing, no question marks, natural emoji use that fits the vibe with varied placement, one emotion per reply, no repetition, no canned phrases, no AI talk, no code, no brackets):"
         )
         return "\n\n".join(parts)

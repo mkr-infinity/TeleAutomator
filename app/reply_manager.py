@@ -1706,9 +1706,18 @@ class ReplyManager(CommandRouterMixin):
                     await asyncio.sleep(remain_cooldown)
 
             # Send first message part
-            # In groups, swipe-to-reply directly if mentioned; in DMs always reply_to; otherwise chime into stream
-            actual_reply_to = reply_to_msg_id if (chat_id > 0 or is_mention) else None
-            first_sent = await self._client.send_message(chat_id, first_part, reply_to=actual_reply_to)
+            # Always swipe-to-reply (quote-threading) the message being answered, in both DMs and groups
+            actual_reply_to = reply_to_msg_id if (reply_to_msg_id and reply_to_msg_id > 0) else None
+            try:
+                first_sent = await self._client.send_message(chat_id, first_part, reply_to=actual_reply_to)
+            except Exception as send_err:
+                if actual_reply_to and "reply" in str(send_err).lower():
+                    logger.warning(
+                        f"Failed to reply_to message {actual_reply_to} in chat {chat_id} (deleted?), retrying without reply_to: {send_err}"
+                    )
+                    first_sent = await self._client.send_message(chat_id, first_part)
+                else:
+                    raise
             self.safety.mark_reply_sent(chat_id)
             self.safety.record_burst_send(chat_id)
             self._last_sent_reply_by_chat[chat_id] = first_part

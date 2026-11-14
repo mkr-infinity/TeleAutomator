@@ -616,6 +616,45 @@ class MiniAppAPI:
                 return {"ok": True, "response": f"Cooldown for chat {cid} set to {int(c_min)}s - {int(c_max)}s."}
             except (ValueError, TypeError) as e:
                 return {"ok": False, "response": f"Invalid cooldown values: {e}"}
+        if action == "chatprompt":
+            cid = int(params.get("chat_id", 0))
+            val = str(params.get("value", "")).strip()
+            if val.lower() in ("default", "clear", "reset", "none", ""):
+                ctx.db.set_state(f"chat_prompt_{cid}", "")
+                if hasattr(ctx.db, "sync_chat_context_file"):
+                    ctx.db.sync_chat_context_file(cid)
+                return {"ok": True, "response": f"Chat {cid} reset to default prompt."}
+            ctx.db.set_state(f"chat_prompt_{cid}", val)
+            if hasattr(ctx.db, "sync_chat_context_file"):
+                ctx.db.sync_chat_context_file(cid)
+            return {"ok": True, "response": f"Custom prompt saved for chat {cid}."}
+        if action == "setcontext":
+            cid = int(params.get("chat_id", 0))
+            val = str(params.get("value", "")).strip()
+            if hasattr(ctx.db, "set_permanent_context"):
+                ctx.db.set_permanent_context(cid, notes=val)
+            if hasattr(ctx.db, "sync_chat_context_file"):
+                ctx.db.sync_chat_context_file(cid)
+            return {"ok": True, "response": f"Context notes saved for chat {cid}."}
+        if action == "delcontext":
+            cid = int(params.get("chat_id", 0))
+            if hasattr(ctx.db, "delete_permanent_context"):
+                ctx.db.delete_permanent_context(cid)
+            if hasattr(ctx.db, "sync_chat_context_file"):
+                ctx.db.sync_chat_context_file(cid)
+            return {"ok": True, "response": f"Context notes cleared for chat {cid}."}
+        if action == "chatstyle":
+            cid = int(params.get("chat_id", 0))
+            val = str(params.get("value", "")).strip().lower()
+            if val in ("default", "clear", "reset", "none", ""):
+                ctx.db.set_state(f"chat_style_{cid}", "")
+                if hasattr(ctx.db, "sync_chat_context_file"):
+                    ctx.db.sync_chat_context_file(cid)
+                return {"ok": True, "response": f"Chat {cid} reset to default style."}
+            ctx.db.set_state(f"chat_style_{cid}", val)
+            if hasattr(ctx.db, "sync_chat_context_file"):
+                ctx.db.sync_chat_context_file(cid)
+            return {"ok": True, "response": f"Style set to {val} for chat {cid}."}
         command = self.map_action_to_command(action, params)
         if not command:
             return {"ok": False, "response": f"Unknown action: {action}"}
