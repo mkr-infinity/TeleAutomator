@@ -501,7 +501,7 @@
       }));
   }
 
-  // ------------------------------------------------------------ approvals
+  // ------------------------------------------------------------ approvals (Phase 2: Swipe Actions)
 
   async function refreshApprovals() {
     const data = await api("/api/pending");
@@ -511,17 +511,107 @@
     $("tab-approvals").textContent = String(count);
     $("tab-approvals").classList.toggle("hidden", !count);
     $("approval-list").innerHTML = count
-      ? rows.map((p) => `<div class="row" style="min-height:0;align-items:flex-start;flex-direction:column;gap:10px;">
-          <div class="row-main" style="width:100%">
-            <p class="row-sub">${esc(p.chat_title || String(p.chat_id))} · ${esc(String(p.created || "").slice(0, 16))}</p>
-            <p class="row-title" style="white-space:normal">${esc(p.text)}</p>
-          </div>
-          <div class="row-side"><button class="btn small primary" data-ap="approve" data-id="${p.id}">Approve</button>
-          <button class="btn small danger" data-ap="reject" data-id="${p.id}">Reject</button></div>
-        </div>`).join("")
+      ? rows.map(approvalCardHtml).join("")
       : `<div class="empty">Nothing waiting. In approval mode every draft shows up here.</div>`;
     $("approval-list").querySelectorAll("[data-ap]").forEach((btn) =>
       btn.addEventListener("click", () => runAction(btn.dataset.ap, { id: btn.dataset.id })));
+    wireApprovalSwipes();
+  }
+
+  function approvalCardHtml(p) {
+    return `<div class="approval-card-wrap" data-id="${p.id}">
+      <div class="approval-swipe-underlay">
+        <div class="swipe-hint swipe-hint-approve">
+          <span class="swipe-icon">✓</span>
+          <span>Approve</span>
+        </div>
+        <div class="swipe-hint swipe-hint-reject">
+          <span>Reject</span>
+          <span class="swipe-icon">✕</span>
+        </div>
+      </div>
+      <div class="approval-card-content">
+        <div class="approval-head">
+          <span class="pill pill-warning">Draft #${p.id}</span>
+          <span class="feed-ts num">${esc(String(p.created || "").slice(0, 16))}</span>
+        </div>
+        <p class="approval-chat-title">${esc(p.chat_title || String(p.chat_id))}</p>
+        <div class="approval-draft-bubble">${esc(p.text)}</div>
+        <div class="approval-actions">
+          <button class="btn small primary" data-ap="approve" data-id="${p.id}">✓ Approve</button>
+          <button class="btn small danger" data-ap="reject" data-id="${p.id}">✕ Reject</button>
+          <span class="swipe-hint-pill">Swipe right to approve · left to reject</span>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function wireApprovalSwipes() {
+    document.querySelectorAll(".approval-card-wrap").forEach((wrap) => {
+      const content = wrap.querySelector(".approval-card-content");
+      const approveHint = wrap.querySelector(".swipe-hint-approve");
+      const rejectHint = wrap.querySelector(".swipe-hint-reject");
+      const draftId = wrap.dataset.id;
+      if (!content) return;
+
+      let startX = 0;
+      let startY = 0;
+      let currentX = 0;
+      let isSwiping = false;
+
+      wrap.addEventListener("touchstart", (e) => {
+        if (!e.touches || !e.touches[0]) return;
+        startX = e.touches[0].clientX;
+        startY = e.touches[0].clientY;
+        currentX = 0;
+        isSwiping = false;
+        content.style.transition = "none";
+      }, { passive: true });
+
+      wrap.addEventListener("touchmove", (e) => {
+        if (!e.touches || !e.touches[0]) return;
+        const dx = e.touches[0].clientX - startX;
+        const dy = e.touches[0].clientY - startY;
+
+        if (!isSwiping) {
+          if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) {
+            isSwiping = true;
+          } else if (Math.abs(dy) > 12) {
+            return;
+          }
+        }
+
+        if (isSwiping) {
+          currentX = dx;
+          content.style.transform = `translateX(${dx}px)`;
+          if (dx > 0) {
+            if (approveHint) approveHint.style.opacity = String(Math.min(dx / 70, 1));
+            if (rejectHint) rejectHint.style.opacity = "0";
+          } else {
+            if (rejectHint) rejectHint.style.opacity = String(Math.min(-dx / 70, 1));
+            if (approveHint) approveHint.style.opacity = "0";
+          }
+        }
+      }, { passive: true });
+
+      wrap.addEventListener("touchend", () => {
+        if (!isSwiping) return;
+        content.style.transition = "transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)";
+        if (currentX > 80) {
+          content.style.transform = "translateX(120%)";
+          haptic("ok");
+          runAction("approve", { id: draftId });
+        } else if (currentX < -80) {
+          content.style.transform = "translateX(-120%)";
+          haptic("err");
+          runAction("reject", { id: draftId });
+        } else {
+          content.style.transform = "translateX(0px)";
+          if (approveHint) approveHint.style.opacity = "0";
+          if (rejectHint) rejectHint.style.opacity = "0";
+        }
+      }, { passive: true });
+    });
   }
 
   // ----------------------------------------------------------------- more
@@ -688,6 +778,14 @@
 
     const toastEl = $("toast");
     if (toastEl) toastEl.addEventListener("click", () => toastEl.classList.add("hidden"));
+
+    const beacon = $("live-beacon");
+    if (beacon) {
+      beacon.addEventListener("click", () => {
+        const isLive = beacon.classList.contains("live");
+        toast(isLive ? "Engine: Real-time Live Sync active" : "Engine: Connecting to control engine…", isLive ? "ok" : "info");
+      });
+    }
 
     // Android Material 3 Expressive Fluid Wave Touch Ripple + Instant Tactile Haptic
     document.addEventListener("pointerdown", (e) => {
@@ -963,22 +1061,41 @@
     unlockApp(auth);
   }
 
+  function setConnectionStatus(status) {
+    const beacon = $("live-beacon");
+    if (!beacon) return;
+    beacon.className = `live-beacon ${status}`;
+    beacon.title = status === "live"
+      ? "Real-time engine connected"
+      : (status === "connecting" ? "Connecting to engine…" : "Engine offline");
+  }
+
   function initEventSource() {
-    if (!window.EventSource) return;
+    if (!window.EventSource) {
+      setConnectionStatus("offline");
+      return;
+    }
     try {
       const raw = initDataHeader();
       const q = raw ? `?initData=${encodeURIComponent(raw)}` : "";
       const es = new EventSource(`/api/events${q}`);
+      es.onopen = () => {
+        setConnectionStatus("live");
+      };
       es.addEventListener("state", (e) => {
+        setConnectionStatus("live");
         try {
           const s = JSON.parse(e.data);
           if (s && s.state) renderState(s);
         } catch (_) {}
       });
       es.onerror = () => {
+        setConnectionStatus("connecting");
         // SSE reconnects automatically by browser spec
       };
-    } catch (_) {}
+    } catch (_) {
+      setConnectionStatus("offline");
+    }
   }
 
   init();
