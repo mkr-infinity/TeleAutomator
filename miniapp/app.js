@@ -135,6 +135,12 @@
         DEMO_DATA.state.pending_count = DEMO_DATA.pending.length;
         return { ok: true, response: a === "approve" ? "Draft approved and sent!" : "Draft rejected and discarded." };
       }
+      if (a === "approve_all" || a === "reject_all") {
+        const c = DEMO_DATA.pending.length;
+        DEMO_DATA.pending = [];
+        DEMO_DATA.state.pending_count = 0;
+        return { ok: true, response: a === "approve_all" ? `All ${c} drafts approved and sent!` : `All ${c} drafts rejected.` };
+      }
       if (a === "pause") {
         DEMO_DATA.state.state = "paused";
         DEMO_DATA.state.paused_remaining_sec = (p.minutes || 30) * 60;
@@ -901,6 +907,9 @@
     const count = rows.length;
     $("tab-approvals").textContent = String(count);
     $("tab-approvals").classList.toggle("hidden", !count);
+    if ($("approval-batch-bar")) {
+      $("approval-batch-bar").classList.toggle("hidden", count < 2);
+    }
     $("approval-list").innerHTML = count
       ? rows.map(approvalCardHtml).join("")
       : `<div class="empty">Nothing waiting. In approval mode every draft shows up here.</div>`;
@@ -1481,6 +1490,34 @@
         { label: "approval", onClick: () => runAction("mode", { value: "approval" }) },
         { label: "draft", onClick: () => runAction("mode", { value: "draft" }) },
       ]));
+
+    const btnApproveAll = $("btn-approve-all");
+    if (btnApproveAll) {
+      btnApproveAll.addEventListener("click", () => {
+        const count = document.querySelectorAll(".approval-card-wrap").length;
+        if (!count) return;
+        openSheet("Approve all drafts",
+          `<p>Send all <strong>${count} pending drafts</strong> to their chats now?</p>`,
+          [
+            { label: `Approve all (${count})`, kind: "primary", onClick: () => runAction("approve_all") },
+            { label: "Cancel" }
+          ]);
+      });
+    }
+
+    const btnRejectAll = $("btn-reject-all");
+    if (btnRejectAll) {
+      btnRejectAll.addEventListener("click", () => {
+        const count = document.querySelectorAll(".approval-card-wrap").length;
+        if (!count) return;
+        openSheet("Reject all drafts",
+          `<p>Discard all <strong>${count} pending drafts</strong>?</p>`,
+          [
+            { label: `Discard all (${count})`, kind: "danger", onClick: () => runAction("reject_all") },
+            { label: "Cancel" }
+          ]);
+      });
+    }
 
     $("goto-activity").addEventListener("click", async () => {
       const acts = await api("/api/activity");

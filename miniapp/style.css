@@ -1425,6 +1425,27 @@ h1.brand-name {
 }
 
 /* ------------------------------------------- Approval Swipe Cards (Phase 2) */
+.approvals-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.approval-batch-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.approval-batch-actions .btn {
+  min-height: 34px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
 .approval-card-wrap {
   position: relative;
   overflow: hidden;

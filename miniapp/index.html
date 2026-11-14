@@ -224,8 +224,16 @@
 
     <!-- Approvals -->
     <section id="view-approvals" class="view hidden" aria-label="Approvals">
-      <h2 class="view-title">Approvals</h2>
-      <p class="view-sub">Drafts waiting for your yes or no.</p>
+      <div class="approvals-header-row">
+        <div>
+          <h2 class="view-title">Approvals</h2>
+          <p class="view-sub">Drafts waiting for your yes or no.</p>
+        </div>
+        <div class="approval-batch-actions hidden" id="approval-batch-bar">
+          <button type="button" class="btn small primary" id="btn-approve-all">✓ Approve All</button>
+          <button type="button" class="btn small danger" id="btn-reject-all">✕ Reject All</button>
+        </div>
+      </div>
       <div class="card list" id="approval-list"></div>
     </section>
 
