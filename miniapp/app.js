@@ -53,14 +53,14 @@
       { id: 876543210, name: "Mom", username: "", type: "Private", chatty: "0.25", style: "", prompt: "Never send links here.", voice_profile: false, blocked: false },
     ],
     pending: [
-      { id: 41, chat_id: -1001987654321, text: "btw are you joining the demo day on friday? wanted to show you the pitch deck before we send it out", created: "2026-11-13 14:22" },
-      { id: 40, chat_id: 987654321, text: "reached home? call me when you're free, need to ask about the weekend plan", created: "2026-11-13 13:05" },
+      { id: 41, chat_id: -1001987654321, chat_title: "Startup India Founders", text: "btw are you joining the demo day on friday? wanted to show you the pitch deck before we send it out", created: "2026-11-13 14:22" },
+      { id: 40, chat_id: 987654321, chat_title: "Aarav", text: "🎙️ Reached home! Call me when free, need to ask about the weekend plan.", created: "2026-11-13 13:05", is_voice: true, voice_dur: "0:21" },
     ],
     activity: [
       { chat: "Delhi Tech Meetup", chat_id: -1001765432109, sender: "TeleAutomator", text: "yeah the venue shifted to Hauz Khas this month, same 7pm slot", ts: "2026-11-13 14:18" },
-      { chat: "Rohan Sharma", chat_id: 123456789, sender: "TeleAutomator", text: "sent you the file, check when free", ts: "2026-11-13 13:52" },
+      { chat: "Rohan Sharma", chat_id: 123456789, sender: "TeleAutomator", text: "🎙️ Haan bhai venue pahunch gaya, 2nd floor hall booked hai", ts: "2026-11-13 13:52", is_voice: true, voice_dur: "0:14" },
       { chat: "Startup India Founders", chat_id: -1001987654321, sender: "TeleAutomator", text: "pricing page looks solid, maybe add a monthly option", ts: "2026-11-13 12:30" },
-      { chat: "Mom", chat_id: 876543210, sender: "TeleAutomator", text: "yes mom, ate already", ts: "2026-11-13 11:04" },
+      { chat: "Mom", chat_id: 876543210, sender: "TeleAutomator", text: "📷 [photo] Lunch pic sent, looks great!", ts: "2026-11-13 11:04", is_media: true },
     ],
     access: [
       { id: 555000111, name: "Kaif", username: "@mkr_infinity", main: true, perms: "all" },
@@ -454,8 +454,21 @@
   }
 
   function feedRowHtml(a) {
+    const isVoice = Boolean(a.is_voice || /\[voice|\[audio|🎤|🎙️|\(voice\)/i.test(a.text || "") || a.voice_dur);
+    const isMedia = Boolean(a.is_media || /\[photo|\[image|\[video|\[document|📷|📹|📎|\(media\)/i.test(a.text || ""));
+    const voiceBadge = isVoice
+      ? `<div class="voice-badge">
+          <span class="voice-wave"><span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span></span>
+          <span>Voice Note ${esc(a.voice_dur ? `(${a.voice_dur})` : "")}</span>
+        </div>`
+      : "";
+    const mediaBadge = isMedia && !isVoice
+      ? `<div class="media-badge"><span>📷 Media Reply</span></div>`
+      : "";
+
     return `<div class="feed-row">
       <div class="feed-top"><span class="feed-chat">${esc(a.chat)}</span><span class="feed-ts num">${esc(formatIST(a.ts))}</span></div>
+      ${voiceBadge}${mediaBadge}
       <span class="feed-text">${esc(a.text)}</span>
     </div>`;
   }
@@ -696,6 +709,18 @@
   }
 
   function approvalCardHtml(p) {
+    const isVoice = Boolean(p.is_voice || /\[voice|\[audio|🎤|🎙️|\(voice\)/i.test(p.text || "") || p.voice_dur);
+    const isMedia = Boolean(p.is_media || /\[photo|\[image|\[video|\[document|📷|📹|📎|\(media\)/i.test(p.text || ""));
+    const voiceBadge = isVoice
+      ? `<div class="voice-badge">
+          <span class="voice-wave"><span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span></span>
+          <span>Voice Note ${esc(p.voice_dur ? `(${p.voice_dur})` : "")}</span>
+        </div>`
+      : "";
+    const mediaBadge = isMedia && !isVoice
+      ? `<div class="media-badge"><span>📷 Media Draft</span></div>`
+      : "";
+
     return `<div class="approval-card-wrap" data-id="${p.id}">
       <div class="approval-swipe-underlay">
         <div class="swipe-hint swipe-hint-approve">
@@ -713,6 +738,7 @@
           <span class="feed-ts num">${esc(formatIST(p.created))}</span>
         </div>
         <p class="approval-chat-title">${esc(p.chat_title || String(p.chat_id))}</p>
+        ${voiceBadge}${mediaBadge}
         <div class="approval-draft-bubble">${esc(p.text)}</div>
         <div class="approval-actions">
           <button class="btn small primary" data-ap="approve" data-id="${p.id}">✓ Approve</button>
@@ -903,11 +929,121 @@
     }
   }
 
+  // ------------------------------------------------ Offline Optimistic Action Queue (Phase 8)
+  const OFFLINE_QUEUE_KEY = "teleautomator_offline_queue_v1";
+
+  function loadOfflineQueue() {
+    try {
+      const raw = localStorage.getItem(OFFLINE_QUEUE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+  }
+
+  function saveOfflineQueue(q) {
+    try {
+      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(q));
+    } catch {}
+  }
+
+  function updateSyncBadge() {
+    const badge = $("offline-sync-badge");
+    const countEl = $("offline-sync-count");
+    if (!badge) return;
+    const q = loadOfflineQueue();
+    if (q.length > 0) {
+      if (countEl) countEl.textContent = String(q.length);
+      badge.classList.remove("hidden");
+      badge.title = `${q.length} action(s) queued for sync`;
+    } else {
+      badge.classList.add("hidden");
+    }
+  }
+
+  function enqueueAction(action, params) {
+    const q = loadOfflineQueue();
+    q.push({
+      id: Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+      action,
+      params,
+      time: new Date().toISOString()
+    });
+    saveOfflineQueue(q);
+    updateSyncBadge();
+  }
+
+  let isFlushingQueue = false;
+  async function flushOfflineQueue() {
+    if (isFlushingQueue) return;
+    const q = loadOfflineQueue();
+    if (!q.length) {
+      updateSyncBadge();
+      return;
+    }
+    isFlushingQueue = true;
+    const remaining = [];
+    let synced = 0;
+    for (const item of q) {
+      try {
+        const res = await api("/api/action", { action: item.action, params: item.params });
+        if (res && res.authorized === false) {
+          remaining.push(item);
+          break;
+        }
+        if (res && res.ok) {
+          synced++;
+        } else {
+          remaining.push(item);
+        }
+      } catch {
+        remaining.push(item);
+        break; // Network dropped or still offline
+      }
+    }
+    saveOfflineQueue(remaining);
+    updateSyncBadge();
+    isFlushingQueue = false;
+    if (synced > 0) {
+      haptic("ok");
+      toast(`Synced ${synced} offline action${synced > 1 ? "s" : ""} ⚡`, "ok");
+      loadView(currentView);
+    }
+  }
+
   // --------------------------------------------------------- run + notify
 
   async function runAction(action, params) {
     haptic();
-    const res = await api("/api/action", { action, params });
+
+    // Optimistic UI for pending draft approvals
+    if (params && params.id && (action === "approve" || action === "reject")) {
+      const card = document.querySelector(`.approval-card-wrap[data-id="${params.id}"]`);
+      if (card) {
+        card.style.transition = "transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.22s ease";
+        card.style.transform = action === "approve" ? "translateX(120%)" : "translateX(-120%)";
+        card.style.opacity = "0";
+        setTimeout(() => {
+          card.remove();
+          const badge = $("tab-approvals");
+          if (badge) {
+            const count = Math.max(0, (parseInt(badge.textContent, 10) || 1) - 1);
+            badge.textContent = String(count);
+            badge.classList.toggle("hidden", !count);
+          }
+        }, 250);
+      }
+    }
+
+    let res = null;
+    try {
+      res = await api("/api/action", { action, params });
+    } catch {
+      // Offline fallback: queue action for automatic sync upon reconnection
+      enqueueAction(action, params);
+      haptic("light");
+      toast("Action queued offline ⚡ Will auto-sync when connected", "info");
+      return { ok: true, queued: true };
+    }
+
     if (res && res.authorized === false) return maybePaywall(res);
     haptic(res && res.ok ? "ok" : "err");
     toast(res && res.response ? res.response : (res && res.ok ? "Done" : "Failed"));
@@ -1024,6 +1160,15 @@
       beacon.addEventListener("click", () => {
         const isLive = beacon.classList.contains("live");
         toast(isLive ? "Engine: Real-time Live Sync active" : "Engine: Connecting to control engine…", isLive ? "ok" : "info");
+      });
+    }
+
+    const syncBadge = $("offline-sync-badge");
+    if (syncBadge) {
+      syncBadge.addEventListener("click", () => {
+        const count = loadOfflineQueue().length;
+        toast(count ? `${count} action(s) pending sync ⚡ Reconnecting will auto-sync.` : "Offline queue empty ⚡", "info");
+        flushOfflineQueue();
       });
     }
 
@@ -1397,6 +1542,11 @@
   }
 
   async function init() {
+    updateSyncBadge();
+    window.addEventListener("online", () => {
+      flushOfflineQueue();
+    });
+
     if (tg) {
       try {
         tg.ready();
@@ -1411,6 +1561,7 @@
     if (!auth || auth.authorized !== true) { maybePaywall(auth); return; }
 
     unlockApp(auth);
+    flushOfflineQueue();
   }
 
   function setConnectionStatus(status) {
@@ -1420,6 +1571,9 @@
     beacon.title = status === "live"
       ? "Real-time engine connected"
       : (status === "connecting" ? "Connecting to engine…" : "Engine offline");
+    if (status === "live") {
+      flushOfflineQueue();
+    }
   }
 
   function initEventSource() {

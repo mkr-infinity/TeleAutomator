@@ -265,6 +265,33 @@ h1.brand-name {
   100% { transform: scale(0.9); opacity: 0.8; }
 }
 
+/* ------------------------------------- Offline Optimistic Sync Badge (Phase 8) */
+.sync-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.16);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #FBBF24;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.25);
+  animation: sync-glow 1.8s infinite ease-in-out;
+}
+
+.sync-badge .sync-icon {
+  font-size: 11px;
+}
+
+@keyframes sync-glow {
+  0% { transform: scale(0.96); opacity: 0.85; }
+  50% { transform: scale(1.04); opacity: 1; filter: brightness(1.2); }
+  100% { transform: scale(0.96); opacity: 0.85; }
+}
+
 .logo {
   width: 56px;
   height: 56px;
@@ -1255,6 +1282,56 @@ h1.brand-name {
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   word-break: break-word;
+}
+
+/* ------------------------------------- Voice & Media Reply Badges (Phase 9) */
+.voice-badge, .media-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  width: fit-content;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  margin-bottom: 2px;
+}
+
+.voice-badge {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.22) 0%, rgba(5, 150, 105, 0.32) 100%);
+  border: 1px solid rgba(52, 211, 153, 0.5);
+  color: #34D399;
+}
+
+.media-badge {
+  background: linear-gradient(135deg, rgba(6, 182, 212, 0.22) 0%, rgba(2, 132, 199, 0.32) 100%);
+  border: 1px solid rgba(56, 189, 248, 0.5);
+  color: #38BDF8;
+}
+
+.voice-wave {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 12px;
+}
+
+.wave-bar {
+  width: 2.5px;
+  background: #34D399;
+  border-radius: 999px;
+  animation: wave-bar-anim 1.2s infinite ease-in-out;
+}
+
+.wave-bar:nth-child(1) { height: 4px; animation-delay: 0.1s; }
+.wave-bar:nth-child(2) { height: 11px; animation-delay: 0.25s; }
+.wave-bar:nth-child(3) { height: 7px; animation-delay: 0.4s; }
+.wave-bar:nth-child(4) { height: 10px; animation-delay: 0.15s; }
+
+@keyframes wave-bar-anim {
+  0%, 100% { transform: scaleY(0.4); opacity: 0.6; }
+  50% { transform: scaleY(1.3); opacity: 1; }
 }
 
 /* ------------------------------------------- Approval Swipe Cards (Phase 2) */
