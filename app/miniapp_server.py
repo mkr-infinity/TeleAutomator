@@ -231,6 +231,7 @@ class MiniAppAPI:
             "paused_remaining_sec": int(paused),
             "emergency": emergency,
             "quiet_hours": in_quiet,
+            "quiet_hours_enabled": getattr(ctx.safety, "quiet_hours_enabled", ctx.db.get_state("quiet_hours_enabled", "1") == "1"),
             "quiet_hours_start": qh_start,
             "quiet_hours_end": qh_end,
             "quiet_hours_schedule": f"{_format_ampm(qh_start)} – {_format_ampm(qh_end)} IST",

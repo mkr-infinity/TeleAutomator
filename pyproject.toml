@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "teleautomator"
-version = "2.9.0"
+version = "3.0.2"
 description = "AI-powered Telegram userbot & personal account automation assistant with Material 3 Mini App."
 readme = "README.md"
 authors = [{ name = "Mohammad Kaif Raja (mkr-infinity)" }]

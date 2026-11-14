@@ -46,22 +46,25 @@ UNAUTHORIZED_MESSAGE = (
 )
 
 UNAUTHORIZED_MESSAGE_HTML = (
-    "🔒 <b>Access Restricted</b>\n"
+    "🔒 <b>ACCESS RESTRICTED</b>\n"
     "━━━━━━━━━━━━━━━━━━━━\n"
-    "✨ <b>TeleAutomator Control</b>\n\n"
-    "This control panel belongs to a private automation project. "
-    "Your Telegram account is not authorized yet.\n\n"
-    "💳 <b>Authorization Plan:</b>\n"
-    "• ⭐ <b>100 Telegram Stars</b> or 💎 <b>1 TON</b> (1 month access)\n\n"
-    "💬 <b>Get Access:</b>\n"
-    "Contact <b>@mkr_infinity</b> on Telegram with payment confirmation for instant authorization.\n"
+    "🤖 <b>TeleAutomator Control Bot</b>\n\n"
+    "This bot belongs to a private automation project.\n"
+    "Your Telegram account is currently <b>not authorized</b> to run commands.\n\n"
+    "💎 <b>Authorization Plans:</b>\n"
+    "• ⭐ <b>100 Telegram Stars</b> (1 Month Access)\n"
+    "• 💎 <b>1 TON</b> (1 Month Access)\n\n"
+    "📲 <b>How to Activate:</b>\n"
+    "1. Transfer Stars or TON to <b>@mkr_infinity</b>\n"
+    "2. Send your payment screenshot\n"
+    "3. Your account will receive instant authorization.\n"
     "━━━━━━━━━━━━━━━━━━━━"
 )
 
 SPAM_WARNING_MESSAGE = (
-    "⚠️ <b>Notice: Private System</b>\n\n"
-    "This bot is reserved for authorized project administrators.\n"
-    "To authorize your account, pay 100 Stars or 1 TON and contact <b>@mkr_infinity</b>."
+    "⚠️ <b>Notice: Private Automation System</b>\n\n"
+    "Commands from unauthorized accounts are strictly restricted.\n"
+    "To authorize your account, contact <b>@mkr_infinity</b> on Telegram."
 )
 
 AUTHORIZED_NOTICE = (
@@ -313,32 +316,65 @@ class BotControl:
                 logger.warning(f"Bot getMe failed: {e}")
         return self._me_cache or {}
 
-    async def send_message(self, chat_id: int, text: str, parse_markdown: bool = True, reply_markup: Optional[dict] = None) -> bool:
-        """Send a message via the Bot API (primary parse mode Markdown, HTML fallback).
-        `reply_markup` optionally attaches an inline keyboard (quick-action buttons)."""
+    async def send_message(
+        self,
+        chat_id: int,
+        text: str,
+        parse_markdown: bool = True,
+        parse_mode: Optional[str] = None,
+        reply_markup: Optional[dict] = None,
+    ) -> bool:
+        """Send a message via the Bot API.
+        Automatically selects Markdown or HTML based on content or explicit parse_mode,
+        with graceful fallback to clean text so raw formatting tags like <b> never leak."""
+        if parse_mode is None:
+            if "<" in text and ">" in text and any(t in text for t in ("<b>", "<i>", "<code>", "<a ", "<pre>")):
+                parse_mode = "HTML"
+            elif parse_markdown:
+                parse_mode = "Markdown"
+            else:
+                parse_mode = None
+
         payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
-        if parse_markdown:
-            payload["parse_mode"] = "Markdown"
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         if reply_markup is not None:
             payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+
         try:
             result = await self._call("sendMessage", payload)
             if result.get("ok"):
                 return True
         except Exception as e:
-            logger.debug(f"Bot sendMessage failed for {chat_id}: {e}")
-        # Fallback: retry as plain text (unparseable markdown entities are the usual cause)
-        if parse_markdown:
-            return await self.send_message(chat_id, text, parse_markdown=False, reply_markup=reply_markup)
-        try:
-            fb_payload: dict[str, Any] = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
-            if reply_markup is not None:
-                fb_payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
-            await self._call("sendMessage", fb_payload)
-            return True
-        except Exception as e:
-            logger.warning(f"Bot sendMessage fallback failed for {chat_id}: {e}")
-            return False
+            logger.debug(f"Bot sendMessage primary failed for {chat_id} (parse_mode={parse_mode}): {e}")
+
+        # Fallback for Markdown: retry as plain text (unparseable markdown entities are the usual cause)
+        if parse_mode == "Markdown":
+            try:
+                plain_payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
+                if reply_markup is not None:
+                    plain_payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+                res = await self._call("sendMessage", plain_payload)
+                if res.get("ok"):
+                    return True
+            except Exception:
+                pass
+
+        # Fallback for HTML: strip HTML tags so raw tags like <b> never leak as broken code
+        if parse_mode == "HTML":
+            try:
+                import re
+                clean_text = re.sub(r"<[^>]+>", "", text)
+                plain_payload = {"chat_id": chat_id, "text": clean_text}
+                if reply_markup is not None:
+                    plain_payload["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
+                res = await self._call("sendMessage", plain_payload)
+                return bool(res.get("ok"))
+            except Exception as e:
+                logger.warning(f"Bot sendMessage fallback failed for {chat_id}: {e}")
+                return False
+
+        return False
 
     async def register_commands(self) -> None:
         """Publish the FULL command menu (type '/' in the bot to get every command + description)."""
@@ -876,10 +912,10 @@ class BotControl:
             if miniapp_url:
                 buttons.append([{"text": "📱 Open Control Panel", "web_app": {"url": miniapp_url}}])
             contact_markup = {"inline_keyboard": buttons}
-            await self.send_message(chat_id, UNAUTHORIZED_MESSAGE_HTML, parse_markdown=False, reply_markup=contact_markup)
+            await self.send_message(chat_id, UNAUTHORIZED_MESSAGE_HTML, parse_mode="HTML", reply_markup=contact_markup)
             if strikes == 2:
                 await asyncio.sleep(2.0)
-                await self.send_message(chat_id, SPAM_WARNING_MESSAGE, parse_markdown=False, reply_markup=contact_markup)
+                await self.send_message(chat_id, SPAM_WARNING_MESSAGE, parse_mode="HTML", reply_markup=contact_markup)
         else:
             # Silently ignored until the user is added to authorized list (reduce Railway usage)
             if strikes == 3:

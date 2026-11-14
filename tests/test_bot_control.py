@@ -158,11 +158,11 @@ def test_editfix_and_ownreact_toggles(tmp_path: Path) -> None:
 def test_unauthorized_user_flow_strikes_then_ignored(tmp_path: Path) -> None:
     bot, _mgr, db = _make_bot(tmp_path, seed="111")
 
-    sent: list[tuple[int, str]] = []
+    sent: list[tuple[int, str, Optional[str]]] = []
 
     async def fake_call(method: str, payload: dict) -> dict:
         if method == "sendMessage":
-            sent.append((payload["chat_id"], payload["text"]))
+            sent.append((payload["chat_id"], payload["text"], payload.get("parse_mode")))
             return {"ok": True}
         return {"ok": True, "result": {}}
 
@@ -174,10 +174,11 @@ def test_unauthorized_user_flow_strikes_then_ignored(tmp_path: Path) -> None:
                 "message": {"text": "hello who are you", "chat": {"id": 777}, "from": {"id": 777, "is_bot": False}},
             }))
 
-    texts = [text for uid, text in sent if uid == 777]
-    assert len(texts) == 3  # friendly notice x2 (with @mkr_infinity contact), then spam warning
-    assert all("mkr_infinity" in text for text in texts)
-    assert any(SPAM_WARNING_MESSAGE in text for text in texts)
+    user_msgs = [(text, mode) for uid, text, mode in sent if uid == 777]
+    assert len(user_msgs) == 3  # friendly notice x2 (with @mkr_infinity contact), then spam warning
+    assert all("mkr_infinity" in text for text, _ in user_msgs)
+    assert any(SPAM_WARNING_MESSAGE in text for text, _ in user_msgs)
+    assert all(mode == "HTML" for _, mode in user_msgs)  # parse_mode HTML ensures <b> tags render properly
     assert db.get_state("bot_spam_counter_777") == "4"
 
 

@@ -186,41 +186,51 @@ h1, h2, h3 {
 .topbar {
   position: sticky;
   top: 0;
-  z-index: 20;
-  padding-top: env(safe-area-inset-top, 0px);
-  height: calc(52px + env(safe-area-inset-top, 0px));
-  background: rgba(11, 14, 20, 0.85);
-  -webkit-backdrop-filter: blur(18px) saturate(160%);
-  backdrop-filter: blur(18px) saturate(160%);
-  border-bottom: 1px solid var(--border-subtle);
+  z-index: 25;
+  margin: calc(env(safe-area-inset-top, 0px) + 8px) 12px 6px;
+  padding: 8px 14px;
+  min-height: 48px;
+  background: rgba(15, 20, 32, 0.76);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 18px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-left: 16px;
-  padding-right: 16px;
   max-width: 720px;
-  margin: 0 auto;
+  transition: all 0.25s ease;
+}
+
+@media (min-width: 744px) {
+  .topbar {
+    margin: calc(env(safe-area-inset-top, 0px) + 12px) auto 8px;
+  }
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 h1.brand-name {
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 700;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
+  color: #FFFFFF;
+  margin: 0;
 }
 
 .version {
-  font-size: var(--fs-small);
-  color: var(--faint);
+  font-size: 10px;
+  color: #94A3B8;
   background: rgba(255, 255, 255, 0.06);
-  padding: 2px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 1.5px 6px;
   border-radius: 999px;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 /* ------------------------------------- Real-time Connection Beacon (Phase 1) */
@@ -228,29 +238,30 @@ h1.brand-name {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   cursor: pointer;
+  margin-left: 2px;
 }
 
 .beacon-dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: var(--positive);
-  box-shadow: 0 0 8px var(--positive-bright);
-  transition: background 0.3s ease, box-shadow 0.3s ease;
+  background: #10B981;
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.5);
+  transition: all 0.3s ease;
 }
 
 .live-beacon.live .beacon-dot {
   background: #10B981;
-  box-shadow: 0 0 10px #34D399;
-  animation: beacon-pulse 2.2s infinite ease-in-out;
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.7);
+  animation: beacon-pulse 2.4s infinite ease-in-out;
 }
 
 .live-beacon.connecting .beacon-dot {
   background: #F59E0B;
-  box-shadow: 0 0 10px #FBBF24;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.7);
   animation: beacon-pulse 1.2s infinite ease-in-out;
 }
 
@@ -260,9 +271,8 @@ h1.brand-name {
 }
 
 @keyframes beacon-pulse {
-  0% { transform: scale(0.9); opacity: 0.8; }
-  50% { transform: scale(1.25); opacity: 1; filter: brightness(1.2); }
-  100% { transform: scale(0.9); opacity: 0.8; }
+  0%, 100% { transform: scale(0.9); opacity: 0.8; }
+  50% { transform: scale(1.15); opacity: 1; box-shadow: 0 0 10px rgba(52, 211, 153, 0.85); }
 }
 
 /* ------------------------------------- Offline Optimistic Sync Badge (Phase 8) */
@@ -307,20 +317,33 @@ h1.brand-name {
 }
 
 .whoami {
-  font-size: var(--fs-small);
-  color: var(--muted);
-  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+  color: #E2E8F0;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.whoami:empty {
+  display: none;
+}
+
 /* Canvas container: Mobile-first thumb-friendly column */
 .canvas {
   max-width: 720px;
   margin: 0 auto;
-  padding: 16px 14px calc(96px + env(safe-area-inset-bottom, 16px));
+  padding: 8px 14px calc(96px + env(safe-area-inset-bottom, 16px));
   position: relative;
   z-index: 1;
 }
@@ -727,6 +750,13 @@ h1.brand-name {
   background: var(--pill-neutral-bg);
   color: var(--pill-neutral-ink);
   border-color: rgba(148, 163, 184, 0.25);
+}
+
+.pill-inactive {
+  background: rgba(255, 255, 255, 0.05);
+  color: #94A3B8;
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: none;
 }
 
 /* ------------------------------------------------ Unified Executive Dashboard Hub Card */

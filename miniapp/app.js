@@ -62,7 +62,7 @@
       emergency: false, quiet_hours: false, safe_mode: false, chatty_global: 0.15, style: "casual",
       prompt: "Reply like a 22-year-old Delhi guy, short, lowercase, Hinglish words when natural.",
       owner_name: "Kaif", ai_engine: "Gemini", ai_model: "gemini-2.5-flash-lite", ai_base_url: "",
-      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "2.9.0",
+      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.2",
       auto_reactions: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
       thinking: "default", temperature: "0.7", lang: "english", max_tokens: "512",
       quiet_hours_start: "02:00", quiet_hours_end: "08:00", quiet_hours_schedule: "02:00 AM – 08:00 AM IST",
@@ -105,7 +105,7 @@
   };
 
   async function demoApi(path, body) {
-    if (path === "/api/auth") return { authorized: true, is_main: true, version: "2.9.0", user: { id: 555000111, name: "Kaif" } };
+    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.2", user: { id: 555000111, name: "Kaif" } };
     if (path === "/api/state") return DEMO_DATA.state;
     if (path === "/api/chats") return { chats: DEMO_DATA.chats, chatty_global: DEMO_DATA.state.chatty_global };
     if (path === "/api/pending") return { pending: DEMO_DATA.pending };
@@ -1182,13 +1182,32 @@
     // 1. Quiet Hours & Sleep (Phase 7)
     const qhStatus = $("qh-status-pill");
     if (qhStatus) {
-      qhStatus.textContent = s.quiet_hours ? "Sleeping" : "Scheduled";
-      qhStatus.className = `pill ${s.quiet_hours ? "pill-warning" : "pill-positive"}`;
+      if (s.quiet_hours_enabled === false) {
+        qhStatus.textContent = "Inactive";
+        qhStatus.className = "pill pill-inactive";
+      } else if (s.quiet_hours) {
+        qhStatus.textContent = "Sleeping";
+        qhStatus.className = "pill pill-warning";
+      } else {
+        qhStatus.textContent = "Active";
+        qhStatus.className = "pill pill-positive";
+      }
     }
     const qhStart = $("qh-start-input");
     const qhEnd = $("qh-end-input");
     if (qhStart && document.activeElement !== qhStart && s.quiet_hours_start) qhStart.value = s.quiet_hours_start;
     if (qhEnd && document.activeElement !== qhEnd && s.quiet_hours_end) qhEnd.value = s.quiet_hours_end;
+
+    const isQhEnabled = s.quiet_hours_enabled !== false;
+    const curWindow = `${s.quiet_hours_start || "02:00"} ${s.quiet_hours_end || "08:00"}`;
+    document.querySelectorAll("#qh-preset-carousel button").forEach((chip) => {
+      const qhVal = chip.dataset.qh;
+      if (qhVal === "off") {
+        chip.classList.toggle("active", !isQhEnabled);
+      } else {
+        chip.classList.toggle("active", isQhEnabled && qhVal === curWindow);
+      }
+    });
 
     // 2. Behavior Toggles
     const toggleMap = {
@@ -1464,7 +1483,13 @@
     hideLoading();
     $("paywall").classList.add("hidden");
     $("app").classList.remove("hidden");
-    $("whoami").textContent = auth.user && auth.user.name ? auth.user.name : "";
+    const uName = auth.user && auth.user.name ? auth.user.name : "";
+    if (uName) {
+      const uIcon = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" style="display:inline-block;vertical-align:-1px;margin-right:3px;flex-shrink:0"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
+      $("whoami").innerHTML = `${uIcon}${esc(uName)}`;
+    } else {
+      $("whoami").innerHTML = "";
+    }
     $("app-version").textContent = auth.version ? `v${auth.version}` : "";
     if (!wired) {
       wired = true;
@@ -1917,6 +1942,10 @@
       qhSave.addEventListener("click", () => {
         const start = ($("qh-start-input").value || "02:00").trim();
         const end = ($("qh-end-input").value || "08:00").trim();
+        if ($("qh-status-pill")) {
+          $("qh-status-pill").textContent = "Active";
+          $("qh-status-pill").className = "pill pill-positive";
+        }
         runAction("quiethours", { value: `on ${start} ${end}` });
       });
     }
@@ -1936,11 +1965,19 @@
         haptic("light");
         const qh = chip.dataset.qh;
         if (qh === "off") {
+          if ($("qh-status-pill")) {
+            $("qh-status-pill").textContent = "Inactive";
+            $("qh-status-pill").className = "pill pill-inactive";
+          }
           runAction("quiethours", { value: "off" });
         } else {
           const parts = qh.split(" ");
           if ($("qh-start-input")) $("qh-start-input").value = parts[0];
           if ($("qh-end-input")) $("qh-end-input").value = parts[1];
+          if ($("qh-status-pill")) {
+            $("qh-status-pill").textContent = "Active";
+            $("qh-status-pill").className = "pill pill-positive";
+          }
           runAction("quiethours", { value: `on ${qh}` });
         }
         document.querySelectorAll("#qh-preset-carousel button").forEach((c) => c.classList.remove("active"));

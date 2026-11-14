@@ -31,6 +31,7 @@ class FakePrivacy:
 
 class FakeSafety:
     is_emergency_stopped = False
+    quiet_hours_enabled = True
 
     def get_remaining_pause_seconds(self):
         return 0
@@ -213,6 +214,10 @@ def test_handle_state_and_activity(tmp_path):
     assert state["mode"]
     assert state["chats_allowed"] == 2
     assert "prompt" in state and "owner_name" in state
+    assert state["quiet_hours_enabled"] is True
+    ctx.safety.quiet_hours_enabled = False
+    assert api.handle_state()["quiet_hours_enabled"] is False
+    ctx.safety.quiet_hours_enabled = True
     # activity: real schema, one outgoing message
     with ctx.db._get_connection() as conn:
         conn.execute(
