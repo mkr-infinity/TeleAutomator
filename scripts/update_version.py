@@ -28,6 +28,7 @@ PYPROJECT_FILE = ROOT / "pyproject.toml"
 CITATION_FILE = ROOT / "CITATION.cff"
 INDEX_HTML = ROOT / "miniapp" / "index.html"
 APP_JS = ROOT / "miniapp" / "app.js"
+SW_JS = ROOT / "miniapp" / "sw.js"
 BANNER_SVG = ROOT / "assets" / "banner.svg"
 
 # Files/dirs never scanned (venvs, caches, git internals)
@@ -94,6 +95,16 @@ def sync_static_copies(version: str) -> None:
             print(f"✅ miniapp/app.js -> {version}")
         else:
             print(f"•  miniapp/app.js already at {version}")
+
+    # miniapp/sw.js (PWA offline cache version)
+    if SW_JS.exists():
+        sw = SW_JS.read_text(encoding="utf-8")
+        updated_sw = re.sub(r'(CACHE_NAME\s*=\s*"teleautomator-v)\d+\.\d+\.\d+"', rf'\g<1>{version}"', sw)
+        if updated_sw != sw:
+            SW_JS.write_text(updated_sw, encoding="utf-8")
+            print(f"✅ miniapp/sw.js -> v{version}")
+        else:
+            print(f"•  miniapp/sw.js already at v{version}")
 
     # assets/banner.svg branding text ("TELEAUTOMATOR vX.Y" — major.minor only)
     if BANNER_SVG.exists():

@@ -2130,5 +2130,12 @@
     }
   }
 
+  // Register Service Worker for Instant PWA Offline Loading
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("./sw.js").catch(() => {});
+    });
+  }
+
   init();
 })();

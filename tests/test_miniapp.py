@@ -606,5 +606,20 @@ def test_data_sync_actions_immediate_persistence(tmp_path):
     assert ctx.db.get_state("chat_chatty_-222") == "0.45"
 
 
+def test_service_worker_asset_and_registration():
+    miniapp_dir = Path(__file__).resolve().parent.parent / "miniapp"
+    sw_file = miniapp_dir / "sw.js"
+    assert sw_file.is_file()
+    sw_content = sw_file.read_text(encoding="utf-8")
+    assert "teleautomator-v3.0.2" in sw_content
+    assert "caches.open" in sw_content
+    assert "self.skipWaiting" in sw_content
+    assert "self.clients.claim" in sw_content
+
+    app_js = (miniapp_dir / "app.js").read_text(encoding="utf-8")
+    assert "serviceWorker.register" in app_js
+
+
+
 
 
