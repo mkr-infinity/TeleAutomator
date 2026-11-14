@@ -539,9 +539,19 @@
             <span class="maintenance-title"><svg class="section-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Crash-Loop Guard (Safe Mode)</span>
             <span class="maintenance-sub">Automatically protects account if rapid errors occur</span>
           </div>
-          <span class="pill pill-positive" id="safemode-badge">Protected</span>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="pill pill-positive" id="safemode-badge">Protected</span>
+            <button type="button" class="btn small" id="btn-reset-safemode" style="display:none;">Reset</button>
+          </div>
         </div>
-        <div class="inline-save">
+        <div class="maintenance-row" style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06);">
+          <div class="maintenance-info">
+            <span class="maintenance-title"><svg class="section-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> Emergency Kill-Switch</span>
+            <span class="maintenance-sub">Instantly halts all outbound replies and reactions</span>
+          </div>
+          <button type="button" class="btn small danger" id="btn-emergency-toggle">Halt Engine</button>
+        </div>
+        <div class="inline-save" style="margin-top:14px;">
           <button type="button" class="btn" id="btn-backup-db"><svg class="btn-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Backup Database</button>
           <button type="button" class="btn danger" id="btn-clear-context"><svg class="btn-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="m18 15-6-6M4 20l7.5-7.5M14 6l4 4M10 2l12 12M2 22l6-1 5-5-5-5-5 5-1 6z"/></svg> Clear AI Memory</button>
         </div>

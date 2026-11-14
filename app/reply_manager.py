@@ -64,6 +64,9 @@ class ReplyManager(CommandRouterMixin):
         self._debounce_first_time: dict[int, float] = {}
         self._chat_send_locks: dict[int, asyncio.Lock] = {}
         self._pending_deferred_replies: dict[int, asyncio.Task] = {}
+        self._alert_send_lock: asyncio.Lock = asyncio.Lock()
+        self._last_alert_time: float = 0.0
+        self._alert_min_cooldown: float = 4.0
         self._next_reaction_cooldown: float = random.uniform(
             float(self.db.get_state("reaction_min_cooldown_seconds", str(getattr(config, "reaction_min_cooldown_seconds", 15.0)))),
             float(self.db.get_state("reaction_max_cooldown_seconds", str(getattr(config, "reaction_max_cooldown_seconds", 60.0)))),
@@ -114,6 +117,29 @@ class ReplyManager(CommandRouterMixin):
         if chat_id not in self._chat_send_locks:
             self._chat_send_locks[chat_id] = asyncio.Lock()
         return self._chat_send_locks[chat_id]
+
+    def get_telegram_message_link(self, chat_id: int, message_id: int = 0) -> str:
+        """Construct a direct Telegram message link for a chat and message ID."""
+        if not message_id or message_id <= 0:
+            return ""
+        username = ""
+        if self.db:
+            try:
+                meta = self.db.get_chat_metadata(chat_id) or {}
+                username = meta.get("username", "")
+            except Exception:
+                pass
+        if username:
+            u = username.lstrip("@")
+            return f"https://t.me/{u}/{message_id}"
+        if chat_id < 0:
+            s = str(chat_id)
+            if s.startswith("-100"):
+                clean_id = s[4:]
+            else:
+                clean_id = str(abs(chat_id))
+            return f"https://t.me/c/{clean_id}/{message_id}"
+        return f"tg://openmessage?user_id={chat_id}&message_id={message_id}"
 
     async def sync_owner_name_from_telegram(self) -> str:
         """Fetch current name from Telegram account and update owner persona name.
@@ -464,6 +490,7 @@ class ReplyManager(CommandRouterMixin):
                         error_msg=f"AI provider/model failed (provider='{provider}', all fallbacks exhausted): {e}",
                         incoming_text=clean_text,
                         force=True,
+                        message_id=message_id,
                     )
                 return
 
@@ -486,6 +513,7 @@ class ReplyManager(CommandRouterMixin):
                     sender_name=sender_name,
                     error_msg="Empty or None response from AI engine; reply was dropped safely.",
                     incoming_text=clean_text,
+                    message_id=message_id,
                 )
             return
 
@@ -531,6 +559,7 @@ class ReplyManager(CommandRouterMixin):
                 sender_name=sender_name,
                 incoming_text=clean_text,
                 draft_text=draft,
+                message_id=message_id,
             )
             return
 
@@ -557,6 +586,7 @@ class ReplyManager(CommandRouterMixin):
                     sender_name=sender_name,
                     incoming_text=clean_text,
                     draft_text=draft,
+                    message_id=message_id,
                 )
                 return
 
@@ -599,6 +629,7 @@ class ReplyManager(CommandRouterMixin):
                     sender_name=sender_name,
                     error_msg=f"Auto-reply suppressed by safety guard: {reason}",
                     incoming_text=clean_text,
+                    message_id=message_id,
                 )
                 return
 
@@ -862,6 +893,7 @@ class ReplyManager(CommandRouterMixin):
         sender_name: str,
         incoming_text: str,
         draft_text: str,
+        message_id: int = 0,
     ) -> None:
         """Notify the main user via the control channel (bot, fallback Saved Messages)."""
         if not self._client and self.bot_control is None:
@@ -874,29 +906,42 @@ class ReplyManager(CommandRouterMixin):
         if is_quiet:
             return
 
+        msg_link = self.get_telegram_message_link(chat_id, message_id)
+        link_line = f"\n• *Message Link:* [Open in Telegram]({msg_link})" if msg_link else ""
         notification = (
             f"📝 *Pending Approval #{approval_id}*\n"
             f"• *Chat:* {chat_title} (`{chat_id}`)\n"
-            f"• *From:* {sender_name}\n"
+            f"• *From:* {sender_name}{link_line}\n"
             f"• *Incoming:* \"{incoming_text[:200]}\"\n"
             f"• *Suggested Reply:* \"{draft_text}\"\n\n"
             f"Send `/approve {approval_id}` to send, or `/reject {approval_id}` to discard."
         )
         try:
-            # With the control bot active, approvals arrive as one-tap ✅/❌ inline buttons
-            if self.bot_control is not None:
-                try:
-                    if await self.bot_control.send_approval_card(notification, approval_id):
-                        return
-                    logger.warning("Bot approval card failed; falling back to the control-alert path.")
-                except Exception as e:
-                    logger.warning(f"Bot approval card error ({e}); falling back to the control-alert path.")
-            await self._send_control_alert(notification)
+            async with self._alert_send_lock:
+                now = time.time()
+                elapsed = now - self._last_alert_time
+                if self._last_alert_time > 0 and elapsed < self._alert_min_cooldown:
+                    wait_s = self._alert_min_cooldown - elapsed
+                    logger.info(f"[ALERT COOLDOWN] Waiting {wait_s:.1f}s before sending next approval card.")
+                    await asyncio.sleep(wait_s)
+
+                sent_ok = False
+                # With the control bot active, approvals arrive as one-tap ✅/❌ inline buttons
+                if self.bot_control is not None:
+                    try:
+                        sent_ok = await self.bot_control.send_approval_card(notification, approval_id)
+                    except Exception as e:
+                        logger.warning(f"Bot approval card error ({e}); falling back to the control-alert path.")
+                        sent_ok = False
+                if not sent_ok:
+                    sent_ok = await self._send_control_alert_unlocked(notification)
+                if sent_ok:
+                    self._last_alert_time = time.time()
         except Exception as e:
             logger.error(f"Failed to send approval notification via control channel: {e}")
 
-    async def _send_control_alert(self, text: str, parse_markdown: bool = True) -> bool:
-        """Send a control-channel alert strictly through the bot control channel."""
+    async def _send_control_alert_unlocked(self, text: str, parse_markdown: bool = True) -> bool:
+        """Internal worker to dispatch alert message without re-acquiring alert lock."""
         if self.bot_control is not None:
             try:
                 return await self.bot_control.send_alert(text)
@@ -913,6 +958,21 @@ class ReplyManager(CommandRouterMixin):
                 return False
         return False
 
+    async def _send_control_alert(self, text: str, parse_markdown: bool = True) -> bool:
+        """Send a control-channel alert strictly through the bot control channel with lock & cooldown."""
+        async with self._alert_send_lock:
+            now = time.time()
+            elapsed = now - self._last_alert_time
+            if self._last_alert_time > 0 and elapsed < self._alert_min_cooldown:
+                wait_s = self._alert_min_cooldown - elapsed
+                logger.info(f"[ALERT COOLDOWN] Waiting {wait_s:.1f}s before sending next alert to avoid rapid bursts.")
+                await asyncio.sleep(wait_s)
+
+            res = await self._send_control_alert_unlocked(text, parse_markdown=parse_markdown)
+            if res:
+                self._last_alert_time = time.time()
+            return res
+
     async def _notify_issue_to_saved_messages(
         self,
         chat_id: int,
@@ -921,6 +981,7 @@ class ReplyManager(CommandRouterMixin):
         error_msg: str,
         incoming_text: str = "",
         force: bool = False,
+        message_id: int = 0,
     ) -> None:
         """Send internal error/issue alerts to the control channel (bot main user, fallback Saved Messages)."""
         if not self._client and self.bot_control is None:
@@ -947,10 +1008,12 @@ class ReplyManager(CommandRouterMixin):
             target_name = chat_title or f"Chat {chat_id}"
             sender = f" from *{sender_name}*" if sender_name else ""
             incoming_snippet = f"\n• *Incoming:* \"{incoming_text[:120]}\"" if incoming_text else ""
+            msg_link = self.get_telegram_message_link(chat_id, message_id)
+            link_line = f"\n• *Message Link:* [Open in Telegram]({msg_link})" if msg_link else ""
             alert = (
                 f"⚠️ *TeleAutomator Alert* — _never sent to chat_\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"• *Destination:* {target_name} (`{chat_id}`){sender}\n"
+                f"• *Destination:* {target_name} (`{chat_id}`){sender}{link_line}\n"
                 f"• *Issue:* `{error_msg}`{incoming_snippet}\n"
                 f"• *Safety:* Suppressed safely — zero error text or fallbacks reached the recipient."
             )
@@ -1663,14 +1726,25 @@ class ReplyManager(CommandRouterMixin):
                     reading_delay = max(0.0, needed_cooldown_wait - typing_duration)
                     total_delay = reading_delay + typing_duration
                 else:
-                    # Adaptive delay: randomly choose typing indicator duration between 3.0 and 10.0 seconds
-                    typing_duration = round(random.uniform(3.0, 10.0), 1)
+                    # Suggestion 2: Context-Aware Delay Scaling (3-10s scaled to message length)
+                    word_count = len(first_part.split())
+                    char_count = len(first_part)
+                    if word_count <= 4 or char_count < 25:
+                        base_typing = random.uniform(3.0, 5.0)
+                    elif word_count <= 12 or char_count < 70:
+                        base_typing = random.uniform(5.0, 7.5)
+                    else:
+                        base_typing = random.uniform(7.5, 10.0)
+                    typing_duration = round(min(10.0, max(3.0, base_typing)), 1)
+
+                    # Suggestion 1: Simulate Online/Offline Activity Rhythm (2-5s reading pause before typing begins)
+                    natural_reading_pause = round(random.uniform(2.0, 4.5), 1)
                     calc_delay = self.calculate_adaptive_delay(chat_id, first_part, is_mention=is_mention)
                     target_wait = max(needed_cooldown_wait, calc_delay, chat_min if chat_min > 0 else 0.0)
                     if target_wait > typing_duration:
-                        reading_delay = round(target_wait - typing_duration, 1)
+                        reading_delay = max(natural_reading_pause, round(target_wait - typing_duration, 1))
                     else:
-                        reading_delay = 0.0
+                        reading_delay = natural_reading_pause
                     total_delay = reading_delay + typing_duration
 
                 if total_delay > 0:
@@ -1929,6 +2003,7 @@ class ReplyManager(CommandRouterMixin):
                         sender_name="",
                         error_msg=f"Telegram FloodWaitError: Pausing automated replies for {wait_time}s as required by Telegram anti-spam guidelines.",
                         incoming_text=text,
+                        message_id=reply_to_msg_id,
                     )
                     return False
 
@@ -1945,6 +2020,7 @@ class ReplyManager(CommandRouterMixin):
                         sender_name="",
                         error_msg="Telegram PeerFloodError: Account was restricted by Telegram anti-spam (@SpamBot). All automated actions stopped safely.",
                         incoming_text=text,
+                        message_id=reply_to_msg_id,
                     )
                     return False
 
@@ -1956,5 +2032,6 @@ class ReplyManager(CommandRouterMixin):
                     sender_name="",
                     error_msg=f"Message delivery error: {e}",
                     incoming_text=text,
+                    message_id=reply_to_msg_id,
                 )
                 return False

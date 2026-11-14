@@ -778,8 +778,16 @@ class CommandRouterMixin:
             if len(cmd_parts) < 2:
                 return (
                     "❌ /clearcontext failed\n"
-                    "Missing: Chat ID\n"
-                    "Fix: /clearcontext <chat_id> (e.g. /clearcontext -1001234567890)"
+                    "Missing: Chat ID or 'all'\n"
+                    "Fix: /clearcontext <chat_id> or /clearcontext all"
+                )
+            target_arg = cmd_parts[1].strip().lower()
+            if target_arg in ("all", "*"):
+                count = self.db.clear_all_chat_context()
+                return (
+                    f"🧹 Cleared {count} cached context messages across all chats.\n"
+                    "The AI will start fresh on the next message without referencing older context.\n"
+                    "_(Zero Telegram messages were touched or deleted)._"
                 )
             try:
                 target_cid = int(cmd_parts[1])
@@ -792,8 +800,8 @@ class CommandRouterMixin:
             except ValueError:
                 return (
                     "❌ /clearcontext failed\n"
-                    "Missing: Valid integer chat ID\n"
-                    "Fix: /clearcontext <chat_id> (e.g. /clearcontext -1001234567890)"
+                    "Missing: Valid integer chat ID or 'all'\n"
+                    "Fix: /clearcontext <chat_id> (e.g. /clearcontext -1001234567890) or /clearcontext all"
                 )
 
         if cmd in ("/syncpin", "/syncpins"):

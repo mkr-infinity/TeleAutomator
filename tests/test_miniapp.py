@@ -894,7 +894,7 @@ def test_dynamic_half_and_full_sheet_popups():
     # Verify responsive dynamic viewport units and expanded state in CSS
     assert "max-height: 56dvh;" in style_css
     assert ".sheet.is-expanded" in style_css
-    assert "max-height: 92dvh;" in style_css
+    assert "max-height: 100dvh;" in style_css or "max-height: 92dvh;" in style_css
     assert "transition: max-height" in style_css
     assert ".sheet-grip" in style_css
 

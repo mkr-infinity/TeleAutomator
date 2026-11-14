@@ -574,6 +574,20 @@ class Database:
             cursor = conn.execute("DELETE FROM chat_messages WHERE chat_id = ?", (chat_id,))
             return cursor.rowcount
 
+    def clear_all_chat_context(self) -> int:
+        """Clear locally cached conversation context and summaries across all chats.
+        
+        CRITICAL SAFETY: This ONLY clears local SQLite context cache used for AI prompts;
+        it NEVER deletes any Telegram messages on Telegram servers.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute("DELETE FROM chat_messages")
+            try:
+                conn.execute("DELETE FROM chat_summaries")
+            except Exception:
+                pass
+            return cursor.rowcount
+
     def prune_chat_messages(self, chat_id: int, keep_last: int = 50) -> None:
         """Prune old cached chat context keeping only the last N messages."""
         with self._get_connection() as conn:

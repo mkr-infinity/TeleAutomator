@@ -227,3 +227,121 @@ def test_concurrent_replies_serialized_by_lock(tmp_path: Path):
         assert any("sleep_5.0" in ev for ev in order_of_events)
 
     asyncio.run(_run())
+
+
+def test_alert_includes_message_link_and_cooldown(tmp_path: Path):
+    """Verify alerts include direct message links and enforce cooldown between rapid alert messages."""
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+        db = Database(tmp_path / "app_alert.db")
+        safety = SafetyManager(cfg, db)
+        privacy = PrivacyManager(cfg, database=db)
+        generator = ReplyGenerator(cfg, database=db)
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+        mgr.set_mode("restricted_auto")
+        mgr._alert_min_cooldown = 4.0
+
+        chat_id = -1001234567890
+        message_id = 9988
+        link = mgr.get_telegram_message_link(chat_id, message_id)
+        assert "https://t.me/c/1234567890/9988" == link
+
+        sent_alerts = []
+        mock_client = AsyncMock()
+        async def fake_send_message(target, text, parse_mode=None):
+            sent_alerts.append(text)
+            return MagicMock(id=len(sent_alerts))
+
+        mock_client.send_message = fake_send_message
+        mgr.set_telegram_client(mock_client)
+
+        slept = []
+        async def fake_sleep(s):
+            slept.append(s)
+
+        with patch("asyncio.sleep", side_effect=fake_sleep):
+            # Send two issue alerts rapidly
+            await mgr._notify_issue_to_saved_messages(
+                chat_id=chat_id,
+                chat_title="Crypto Group",
+                sender_name="Bob",
+                error_msg="Testing alert",
+                incoming_text="hello",
+                force=False,
+                message_id=message_id,
+            )
+            await mgr._notify_issue_to_saved_messages(
+                chat_id=chat_id,
+                chat_title="Crypto Group",
+                sender_name="Bob",
+                error_msg="Second alert",
+                incoming_text="hello again",
+                force=False,
+                message_id=message_id,
+            )
+
+        assert len(sent_alerts) == 2
+        # Verify message link was included in alert
+        assert "t.me/c/1234567890/9988" in sent_alerts[0]
+        # Verify alert cooldown was enforced
+        assert len(slept) >= 1
+        assert slept[0] > 0
+
+    asyncio.run(_run())
+
+
+def test_trailing_funny_emoji_stripped_for_normal_statements(tmp_path: Path):
+    """Verify that unneeded trailing funny emojis are stripped for normal statements, but kept for jokes/laughter."""
+    from app.ai.prompt_manager import PromptManager
+    pm = PromptManager(owner_name="Danish")
+
+    # 1. Normal everyday statement ending with trailing funny emojis -> stripped
+    normal_input = "What time is the meeting?"
+    ai_raw = "It starts around 4pm 😂"
+    cleaned = pm.clean_reply(ai_raw, incoming_text=normal_input)
+    assert cleaned == "It starts around 4pm"
+
+    ai_raw2 = "haan check karta hu 🤣🤣💀"
+    cleaned2 = pm.clean_reply(ai_raw2, incoming_text="bhai link bhejna")
+    assert cleaned2 == "haan check karta hu"
+
+    # 2. Genuine humor / laughter in incoming message -> preserved
+    funny_input = "Bro that meme was hilarious lol 😂"
+    ai_funny = "sahi me crazy tha 😂"
+    cleaned_funny = pm.clean_reply(ai_funny, incoming_text=funny_input)
+    assert "😂" in cleaned_funny
+
+
+def test_miniapp_maintenance_and_safety_actions(tmp_path: Path):
+    """Verify miniapp server correctly executes maintenance actions (clearcontext all, safemode_reset, emergencystop)."""
+    from app.miniapp_server import MiniAppAPI
+    db = Database(tmp_path / "app_maint.db")
+    cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
+    safety = SafetyManager(cfg, db)
+    privacy = PrivacyManager(cfg, database=db)
+    generator = ReplyGenerator(cfg, database=db)
+    mgr = ReplyManager(cfg, db, safety, privacy, generator)
+
+    bridge = MiniAppAPI(ctx=MagicMock(db=db, reply_manager=mgr, loop=None))
+
+    # Add mock messages into db
+    db.record_chat_message(101, 1, 100, "Alice", "test msg", False)
+    assert db.count_chat_messages(101) >= 1
+
+    # 1. Test clearcontext all
+    res = bridge.handle_action(user_id=123, action="clearcontext", params={"chat_id": "all"})
+    assert res["ok"] is True
+    assert "Cleared" in res["response"]
+    assert db.count_chat_messages(101) == 0
+
+    # 2. Test safemode_reset
+    db.set_state("safe_mode_active", "1")
+    res_sm = bridge.handle_action(user_id=123, action="safemode_reset", params={})
+    assert res_sm["ok"] is True
+    assert db.get_state("safe_mode_active") == "0"
+
+    # 3. Test emergencystop
+    res_stop = bridge.handle_action(user_id=123, action="emergencystop", params={"value": "on"})
+    assert res_stop["ok"] is True
+    assert safety.is_emergency_stopped is True
+

@@ -65,11 +65,12 @@ CRITICAL TEXTING RULES:
 9. NEVER USE QUESTION MARKS:
    - NEVER use question marks (?). State things casually.
 
-10. EMOJI PLACEMENT (NATURAL, UNLIMITED, YOUR CHOICE):
-   - You may use ANY emoji Telegram users can type — you decide which one fits the meaning. No fixed list.
-   - Match the chat's vibe and humor: a hyped human may stack several, a calm one sends none. Never force an emoji, never cap yourself artificially.
-   - Vary placement like a real human: end of line, middle, a burst, or often NO emoji at all.
-   - ONE EMOTION PER REPLY: never mix two feelings in the same message (never combine laughing and sad/crying emojis together).
+10. EMOJI RESTRAINT & PLACEMENT (MOST MESSAGES HAVE ZERO EMOJIS):
+   - Real humans do NOT tack a laughing or funny emoji (😂, 🤣, 💀, 😭) onto every message.
+   - Most messages (70-80%+) should have NO emoji at all. Write plain, natural casual text.
+   - NEVER end messages with a funny emoji out of habit, nervousness, or as filler.
+   - Only use a funny emoji if someone made an explicit joke or there is genuine humor. Normal talk, everyday answers, and regular statements must have NO laughing emojis.
+   - ONE EMOTION PER REPLY: never mix two conflicting feelings in the same message.
 
 11. FOLLOW THE SYSTEM PROMPT & NEVER ADMIT BEING AI:
    - Obey all of these instructions strictly in every reply.
@@ -263,7 +264,7 @@ class PromptManager:
                 f"- CASUAL MOBILE TEXTING (NO SLANG OVERLOAD): Casual texting tone without slang overload.\n"
                 f"- NO CODE: Never write code, paths, or brackets [] {{}}, no question marks (?).\n"
                 f"- Never write 'haha', 'lol', or 'lmao' as text (use emoji reactions or real thoughts).\n"
-                f"- EMOJIS: natural human emoji use — as many or as few as the vibe calls for (stacked bursts or none), ANY Telegram emoji, you pick which and where, varied placement, one emotion per reply (never mix two feelings)\n"
+                f"- EMOJI RESTRAINT: Most messages (70-80%+) must have ZERO emojis. Real humans do NOT tack a laughing or funny emoji (😂, 🤣, 💀, 😭) at the end of every message. NEVER end messages with funny emojis out of habit or as filler. Only use an emoji if someone is cracking an actual joke or there is genuine humor. Normal statements and answers have NO emoji.\n"
                 f"- IDENTITY: You are {self.owner_name}, a real human. Never say/imply being an AI, bot, or assistant, and always follow these system instructions.\n"
                 f"- PRIVACY: Never promise money or definite personal plans. Say u will check and let them know.\n"
                 f"- TIME AWARENESS: Be aware of Indian Standard Time (IST) and appropriate greeting periods (morning/afternoon/evening/night).\n"
@@ -296,6 +297,7 @@ class PromptManager:
         sender_name: Optional[str] = None,
         custom_limit: Optional[int] = None,
         allow_mentions: bool = False,
+        incoming_text: Optional[str] = None,
     ) -> str:
         """Remove any accidental AI meta-commentary, labels, brackets, or robotic filler."""
         text = raw_text.strip().strip('"').strip("'")
@@ -391,6 +393,12 @@ class PromptManager:
 
         # Remove immediate word-level repetitions (e.g. "bro bro" -> "bro", "haan haan" -> "haan")
         text = re.sub(r'\b(\w+)(?:\s+\1\b)+', r'\1', text, flags=re.IGNORECASE)
+
+        # Remove trailing funny emojis tacked on out of habit (e.g. text + " 😂" or " 🤣" or " 💀")
+        # unless incoming text was explicitly humorous/laughing
+        incoming_is_funny = bool(re.search(r"\b(?:haha|lol|lmao|rofl|joke|funny|chuckle|meme|xd)\b|[😂🤣💀😆😹]", incoming_text or "", re.IGNORECASE))
+        if not incoming_is_funny:
+            text = re.sub(r"\s*[😂🤣💀😹🤪😆]+(?:\s*[😂🤣💀😹🤪😆]+)*\s*$", "", text).strip()
 
         # NATURAL LENGTH ENFORCEMENT: humans sometimes split a thought across 2 short lines,
         # so a short 2-line reply is kept intact; longer output falls back to one line.
@@ -557,9 +565,9 @@ class PromptManager:
             f"Language Rule: {lang_instruction}\n"
             f"Context Rule: {context_instruction}\n"
             f"Engagement Rule: {engagement_instruction}\n"
-            f"Punctuation & Emojis: Pick ANY emoji that matches the meaning of your words. Use as many or as few as the vibe genuinely calls for (a hyped human stacks several, a calm one sends none) — vary placement: end, mid-line, or none. Only ONE emotion per message — never mix two feelings. NEVER use question marks (?).\n"
+            f"Punctuation & Emojis: Most messages (70-80%+) should have NO emoji at all. Never tack a laughing/funny emoji (😂, 🤣, 💀, 😭) at the end of normal messages as filler. Only use an emoji when the conversation is genuinely funny or humorous. NEVER use question marks (?).\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Reply as {self.owner_name} ({lang_tail}, casual human mobile texting, natural human length — one word to one short line as the conversation calls for, no useless conversation, mirror the humor slang and energy of the chat exactly, never explain like an AI, never write any user names or @usernames [swiping to reply links the message], no 'haha'/'lol' text, read context first and build on it, natural typing, no question marks, natural emoji use that fits the vibe with varied placement, one emotion per reply, no repetition, no canned phrases, no AI talk, no code, no brackets):"
+            f"Reply as {self.owner_name} ({lang_tail}, casual human mobile texting, natural human length — one word to one short line as the conversation calls for, no useless conversation, mirror the humor slang and energy of the chat exactly, never explain like an AI, never write any user names or @usernames [swiping to reply links the message], no 'haha'/'lol' text, read context first and build on it, natural typing, no question marks, emoji restraint [most messages have zero emojis, never end with trailing funny emojis as filler], one emotion per reply, no repetition, no canned phrases, no AI talk, no code, no brackets):"
         )
         return "\n\n".join(parts)
