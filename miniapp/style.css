@@ -451,6 +451,34 @@ h1.brand-name {
   box-shadow: 0 2px 6px rgba(239, 68, 68, 0.55);
 }
 
+/* ------------------------------------------------------------- Screens & Layout */
+.screen {
+  min-height: 100vh;
+  min-height: 100dvh;
+  width: 100%;
+}
+
+.faint {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.behavior-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.kpi[data-goto], .usage-cell[data-goto] {
+  cursor: pointer;
+  transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.18s ease;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.kpi[data-goto]:active, .usage-cell[data-goto]:active {
+  transform: scale(0.97);
+}
+
 /* ------------------------------------------------------------- Paywall */
 .paywrap {
   min-height: calc(100vh - 52px);

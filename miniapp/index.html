@@ -95,10 +95,10 @@
       </div>
 
       <div class="kpi-strip" id="kpi-strip">
-        <div class="kpi"><p class="kpi-label">Chats allowed</p><p class="kpi-value" id="kpi-chats">—</p></div>
-        <div class="kpi"><p class="kpi-label">Pending drafts</p><p class="kpi-value" id="kpi-pending">—</p></div>
-        <div class="kpi"><p class="kpi-label">Replies 24h</p><p class="kpi-value" id="kpi-replies">—</p></div>
-        <div class="kpi"><p class="kpi-label">AI Engine</p><p class="kpi-value" id="kpi-engine">—</p></div>
+        <div class="kpi" data-goto="chats" role="button" tabindex="0" aria-label="Go to allowed chats"><p class="kpi-label">Chats allowed</p><p class="kpi-value" id="kpi-chats">—</p></div>
+        <div class="kpi" data-goto="approvals" role="button" tabindex="0" aria-label="Go to pending drafts"><p class="kpi-label">Pending drafts</p><p class="kpi-value" id="kpi-pending">—</p></div>
+        <div class="kpi" data-goto="activity" role="button" tabindex="0" aria-label="View recent replies"><p class="kpi-label">Replies 24h</p><p class="kpi-value" id="kpi-replies">—</p></div>
+        <div class="kpi" data-goto="more" role="button" tabindex="0" aria-label="Go to AI engine settings"><p class="kpi-label">AI Engine</p><p class="kpi-value" id="kpi-engine">—</p></div>
       </div>
 
       <!-- AI Engine & System Status Card -->
@@ -111,19 +111,19 @@
           <span class="pill pill-neutral" id="ov-status-pill">Active</span>
         </div>
         <div class="usage-grid">
-          <div class="usage-cell">
+          <div class="usage-cell" data-goto="more" role="button" tabindex="0" aria-label="Go to active model settings">
             <span class="usage-cell-label">Active Model</span>
             <span class="usage-cell-val" id="ov-model-val">—</span>
           </div>
-          <div class="usage-cell">
+          <div class="usage-cell" data-goto="persona" role="button" tabindex="0" aria-label="Go to speaking style settings">
             <span class="usage-cell-label">Speaking Style</span>
             <span class="usage-cell-val" id="ov-persona-val">Casual</span>
           </div>
-          <div class="usage-cell">
+          <div class="usage-cell" data-goto="more" role="button" tabindex="0" aria-label="Go to quiet hours schedule">
             <span class="usage-cell-label">Quiet Hours</span>
             <span class="usage-cell-val" id="ov-qh-sched">02:00 – 08:00 IST</span>
           </div>
-          <div class="usage-cell">
+          <div class="usage-cell" data-goto="activity" role="button" tabindex="0" aria-label="View total request activity">
             <span class="usage-cell-label">Total Requests</span>
             <span class="usage-cell-val num" id="ov-req-count">0</span>
           </div>
@@ -151,14 +151,14 @@
 
       <h2 class="section-h">Quick actions</h2>
       <div class="actions">
-        <button class="btn primary" id="act-pause">Pause 30m</button>
-        <button class="btn" id="act-resume">Resume</button>
-        <button class="btn danger" id="act-stop">Stop</button>
-        <button class="btn" id="act-mode">Mode</button>
+        <button type="button" class="btn primary" id="act-pause">Pause 30m</button>
+        <button type="button" class="btn" id="act-resume">Resume</button>
+        <button type="button" class="btn danger" id="act-stop">Stop</button>
+        <button type="button" class="btn" id="act-mode">Mode</button>
       </div>
       <p class="field-hint" id="act-hint">Pause holds every automated reply. Stop halts all activity until you resume.</p>
 
-      <h2 class="section-h">Recent replies <button class="linklike" id="goto-activity">View all</button></h2>
+      <h2 class="section-h">Recent replies <button type="button" class="linklike" id="goto-activity">View all</button></h2>
       <div class="card list" id="ov-activity"></div>
     </section>
 
@@ -168,7 +168,7 @@
       <p class="view-sub">Where the account talks, and how much in each one.</p>
       <div class="allow-row">
         <input type="text" id="allow-id" inputmode="numeric" placeholder="Chat ID, e.g. -1001234567890">
-        <button class="btn primary" id="allow-btn">Allow</button>
+        <button type="button" class="btn primary" id="allow-btn">Allow</button>
       </div>
       <div class="card list" id="chat-list"></div>
     </section>
@@ -185,13 +185,13 @@
         </div>
         <div class="preset-carousel" id="preset-carousel" role="region" aria-label="Prompt Presets"></div>
         <textarea id="pf-prompt" rows="4" placeholder="Leave empty to use the built-in persona"></textarea>
-        <button class="btn primary" id="pf-save">Save prompt</button>
+        <button type="button" class="btn primary" id="pf-save">Save prompt</button>
       </div>
 
       <div class="card form">
         <label for="pf-name">Your name (identity the AI texts as)</label>
         <input type="text" id="pf-name" placeholder="Kaif">
-        <button class="btn primary" id="pf-name-save">Save name</button>
+        <button type="button" class="btn primary" id="pf-name-save">Save name</button>
       </div>
 
       <div class="card form">
@@ -217,7 +217,7 @@
       <h3 class="section-h">Access</h3>
       <div class="allow-row">
         <input type="text" id="auth-id" inputmode="numeric" placeholder="Telegram user ID">
-        <button class="btn primary" id="auth-add">Add user</button>
+        <button type="button" class="btn primary" id="auth-add">Add user</button>
       </div>
       <div class="card list" id="access-list"></div>
 
@@ -226,19 +226,19 @@
         <label for="ai-baseurl">Custom endpoint</label>
         <input type="text" id="ai-baseurl" placeholder="https://integrate.api.nvidia.com/v1">
         <div class="inline-save">
-          <button class="btn primary" id="ai-baseurl-save">Save endpoint</button>
-          <button class="btn" id="ai-fetch-models">Fetch models</button>
+          <button type="button" class="btn primary" id="ai-baseurl-save">Save endpoint</button>
+          <button type="button" class="btn" id="ai-fetch-models">Fetch models</button>
         </div>
 
         <label for="ai-key">API key</label>
         <input type="password" id="ai-key" placeholder="Paste a new key to replace">
-        <button class="btn primary" id="ai-key-save">Save key</button>
+        <button type="button" class="btn primary" id="ai-key-save">Save key</button>
 
         <label for="ai-model">Active model / rotation <span class="faint">(comma-separated)</span></label>
         <input type="text" id="ai-model" placeholder="gemini-2.5-flash-lite,gpt-4o-mini">
         <div class="inline-save">
-          <button class="btn primary" id="ai-model-save">Save model</button>
-          <button class="btn" id="ai-check">Check health</button>
+          <button type="button" class="btn primary" id="ai-model-save">Save model</button>
+          <button type="button" class="btn" id="ai-check">Check health</button>
         </div>
 
         <div class="model-picker-wrap">
@@ -258,7 +258,7 @@
         <label for="test-prompt">Test prompt / message</label>
         <div class="test-row">
           <input type="text" id="test-prompt" value="hello" placeholder="Send a message (e.g. hello)">
-          <button class="btn primary" id="btn-test-model">Send test</button>
+          <button type="button" class="btn primary" id="btn-test-model">Send test</button>
         </div>
         <p class="field-hint">Tests the model live. Automatically prunes dead models and saves working models to rotation.</p>
         <div id="test-results-box" class="test-results-box hidden">
@@ -416,7 +416,7 @@
 
   <!-- Material 3 Expressive Bottom Navigation -->
   <nav class="m3-bottom-nav tabbar" aria-label="Sections">
-    <button class="tab m3-nav-item active" data-view="overview" aria-label="Overview">
+    <button type="button" class="tab m3-nav-item active" data-view="overview" aria-label="Overview">
       <div class="m3-icon-wrap">
         <div class="m3-indicator"></div>
         <svg class="m3-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -428,7 +428,7 @@
       </div>
       <span class="m3-label">Overview</span>
     </button>
-    <button class="tab m3-nav-item" data-view="chats" aria-label="Chats">
+    <button type="button" class="tab m3-nav-item" data-view="chats" aria-label="Chats">
       <div class="m3-icon-wrap">
         <div class="m3-indicator"></div>
         <svg class="m3-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -437,7 +437,7 @@
       </div>
       <span class="m3-label">Chats</span>
     </button>
-    <button class="tab m3-nav-item" data-view="persona" aria-label="Persona">
+    <button type="button" class="tab m3-nav-item" data-view="persona" aria-label="Persona">
       <div class="m3-icon-wrap">
         <div class="m3-indicator"></div>
         <svg class="m3-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -447,7 +447,7 @@
       </div>
       <span class="m3-label">Persona</span>
     </button>
-    <button class="tab m3-nav-item" data-view="approvals" aria-label="Approvals">
+    <button type="button" class="tab m3-nav-item" data-view="approvals" aria-label="Approvals">
       <div class="m3-icon-wrap">
         <div class="m3-indicator"></div>
         <svg class="m3-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -458,7 +458,7 @@
       </div>
       <span class="m3-label">Approvals</span>
     </button>
-    <button class="tab m3-nav-item" data-view="more" aria-label="More">
+    <button type="button" class="tab m3-nav-item" data-view="more" aria-label="More">
       <div class="m3-icon-wrap">
         <div class="m3-indicator"></div>
         <svg class="m3-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

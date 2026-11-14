@@ -43,6 +43,10 @@
       prompt: "Reply like a 22-year-old Delhi guy, short, lowercase, Hinglish words when natural.",
       owner_name: "Kaif", ai_engine: "Gemini", ai_model: "gemini-2.5-flash-lite", ai_base_url: "",
       chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "2.9.0",
+      auto_reactions: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
+      thinking: "default", temperature: "0.7", lang: "dynamic", max_tokens: "512",
+      quiet_hours_start: "02:00", quiet_hours_end: "08:00", quiet_hours_schedule: "02:00 AM – 08:00 AM IST",
+      rules: ["pricing => We update our rates monthly, DM for catalog!", "help => How can I assist you today?"],
     },
     chats: [
       { id: 123456789, name: "Rohan Sharma", username: "@rohan_s", type: "Private", chatty: "", style: "", prompt: "", voice_profile: true, blocked: false },
@@ -88,13 +92,181 @@
     if (path === "/api/activity") return { activity: DEMO_DATA.activity };
     if (path === "/api/access") return { users: DEMO_DATA.access };
     if (path === "/api/commands") return { commands: DEMO_DATA.commands };
-    if (path === "/api/cmd") return { ok: true, response: "*Demo* command `/demo` ran against fixture data.\n\n• Nothing changed, this screen is a preview." };
+    if (path === "/api/models" || path === "/api/fetch_models") {
+      return {
+        ok: true,
+        models: [
+          "gemini-2.5-flash-lite",
+          "gemini-2.5-flash",
+          "gemini-2.5-pro",
+          "gpt-4o-mini",
+          "llama-3.3-70b-instruct"
+        ]
+      };
+    }
+    if (path === "/api/test_model") {
+      const model = (body && body.model) || "gemini-2.5-flash-lite";
+      return {
+        ok: true,
+        model,
+        response: "Hello! TeleAutomator AI engine is online and responding quickly in test mode.",
+        results: [
+          { model, status: "ok", latency: 142 }
+        ],
+        pruned_count: 0
+      };
+    }
+    if (path === "/api/cmd") {
+      const cmd = (body && body.command) || "";
+      if (cmd.includes("checkmodels")) {
+        return {
+          ok: true,
+          response: "✅ *Model Health Check*\n\n• `gemini-2.5-flash-lite`: Available (112ms)\n• `gemini-2.5-flash`: Available (148ms)\n• `gpt-4o-mini`: Available (195ms)\n\nAll candidate models healthy and rotating properly."
+        };
+      }
+      return { ok: true, response: `*Demo* command \`${esc(cmd || "/demo")}\` ran against fixture data.\n\n• Changes persisted locally for preview.` };
+    }
     if (path === "/api/action") {
       const a = body && body.action;
+      const p = (body && body.params) || {};
       if (a === "approve" || a === "reject") {
-        const i = DEMO_DATA.pending.findIndex((p) => String(p.id) === String(body.params.id));
+        const i = DEMO_DATA.pending.findIndex((item) => String(item.id) === String(p.id));
         if (i >= 0) DEMO_DATA.pending.splice(i, 1);
         DEMO_DATA.state.pending_count = DEMO_DATA.pending.length;
+        return { ok: true, response: a === "approve" ? "Draft approved and sent!" : "Draft rejected and discarded." };
+      }
+      if (a === "pause") {
+        DEMO_DATA.state.state = "paused";
+        DEMO_DATA.state.paused_remaining_sec = (p.minutes || 30) * 60;
+        return { ok: true, response: `Paused for ${p.minutes || 30} minutes.` };
+      }
+      if (a === "resume") {
+        DEMO_DATA.state.state = "active";
+        DEMO_DATA.state.paused_remaining_sec = 0;
+        return { ok: true, response: "Automation resumed." };
+      }
+      if (a === "stop") {
+        DEMO_DATA.state.state = "stopped";
+        DEMO_DATA.state.emergency = true;
+        return { ok: true, response: "Emergency stop activated." };
+      }
+      if (a === "mode") {
+        DEMO_DATA.state.mode = p.value;
+        return { ok: true, response: `Mode changed to ${p.value}.` };
+      }
+      if (a === "style") {
+        DEMO_DATA.state.style = p.value;
+        return { ok: true, response: `Reply style changed to ${p.value}.` };
+      }
+      if (a === "prompt") {
+        DEMO_DATA.state.prompt = p.value === "reset" ? "" : p.value;
+        return { ok: true, response: p.value === "reset" ? "Prompt reset to built-in persona." : "Custom prompt saved." };
+      }
+      if (a === "name") {
+        DEMO_DATA.state.owner_name = p.value;
+        return { ok: true, response: `Owner name saved as ${p.value}.` };
+      }
+      if (a === "model") {
+        DEMO_DATA.state.ai_model = p.value;
+        return { ok: true, response: `Model updated to ${p.value}.` };
+      }
+      if (a === "baseurl") {
+        DEMO_DATA.state.ai_base_url = p.value;
+        return { ok: true, response: "Endpoint URL updated." };
+      }
+      if (a === "apikey") {
+        return { ok: true, response: "API key updated." };
+      }
+      if (a === "allow") {
+        const cid = parseInt(p.chat_id, 10) || Date.now();
+        DEMO_DATA.chats.push({
+          id: cid,
+          name: `Chat ${cid}`,
+          username: "",
+          type: cid < 0 ? "Group" : "Private",
+          chatty: "",
+          style: "",
+          prompt: "",
+          voice_profile: false,
+          blocked: false
+        });
+        DEMO_DATA.state.chats_allowed = DEMO_DATA.chats.length;
+        return { ok: true, response: `Chat ${cid} added to allowlist.` };
+      }
+      if (a === "remove") {
+        const i = DEMO_DATA.chats.findIndex((c) => String(c.id) === String(p.chat_id));
+        if (i >= 0) DEMO_DATA.chats.splice(i, 1);
+        DEMO_DATA.state.chats_allowed = DEMO_DATA.chats.length;
+        return { ok: true, response: `Chat ${p.chat_id} removed from allowlist.` };
+      }
+      if (a === "chat_chatty") {
+        const c = DEMO_DATA.chats.find((x) => String(x.id) === String(p.chat_id));
+        if (c) c.chatty = p.value === "def" ? "" : String(parseFloat(p.value) / 100);
+        return { ok: true, response: `Chatty updated for chat ${p.chat_id}.` };
+      }
+      if (a === "chatprompt") {
+        const c = DEMO_DATA.chats.find((x) => String(x.id) === String(p.chat_id));
+        if (c) c.prompt = p.value === "default" ? "" : p.value;
+        return { ok: true, response: `Prompt updated for chat ${p.chat_id}.` };
+      }
+      if (a === "setcontext") {
+        const c = DEMO_DATA.chats.find((x) => String(x.id) === String(p.chat_id));
+        if (c) c.context = p.value;
+        return { ok: true, response: `Context notes saved for chat ${p.chat_id}.` };
+      }
+      if (a === "delcontext") {
+        const c = DEMO_DATA.chats.find((x) => String(x.id) === String(p.chat_id));
+        if (c) delete c.context;
+        return { ok: true, response: `Context notes cleared for chat ${p.chat_id}.` };
+      }
+      if (a === "syncpins") {
+        return { ok: true, response: `Synced pinned message notes for chat ${p.chat_id}.` };
+      }
+      if (a === "addauth") {
+        const uid = parseInt(p.user_id, 10) || 999999999;
+        DEMO_DATA.access.push({ id: uid, name: `User ${uid}`, username: "", main: false, perms: "all" });
+        return { ok: true, response: `User ${uid} added to authorized users.` };
+      }
+      if (a === "removeauth") {
+        const i = DEMO_DATA.access.findIndex((u) => String(u.id) === String(p.user_id));
+        if (i >= 0) DEMO_DATA.access.splice(i, 1);
+        return { ok: true, response: `User ${p.user_id} removed from authorized users.` };
+      }
+      if (a === "quiethours") {
+        DEMO_DATA.state.quiet_hours = p.value !== "off";
+        DEMO_DATA.state.quiet_hours_schedule = p.value === "off" ? "Disabled" : p.value;
+        return { ok: true, response: p.value === "off" ? "Quiet hours disabled." : `Quiet hours schedule set to ${p.value}.` };
+      }
+      if (a === "sleep") {
+        DEMO_DATA.state.quiet_hours = true;
+        return { ok: true, response: "Sleep mode engaged until morning IST. Good night!" };
+      }
+      if (a === "addrule") {
+        if (!DEMO_DATA.state.rules) DEMO_DATA.state.rules = [];
+        DEMO_DATA.state.rules.push(p.value);
+        return { ok: true, response: `Keyword rule added: ${p.value}` };
+      }
+      if (a === "delrule") {
+        if (DEMO_DATA.state.rules) {
+          DEMO_DATA.state.rules = DEMO_DATA.state.rules.filter((r) => !r.startsWith(p.value) && r !== p.value);
+        }
+        return { ok: true, response: `Keyword rule deleted for "${p.value}".` };
+      }
+      if (a === "reaction" || a === "multibubble" || a === "typo" || a === "debounce" || a === "followup" || a === "mentiononly") {
+        const mapKey = a === "reaction" ? "auto_reactions" : (a === "mentiononly" ? "mention_only" : a);
+        DEMO_DATA.state[mapKey] = p.value === "on";
+        return { ok: true, response: `${a} is now ${p.value.toUpperCase()}.` };
+      }
+      if (a === "thinking" || a === "temp" || a === "lang" || a === "maxtokens") {
+        const stateKey = a === "temp" ? "temperature" : (a === "maxtokens" ? "max_tokens" : a);
+        DEMO_DATA.state[stateKey] = p.value;
+        return { ok: true, response: `${a} parameter set to ${p.value}.` };
+      }
+      if (a === "backup") {
+        return { ok: true, response: "Snapshot backup created successfully at database/backups/teleautomator_snapshot.db" };
+      }
+      if (a === "clearcontext") {
+        return { ok: true, response: "AI memory cache cleared across chats." };
       }
       return { ok: true, response: "*Demo* action applied to fixture data." };
     }
@@ -299,29 +471,41 @@
     }
     $("sheet-backdrop").classList.remove("hidden");
     $("sheet").classList.remove("hidden");
-
-    // Telegram TMA native BackButton support
-    try {
-      if (tg && tg.BackButton) {
-        tg.BackButton.show();
-        tg.BackButton.onClick(closeSheet);
-      }
-    } catch (_) {}
+    updateTmaBackButton();
     haptic("light");
   }
 
   function closeSheet() {
     $("sheet-backdrop").classList.add("hidden");
     $("sheet").classList.add("hidden");
+    updateTmaBackButton();
+    haptic("light");
+  }
 
-    // Revert Telegram TMA native BackButton
+  function updateTmaBackButton() {
     try {
-      if (tg && tg.BackButton) {
+      if (!tg || !tg.BackButton) return;
+      const sheetOpen = $("sheet") && !$("sheet").classList.contains("hidden");
+      if (sheetOpen) {
+        tg.BackButton.show();
+        tg.BackButton.offClick(backToOverview);
+        tg.BackButton.offClick(closeSheet);
+        tg.BackButton.onClick(closeSheet);
+      } else if (currentView !== "overview") {
+        tg.BackButton.show();
+        tg.BackButton.offClick(closeSheet);
+        tg.BackButton.offClick(backToOverview);
+        tg.BackButton.onClick(backToOverview);
+      } else {
         tg.BackButton.hide();
         tg.BackButton.offClick(closeSheet);
+        tg.BackButton.offClick(backToOverview);
       }
     } catch (_) {}
-    haptic("light");
+  }
+
+  function backToOverview() {
+    showView("overview");
   }
 
   // -------------------------------------------------------------- views
@@ -333,6 +517,7 @@
     document.querySelectorAll(".view").forEach((v) => v.classList.add("hidden"));
     $(`view-${name}`).classList.remove("hidden");
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === name));
+    updateTmaBackButton();
     haptic();
     loadView(name);
   }
@@ -1172,9 +1357,35 @@
       });
     }
 
+    // Interactive Dashboard KPIs and Usage Grid Shortcut Navigation
+    document.querySelectorAll(".kpi[data-goto], .usage-cell[data-goto]").forEach((el) => {
+      el.addEventListener("click", () => {
+        haptic("light");
+        const target = el.dataset.goto;
+        if (target === "activity") {
+          $("goto-activity").click();
+        } else {
+          showView(target);
+        }
+      });
+      el.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          el.click();
+        }
+      });
+    });
+
+    // Close open sheet or popup with Escape key
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        closeSheet();
+      }
+    });
+
     // Android Material 3 Expressive Fluid Wave Touch Ripple + Instant Tactile Haptic
     document.addEventListener("pointerdown", (e) => {
-      const target = e.target.closest(".btn, .pay-btn, .pay-check-btn, .chip, .seg, .model-chip, .preset-chip, .clay-switch, .m3-nav-item, .sheet-close-btn, .linklike");
+      const target = e.target.closest(".btn, .pay-btn, .pay-check-btn, .chip, .seg, .model-chip, .preset-chip, .clay-switch, .m3-nav-item, .sheet-close-btn, .linklike, .kpi[data-goto], .usage-cell[data-goto]");
       if (!target) return;
       haptic("light");
       const rect = target.getBoundingClientRect();
