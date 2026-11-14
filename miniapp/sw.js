@@ -1,5 +1,5 @@
 /* TeleAutomator Service Worker - Always Fresh (Network-First) with Offline Cache Fallback */
-const CACHE_NAME = "teleautomator-v3.0.3";
+const CACHE_NAME = "teleautomator-v3.0.4";
 const ASSETS_TO_CACHE = [
   "./",
   "./index.html",

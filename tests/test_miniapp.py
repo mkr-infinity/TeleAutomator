@@ -612,13 +612,41 @@ def test_service_worker_asset_and_registration():
     sw_file = miniapp_dir / "sw.js"
     assert sw_file.is_file()
     sw_content = sw_file.read_text(encoding="utf-8")
-    assert "teleautomator-v3.0.3" in sw_content
+    assert "teleautomator-v3.0.4" in sw_content
     assert "caches.open" in sw_content
     assert "self.skipWaiting" in sw_content
     assert "self.clients.claim" in sw_content
 
     app_js = (miniapp_dir / "app.js").read_text(encoding="utf-8")
     assert "serviceWorker.register" in app_js
+
+
+def test_behavior_simulation_help_popups_and_guide():
+    miniapp_dir = Path(__file__).resolve().parent.parent / "miniapp"
+    index_html = (miniapp_dir / "index.html").read_text(encoding="utf-8")
+    app_js = (miniapp_dir / "app.js").read_text(encoding="utf-8")
+    style_css = (miniapp_dir / "style.css").read_text(encoding="utf-8")
+
+    # Verify Guide button and Help (?) buttons in HTML
+    assert 'id="btn-all-behavior-help"' in index_html
+    assert 'data-help="reaction"' in index_html
+    assert 'data-help="multibubble"' in index_html
+    assert 'data-help="typo"' in index_html
+    assert 'data-help="debounce"' in index_html
+    assert 'data-help="followup"' in index_html
+    assert 'data-help="mentiononly"' in index_html
+
+    # Verify JS functions and guide definitions
+    assert "openHelpSheet" in app_js
+    assert "openAllBehaviorGuideSheet" in app_js
+    assert "BEHAVIOR_HELP" in app_js
+    assert "WHEN ON" in app_js
+    assert "WHEN OFF" in app_js
+
+    # Verify CSS styling exists
+    assert ".help-btn" in style_css
+    assert ".help-guide-header-btn" in style_css
+    assert ".help-popup-content" in style_css
 
 
 def test_add_owner_by_username_and_avatar_rendering(tmp_path):

@@ -70,14 +70,56 @@
       onText: "In group chats, the bot stays silent unless someone explicitly quotes its message or mentions its @handle.",
       offText: "The bot participates in open group conversations based on its configured Chatty probability percentage.",
     },
+    quiethours: {
+      title: "Daily Quiet Window (Sleep Schedule)",
+      desc: "Pauses automated replies during sleep or off-hours in Indian Standard Time (IST).",
+      onText: "Replies are suspended during the configured sleep hours so your Telegram activity matches a realistic diurnal human rhythm.",
+      offText: "The bot replies around the clock 24/7 without observing sleep or quiet windows.",
+    },
+    thinking: {
+      title: "Reasoning Effort (Thinking)",
+      desc: "Sets how extensively reasoning models think before answering.",
+      onText: "Medium/High effort allows models to generate thorough, step-by-step reasoning for nuanced questions.",
+      offText: "Off or Low responds with minimal latency and minimal token usage for quick chatting.",
+    },
+    modelrotation: {
+      title: "Smart Model Rotation",
+      desc: "Automatic failover chain across multiple candidate models if rate limits or downtime occur.",
+      onText: "If the primary endpoint model hits 429 rate limit or 503 error, traffic instantly falls back to secondary models.",
+      offText: "Only the single active model is used, returning an error immediately if unavailable.",
+    },
+    cooldown: {
+      title: "Per-Chat Cooldown",
+      desc: "Controls the minimum and maximum seconds the bot waits before replying in a specific chat.",
+      onText: "Replies are delayed naturally between Min and Max seconds to simulate realistic reading and typing time.",
+      offText: "When Min and Max are set to 0, replies are sent without waiting (instant reply, strictly within anti-spam rate limits).",
+    },
   };
 
   function openHelpSheet(key) {
     const item = BEHAVIOR_HELP[key];
     if (!item) return;
+
+    const sw = $(`sw-${key}`);
+    const currentState = sw ? (sw.dataset.state || "off") : null;
+
+    let stateBanner = "";
+    if (currentState) {
+      const isCurrentlyOn = currentState === "on";
+      stateBanner = `
+        <div class="help-current-status">
+          <span>Current status:</span>
+          <span class="pill pill-compact ${isCurrentlyOn ? "pill-positive" : "pill-neutral"}">
+            ${isCurrentlyOn ? "ACTIVE (ON)" : "INACTIVE (OFF)"}
+          </span>
+        </div>
+      `;
+    }
+
     const bodyHtml = `
       <div class="help-popup-content">
         <p class="help-popup-desc">${esc(item.desc)}</p>
+        ${stateBanner}
         <div class="help-states-grid">
           <div class="help-state-card on">
             <div class="help-state-header">
@@ -94,7 +136,56 @@
         </div>
       </div>
     `;
-    openSheet(item.title, bodyHtml, [{ label: "Got it", kind: "primary" }]);
+
+    const buttons = [];
+    if (sw) {
+      const isCurrentlyOn = (sw.dataset.state || "off") === "on";
+      buttons.push({
+        label: isCurrentlyOn ? "Turn OFF" : "Turn ON",
+        kind: isCurrentlyOn ? "danger" : "primary",
+        onClick: () => {
+          if (sw) sw.click();
+        },
+      });
+    }
+    buttons.push({ label: "Got it", kind: "" });
+
+    openSheet(item.title, bodyHtml, buttons);
+  }
+
+  function openAllBehaviorGuideSheet() {
+    const keys = ["reaction", "multibubble", "typo", "debounce", "followup", "mentiononly"];
+    const bodyHtml = `
+      <div class="help-popup-content">
+        <p class="help-popup-desc">The bot includes natural human simulation engines to mimic realistic messaging cadence, avoid robotic patterns, and keep conversations engaging.</p>
+        <div class="help-guide-list">
+          ${keys.map((k) => {
+            const it = BEHAVIOR_HELP[k];
+            if (!it) return "";
+            const sw = $(`sw-${k}`);
+            const state = sw ? (sw.dataset.state || "off") : "";
+            const statePill = state ? `<span class="pill pill-compact ${state === "on" ? "pill-positive" : "pill-neutral"}" style="margin-left:8px;">${state.toUpperCase()}</span>` : "";
+            return `
+              <div class="help-guide-item">
+                <div class="help-guide-title"><strong>${esc(it.title)}</strong> ${statePill}</div>
+                <div class="help-popup-desc" style="font-size:12.5px;margin-bottom:8px;">${esc(it.desc)}</div>
+                <div class="help-states-grid">
+                  <div class="help-state-card on">
+                    <div class="help-state-header"><span class="help-state-badge on">WHEN ON</span></div>
+                    <div class="help-state-body" style="font-size:12px;">${esc(it.onText)}</div>
+                  </div>
+                  <div class="help-state-card off">
+                    <div class="help-state-header"><span class="help-state-badge off">WHEN OFF</span></div>
+                    <div class="help-state-body" style="font-size:12px;">${esc(it.offText)}</div>
+                  </div>
+                </div>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+    `;
+    openSheet("Behavior & Human Simulation Guide", bodyHtml, [{ label: "Close Guide", kind: "primary" }]);
   }
 
   // ------------------------------------------------------------ api layer
@@ -132,7 +223,7 @@
       owner_name: "Kaif", ai_engine: "Gemini", ai_model: "gemini-2.5-flash-lite", ai_base_url: "",
       available_models: ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"],
       models_manually_set: false,
-      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.2",
+      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.4",
       auto_reactions: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
       thinking: "default", temperature: "0.7", lang: "english", max_tokens: "512",
       quiet_hours_start: "02:00", quiet_hours_end: "08:00", quiet_hours_schedule: "02:00 AM – 08:00 AM IST",
@@ -175,7 +266,7 @@
   };
 
   async function demoApi(path, body) {
-    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.2", user: { id: 555000111, name: "Kaif" } };
+    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.4", user: { id: 555000111, name: "Kaif" } };
     if (path === "/api/state") return DEMO_DATA.state;
     if (path === "/api/chats") return { chats: DEMO_DATA.chats, chatty_global: DEMO_DATA.state.chatty_global };
     if (path === "/api/pending") return { pending: DEMO_DATA.pending };
@@ -1879,8 +1970,40 @@
       haptic("light");
     }, { passive: true });
 
-    // Native Telegram message navigation & user profile link bridge
+    // Global click delegation for links, cards, help buttons & feeds
     document.addEventListener("click", (e) => {
+      const guideBtn = e.target.closest("#btn-all-behavior-help");
+      if (guideBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        haptic("light");
+        openAllBehaviorGuideSheet();
+        return;
+      }
+
+      const helpBtn = e.target.closest(".help-btn, [data-help]");
+      if (helpBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        haptic("light");
+        const key = helpBtn.dataset.help;
+        if (key) openHelpSheet(key);
+        return;
+      }
+
+      const chatCard = e.target.closest(".chat-capsule-card");
+      if (chatCard && !e.target.closest("button, a, input")) {
+        const cid = chatCard.dataset.cid;
+        if (cid) {
+          const c = chatCache.find((x) => String(x.id) === String(cid));
+          if (c) {
+            haptic("light");
+            openChatDetailSheet(c);
+            return;
+          }
+        }
+      }
+
       const feedRow = e.target.closest(".feed-clickable");
       if (feedRow) {
         const url = feedRow.dataset.msgUrl;
