@@ -5,14 +5,60 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "teleautomator"
 version = "2.9.0"
-description = "TeleAutomator - Telegram Chat Automation & Personal AI Assistant"
+description = "AI-powered Telegram userbot & personal account automation assistant with Material 3 Mini App."
+readme = "README.md"
 authors = [{ name = "Mohammad Kaif Raja (mkr-infinity)" }]
 license = { text = "Proprietary Source-Available" }
 requires-python = ">=3.10"
+keywords = [
+    "telegram",
+    "telegram-bot",
+    "telegram-automation",
+    "telegram-userbot",
+    "telegram-miniapp",
+    "telethon",
+    "ai",
+    "ai-agent",
+    "llm",
+    "gemini",
+    "chatgpt",
+    "chatbot",
+    "auto-reply",
+    "automation",
+    "selfbot",
+    "python",
+    "material-design",
+    "claymorphism",
+    "tma",
+    "assistant",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Web Environment",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Communications :: Chat",
+    "Topic :: Internet",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "telethon>=1.36.0,<2.0.0",
     "python-dotenv>=1.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mkr-infinity/TeleAutomator#readme"
+Documentation = "https://github.com/mkr-infinity/TeleAutomator/blob/main/REQUIREMENTS.md"
+Repository = "https://github.com/mkr-infinity/TeleAutomator"
+Issues = "https://github.com/mkr-infinity/TeleAutomator/issues"
 
 [project.optional-dependencies]
 dev = [

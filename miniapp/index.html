@@ -4,7 +4,50 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0B0E14">
-<title>TeleAutomator Control</title>
+<title>TeleAutomator — AI Telegram Automation & Mini App</title>
+<meta name="description" content="AI-powered Telegram userbot & personal account automation assistant. Material 3 Expressive claymorphic control panel with context-aware auto-replies, Gemini LLM, Telethon MTProto, and multi-chat guardrails.">
+<meta name="keywords" content="telegram, telegram bot, telegram automation, telegram userbot, telegram miniapp, telethon, ai agent, llm, gemini, chatgpt, chatbot, auto reply, automation, selfbot, python, material design, claymorphism, tma, assistant">
+<meta name="author" content="Mohammad Kaif Raja (mkr-infinity)">
+<meta name="robots" content="index, follow">
+
+<!-- Open Graph / Facebook / Telegram Link Preview -->
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://github.com/mkr-infinity/TeleAutomator">
+<meta property="og:title" content="TeleAutomator — AI Telegram Automation & Mini App">
+<meta property="og:description" content="AI-powered Telegram userbot & personal account automation assistant. Material 3 Expressive control panel with context-aware auto-replies and multi-chat guardrails.">
+<meta property="og:image" content="https://raw.githubusercontent.com/mkr-infinity/TeleAutomator/main/assets/banner.png">
+<meta property="og:site_name" content="TeleAutomator">
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:url" content="https://github.com/mkr-infinity/TeleAutomator">
+<meta name="twitter:title" content="TeleAutomator — AI Telegram Automation & Mini App">
+<meta name="twitter:description" content="AI-powered Telegram userbot & personal account automation assistant with Material 3 Expressive Mini App.">
+<meta name="twitter:image" content="https://raw.githubusercontent.com/mkr-infinity/TeleAutomator/main/assets/banner.png">
+
+<!-- Structured Data (JSON-LD) for Search Engine Crawlers -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "TeleAutomator",
+  "operatingSystem": "Cross-platform (Linux, Windows, macOS, Android, iOS)",
+  "applicationCategory": "CommunicationApplication",
+  "description": "AI-powered Telegram userbot and personal chat automation assistant with Telethon MTProto, Gemini LLM auto-replies, and Material 3 Expressive Mini App control panel.",
+  "softwareVersion": "2.9.0",
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  },
+  "author": {
+    "@type": "Person",
+    "name": "Mohammad Kaif Raja",
+    "url": "https://github.com/mkr-infinity"
+  }
+}
+</script>
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -81,52 +124,80 @@
 
     <!-- Overview -->
     <section id="view-overview" class="view" aria-label="Overview">
-      <div class="title-row">
-        <p class="page-title">Overview</p>
-        <span id="state-pill" class="pill pill-neutral">Loading</span>
-      </div>
-      <div class="control-line">
-        <div class="control-left">
-          <div class="control-meta">
-            <p class="control-mode" id="ov-mode">—</p>
-            <p class="control-sub" id="ov-sub">Connecting to your account…</p>
+      <!-- Unified Executive Dashboard Hub Card -->
+      <div class="card ov-hub-card" id="ov-dashboard-hub">
+        <div class="hub-header">
+          <div class="hub-identity">
+            <span class="hub-eyebrow">System Dashboard</span>
+            <h2 class="hub-title" id="ov-mode">Restricted Auto</h2>
+          </div>
+          <div class="hub-status-badges">
+            <span id="state-pill" class="pill pill-positive">Active</span>
+            <span id="ov-engine-badge" class="pill pill-neutral">Gemini</span>
           </div>
         </div>
-      </div>
+        <p class="hub-sub" id="ov-sub">Monitoring incoming messages and auto-replying within guardrails.</p>
 
-      <div class="kpi-strip" id="kpi-strip">
-        <div class="kpi" data-goto="chats" role="button" tabindex="0" aria-label="Go to allowed chats"><p class="kpi-label">Chats allowed</p><p class="kpi-value" id="kpi-chats">—</p></div>
-        <div class="kpi" data-goto="approvals" role="button" tabindex="0" aria-label="Go to pending drafts"><p class="kpi-label">Pending drafts</p><p class="kpi-value" id="kpi-pending">—</p></div>
-        <div class="kpi" data-goto="activity" role="button" tabindex="0" aria-label="View recent replies"><p class="kpi-label">Replies 24h</p><p class="kpi-value" id="kpi-replies">—</p></div>
-        <div class="kpi" data-goto="more" role="button" tabindex="0" aria-label="Go to AI engine settings"><p class="kpi-label">AI Engine</p><p class="kpi-value" id="kpi-engine">—</p></div>
-      </div>
-
-      <!-- AI Engine & System Status Card -->
-      <div class="card usage-card" id="ov-usage-card">
-        <div class="usage-card-head">
-          <div class="usage-card-title-group">
-            <span class="usage-card-title">AI Engine &amp; System Status</span>
-            <span class="pill pill-positive" id="ov-engine-badge">Local</span>
+        <!-- KPI Metric Grid (4 interactive tiles) -->
+        <div class="kpi-strip" id="kpi-strip">
+          <div class="kpi" data-goto="chats" role="button" tabindex="0" aria-label="Go to allowed chats">
+            <div class="kpi-top">
+              <span class="kpi-icon">💬</span>
+              <span class="kpi-value num" id="kpi-chats">—</span>
+            </div>
+            <p class="kpi-label">Allowed Chats</p>
           </div>
-          <span class="pill pill-neutral" id="ov-status-pill">Active</span>
+          <div class="kpi" data-goto="approvals" role="button" tabindex="0" aria-label="Go to pending drafts">
+            <div class="kpi-top">
+              <span class="kpi-icon">⏳</span>
+              <span class="kpi-value num" id="kpi-pending">—</span>
+            </div>
+            <p class="kpi-label">Pending Drafts</p>
+          </div>
+          <div class="kpi" data-goto="activity" role="button" tabindex="0" aria-label="View recent replies">
+            <div class="kpi-top">
+              <span class="kpi-icon">⚡</span>
+              <span class="kpi-value num" id="kpi-replies">—</span>
+            </div>
+            <p class="kpi-label">Replies 24h</p>
+          </div>
+          <div class="kpi" data-goto="more" role="button" tabindex="0" aria-label="Go to AI engine settings">
+            <div class="kpi-top">
+              <span class="kpi-icon">🤖</span>
+              <span class="kpi-value" id="kpi-engine">—</span>
+            </div>
+            <p class="kpi-label">AI Engine</p>
+          </div>
         </div>
-        <div class="usage-grid">
-          <div class="usage-cell" data-goto="more" role="button" tabindex="0" aria-label="Go to active model settings">
-            <span class="usage-cell-label">Active Model</span>
-            <span class="usage-cell-val" id="ov-model-val">—</span>
+
+        <!-- Integrated System Status Grid -->
+        <div class="usage-card" id="ov-usage-card">
+          <div class="usage-grid">
+            <div class="usage-cell" data-goto="more" role="button" tabindex="0" aria-label="Go to active model settings">
+              <span class="usage-cell-label">Active Model</span>
+              <span class="usage-cell-val" id="ov-model-val">—</span>
+            </div>
+            <div class="usage-cell" data-goto="persona" role="button" tabindex="0" aria-label="Go to speaking style settings">
+              <span class="usage-cell-label">Speaking Style</span>
+              <span class="usage-cell-val" id="ov-persona-val">Casual</span>
+            </div>
+            <div class="usage-cell" data-goto="more" role="button" tabindex="0" aria-label="Go to quiet hours schedule">
+              <span class="usage-cell-label">Quiet Window</span>
+              <span class="usage-cell-val" id="ov-qh-sched">02:00 – 08:00 AM IST</span>
+            </div>
+            <div class="usage-cell" data-goto="activity" role="button" tabindex="0" aria-label="View total request activity">
+              <span class="usage-cell-label">Total Requests</span>
+              <span class="usage-cell-val num" id="ov-req-count">0</span>
+            </div>
           </div>
-          <div class="usage-cell" data-goto="persona" role="button" tabindex="0" aria-label="Go to speaking style settings">
-            <span class="usage-cell-label">Speaking Style</span>
-            <span class="usage-cell-val" id="ov-persona-val">Casual</span>
-          </div>
-          <div class="usage-cell" data-goto="more" role="button" tabindex="0" aria-label="Go to quiet hours schedule">
-            <span class="usage-cell-label">Quiet Hours</span>
-            <span class="usage-cell-val" id="ov-qh-sched">02:00 – 08:00 IST</span>
-          </div>
-          <div class="usage-cell" data-goto="activity" role="button" tabindex="0" aria-label="View total request activity">
-            <span class="usage-cell-label">Total Requests</span>
-            <span class="usage-cell-val num" id="ov-req-count">0</span>
-          </div>
+        </div>
+
+        <!-- Embedded Quick Actions -->
+        <div class="actions hub-actions" id="hub-actions">
+          <button type="button" class="btn primary flex-1" id="act-pause">⏸️ Pause 30m</button>
+          <button type="button" class="btn flex-1 hidden" id="act-resume">▶️ Resume</button>
+          <button type="button" class="btn danger flex-1" id="act-stop">🛑 Stop</button>
+          <button type="button" class="btn flex-1" id="act-mode">🔄 Mode</button>
         </div>
       </div>
 
@@ -148,15 +219,6 @@
           <span>Just now</span>
         </div>
       </div>
-
-      <h2 class="section-h">Quick actions</h2>
-      <div class="actions">
-        <button type="button" class="btn primary" id="act-pause">Pause 30m</button>
-        <button type="button" class="btn" id="act-resume">Resume</button>
-        <button type="button" class="btn danger" id="act-stop">Stop</button>
-        <button type="button" class="btn" id="act-mode">Mode</button>
-      </div>
-      <p class="field-hint" id="act-hint">Pause holds every automated reply. Stop halts all activity until you resume.</p>
 
       <h2 class="section-h">Recent replies <button type="button" class="linklike" id="goto-activity">View all</button></h2>
       <div class="card list" id="ov-activity"></div>
@@ -205,8 +267,16 @@
 
     <!-- Approvals -->
     <section id="view-approvals" class="view hidden" aria-label="Approvals">
-      <h2 class="view-title">Approvals</h2>
-      <p class="view-sub">Drafts waiting for your yes or no.</p>
+      <div class="approvals-header-row">
+        <div>
+          <h2 class="view-title">Approvals</h2>
+          <p class="view-sub">Drafts waiting for your yes or no.</p>
+        </div>
+        <div class="approval-batch-actions hidden" id="approval-batch-bar">
+          <button type="button" class="btn small primary" id="btn-approve-all">✓ Approve All</button>
+          <button type="button" class="btn small danger" id="btn-reject-all">✕ Reject All</button>
+        </div>
+      </div>
       <div class="card list" id="approval-list"></div>
     </section>
 
@@ -373,10 +443,10 @@
 
         <label>Reply Language</label>
         <div class="segrow" id="seg-lang">
-          <button type="button" class="seg active" data-param="lang" data-val="dynamic">Dynamic</button>
-          <button type="button" class="seg" data-param="lang" data-val="english">English</button>
-          <button type="button" class="seg" data-param="lang" data-val="hindi">Hindi</button>
+          <button type="button" class="seg active" data-param="lang" data-val="english">English (Default)</button>
           <button type="button" class="seg" data-param="lang" data-val="hinglish">Hinglish</button>
+          <button type="button" class="seg" data-param="lang" data-val="hindi">Hindi</button>
+          <button type="button" class="seg" data-param="lang" data-val="dynamic">Dynamic</button>
         </div>
 
         <label>Max Response Length</label>

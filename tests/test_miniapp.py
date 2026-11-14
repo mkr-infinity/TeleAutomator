@@ -142,6 +142,10 @@ def test_map_action_to_command_fills_and_strips():
     assert api.map_action_to_command("pause", {"minutes": 30}) == "/pause 30"
     assert api.map_action_to_command("mode", {"value": "approval"}) == "/mode approval"
     assert api.map_action_to_command("resume", {}) == "/resume"
+    assert api.map_action_to_command("approve", {"id": 12}) == "/approve 12"
+    assert api.map_action_to_command("reject", {"id": 12}) == "/reject 12"
+    assert api.map_action_to_command("approve_all", {}) == "/approve all"
+    assert api.map_action_to_command("reject_all", {}) == "/reject all"
     assert api.map_action_to_command("chatcooldown", {"value1": 5, "value2": 60}) == "/chatcooldown 5 60"
     assert api.map_action_to_command("gencontext", {"chat_id": -222}) == "/gencontext -222"
     assert api.map_action_to_command("unknown_action", {}) is None

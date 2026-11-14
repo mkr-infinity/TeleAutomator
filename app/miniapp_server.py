@@ -222,7 +222,7 @@ class MiniAppAPI:
         mention_only = ctx.db.get_state("group_mention_only", "0") == "1"
         temp = ctx.db.get_state("ai_temperature", "0.6")
         thinking = ctx.db.get_state("ai_reasoning_effort", "default")
-        lang = ctx.db.get_state("reply_language", "dynamic")
+        lang = ctx.db.get_state("chat_language") or ctx.db.get_state("reply_language") or getattr(getattr(ctx, "generator", None), "language", "english") or "english"
         maxtokens = ctx.db.get_state("ai_max_tokens", "512")
         rules = ctx.db.list_keyword_rules() if hasattr(ctx.db, "list_keyword_rules") else []
         return {
@@ -297,6 +297,8 @@ class MiniAppAPI:
                 initials = "GP" if cid < 0 else "DM"
 
             avatar_bg = gradients[abs(cid) % len(gradients)]
+            clean_user = username.lstrip("@").strip()
+            avatar_url = f"https://t.me/i/userpic/320/{clean_user}.jpg" if clean_user else ""
 
             chats.append({
                 "id": cid,
@@ -304,6 +306,7 @@ class MiniAppAPI:
                 "username": username,
                 "initials": initials,
                 "avatar_bg": avatar_bg,
+                "avatar_url": avatar_url,
                 "type": "Group" if cid < 0 else "Private",
                 "chatty": ctx.db.get_state(f"chat_chatty_{cid}") or "",
                 "style": ctx.db.get_state(f"chat_style_{cid}") or "",
@@ -316,12 +319,31 @@ class MiniAppAPI:
 
     def handle_pending(self) -> dict:
         rows = self.ctx.db.list_pending_approvals()
-        return {"pending": [
-            {"id": r["id"], "chat_id": r.get("chat_id"), "chat_title": r.get("chat_title") or "",
-             "text": r.get("draft_text") or r.get("incoming_text") or "",
-             "created": r.get("created_at") or ""}
-            for r in rows
-        ]}
+        import re
+        pending_list = []
+        for r in rows:
+            cid = r.get("chat_id")
+            meta = self.ctx.db.get_chat_metadata(cid) or {} if hasattr(self.ctx.db, "get_chat_metadata") else {}
+            title = r.get("chat_title") or meta.get("title") or f"Chat {cid}"
+            username = meta.get("username") or ""
+            clean_user = username.lstrip("@").strip()
+            avatar_url = f"https://t.me/i/userpic/320/{clean_user}.jpg" if clean_user else ""
+            clean_name = re.sub(r"[^\w\s]", "", title).strip()
+            words = clean_name.split()
+            initials = (words[0][0] + words[1][0]).upper() if len(words) >= 2 else (words[0][:2].upper() if words else "TG")
+            pending_list.append({
+                "id": r["id"],
+                "chat_id": cid,
+                "chat_title": title,
+                "username": username,
+                "avatar_url": avatar_url,
+                "initials": initials,
+                "sender_id": r.get("sender_id"),
+                "incoming_text": r.get("incoming_text") or "",
+                "text": r.get("draft_text") or r.get("incoming_text") or "",
+                "created": r.get("created_at") or "",
+            })
+        return {"pending": pending_list}
 
     def handle_activity(self) -> dict:
         """Recent outgoing (automated + manual) messages across chats, newest first."""
@@ -354,10 +376,14 @@ class MiniAppAPI:
         users = []
         for uid in ids:
             meta = self.ctx.db.get_chat_metadata(uid) or {}
+            username = meta.get("username") or ""
+            clean_user = username.lstrip("@").strip()
+            avatar_url = f"https://t.me/i/userpic/320/{clean_user}.jpg" if clean_user else ""
             users.append({
                 "id": uid,
                 "name": meta.get("title") or f"User {uid}",
-                "username": meta.get("username") or "",
+                "username": username,
+                "avatar_url": avatar_url,
                 "main": uid == main_id,
                 "perms": self.ctx.db.get_state(f"bot_granted_cmds_{uid}", "all"),
             })
@@ -386,7 +412,9 @@ class MiniAppAPI:
         "delcontext": "/delcontext {chat_id}",
         "gencontext": "/gencontext {chat_id}",
         "approve": "/approve {id}",
+        "approve_all": "/approve all",
         "reject": "/reject {id}",
+        "reject_all": "/reject all",
         "setai": "/setai {provider} {value}",
         "apikey": "/apikey {value}",
         "baseurl": "/baseurl {value}",

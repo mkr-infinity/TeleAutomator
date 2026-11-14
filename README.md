@@ -1,11 +1,17 @@
-# TeleAutomator — Telegram Chat Automation
+# TeleAutomator — AI Telegram Chat Automation & Mini App
 
 ![TeleAutomator Banner](assets/banner.png)
+
+<p align="center">
+  <strong>The open, modern AI-powered Telegram userbot and personal automation assistant.</strong><br>
+  Context-aware auto-replies with Google Gemini & OpenAI LLMs, Telethon MTProto user account client, and an Android Material 3 Expressive claymorphic Mini App control panel.
+</p>
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MTProto Telethon](https://img.shields.io/badge/protocol-MTProto%20Telethon-informational.svg)](https://github.com/LonamiWebs/Telethon)
 [![AI Supported](https://img.shields.io/badge/AI-Gemini%20%7C%20OpenAI%20%7C%20Custom-orange.svg)](DEPLOYMENT.md)
 [![Setup Requirements](https://img.shields.io/badge/Setup-Requirements%20Guide-blueviolet.svg)](REQUIREMENTS.md)
+[![Telegram Mini App](https://img.shields.io/badge/GUI-Telegram%20Mini%20App-0088cc.svg)](miniapp/)
 [![License](https://img.shields.io/badge/license-Source--Available-red.svg)](LICENSE)
 [![Tests Passing](https://img.shields.io/badge/tests-191%2F191%20passed-brightgreen.svg)](test.sh)
 
@@ -143,3 +149,10 @@ If TeleAutomator saves you time or empowers your personal workflow, consider sup
 
 Licensed under the [Proprietary Source-Available License](LICENSE). Free for personal use.  
 Author: **Mohammad Kaif Raja ([@mkr-infinity](https://github.com/mkr-infinity))**
+
+---
+
+## 🔍 Topics & Keywords
+
+`telegram` · `telegram-bot` · `telegram-automation` · `telegram-userbot` · `telegram-miniapp` · `telethon` · `ai` · `ai-agent` · `llm` · `gemini` · `chatgpt` · `chatbot` · `auto-reply` · `automation` · `selfbot` · `python` · `material-design` · `claymorphism` · `tma` · `assistant`
+

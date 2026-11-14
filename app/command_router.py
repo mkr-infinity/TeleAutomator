@@ -147,8 +147,8 @@ class CommandRouterMixin:
                 "• `/backup` - Create database snapshot & save locally\n\n"
                 "*Approvals & Drafts:*\n"
                 "• `/pending` - List drafts waiting for review\n"
-                "• `/approve <id>` - Approve & send pending draft\n"
-                "• `/reject <id>` - Discard pending draft\n\n"
+                "• `/approve <id|all>` - Approve & send pending draft(s)\n"
+                "• `/reject <id|all>` - Discard pending draft(s)\n\n"
                 "*Identity & Persona:*\n"
                 "• `/name <name>` - Set your display name for AI persona\n"
                 "• `/prompt` - View active system prompt\n"
@@ -408,15 +408,35 @@ class CommandRouterMixin:
                 return (
                     "❌ /approve failed\n"
                     "Missing: Draft ID\n"
-                    "Fix: /approve <id> (e.g. /approve 1)"
+                    "Fix: /approve <id> (e.g. /approve 1) or /approve all"
                 )
+            if cmd_parts[1].strip().lower() == "all":
+                pending = self.db.list_pending_approvals()
+                if not pending:
+                    return "No drafts currently pending approval."
+                sent_count = 0
+                failed_count = 0
+                for item in pending:
+                    approval_id = item["id"]
+                    can_send, reason = self.safety.can_reply(item["chat_id"], item["draft_text"])
+                    if not can_send:
+                        failed_count += 1
+                        continue
+                    success = await self._send_reply(item["chat_id"], item["reply_to_msg_id"], item["draft_text"], adaptive_delay=False)
+                    if success:
+                        self.db.update_approval_status(approval_id, "sent")
+                        sent_count += 1
+                    else:
+                        failed_count += 1
+                return f"✅ Batch approved: {sent_count} sent, {failed_count} failed."
+
             try:
                 approval_id = int(cmd_parts[1])
             except ValueError:
                 return (
                     "❌ /approve failed\n"
                     "Missing: Valid numeric draft ID\n"
-                    "Fix: /approve <id> (e.g. /approve 1)"
+                    "Fix: /approve <id> (e.g. /approve 1) or /approve all"
                 )
 
             item = self.db.get_pending_approval(approval_id)
@@ -443,15 +463,24 @@ class CommandRouterMixin:
                 return (
                     "❌ /reject failed\n"
                     "Missing: Draft ID\n"
-                    "Fix: /reject <id> (e.g. /reject 1)"
+                    "Fix: /reject <id> (e.g. /reject 1) or /reject all"
                 )
+            if cmd_parts[1].strip().lower() == "all":
+                pending = self.db.list_pending_approvals()
+                if not pending:
+                    return "No drafts currently pending approval."
+                count = len(pending)
+                for item in pending:
+                    self.db.update_approval_status(item["id"], "rejected")
+                return f"🗑️ Batch rejected: {count} drafts discarded."
+
             try:
                 approval_id = int(cmd_parts[1])
             except ValueError:
                 return (
                     "❌ /reject failed\n"
                     "Missing: Valid numeric draft ID\n"
-                    "Fix: /reject <id> (e.g. /reject 1)"
+                    "Fix: /reject <id> (e.g. /reject 1) or /reject all"
                 )
 
             item = self.db.get_pending_approval(approval_id)

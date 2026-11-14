@@ -117,6 +117,21 @@ def test_approval_mode_and_commands(tmp_path: Path):
         sent_chat_ids = [c[0][0] for c in mock_client.send_message.call_args_list[1:]]
         assert 100 in sent_chat_ids
 
+        # 2b. /reject all and /approve all batch actions
+        db.add_approval(100, "Friend", 56, 123, "Query 2", "Draft 2")
+        db.add_approval(100, "Friend", 57, 123, "Query 3", "Draft 3")
+        assert len(db.list_pending_approvals()) == 2
+
+        rej_res = await mgr.handle_control_command("/reject all")
+        assert "Batch rejected" in rej_res
+        assert len(db.list_pending_approvals()) == 0
+
+        db.add_approval(100, "Friend", 58, 123, "Query 4", "Draft 4")
+        db.add_approval(100, "Friend", 59, 123, "Query 5", "Draft 5")
+        app_res = await mgr.handle_control_command("/approve all")
+        assert "Batch approved: 2 sent" in app_res
+        assert len(db.list_pending_approvals()) == 0
+
         # 3. /stop and /resume
         stop_res = await mgr.handle_control_command("/stop")
         assert "ACTIVATED" in stop_res
