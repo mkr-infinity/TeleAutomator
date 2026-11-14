@@ -210,13 +210,38 @@ class SafetyManager:
             try:
                 min_s = self.db.get_state(f"chat_cooldown_min_{chat_id}")
                 max_s = self.db.get_state(f"chat_cooldown_max_{chat_id}")
-                if min_s and max_s:
+                if min_s is not None and min_s != "" and max_s is not None and max_s != "":
                     lo = max(0.0, float(min_s))
                     hi = max(lo, float(max_s))
+                    return lo, hi
+                elif min_s is not None and min_s != "":
+                    lo = max(0.0, float(min_s))
+                    hi = max(lo, self.max_chat_cooldown)
                     return lo, hi
             except (ValueError, TypeError):
                 pass
         return lo, hi
+
+    def set_chat_cooldown(self, chat_id: int, c_min: float, c_max: float) -> None:
+        """Immediately update in-memory and persisted cooldown for a specific chat."""
+        c_min = max(0.0, float(c_min))
+        c_max = max(c_min, float(c_max))
+        if self.db:
+            self.db.set_state(f"chat_cooldown_min_{chat_id}", str(round(c_min, 1)))
+            self.db.set_state(f"chat_cooldown_max_{chat_id}", str(round(c_max, 1)))
+        if c_min <= 0.0 and c_max <= 0.0:
+            self._next_chat_cooldown[chat_id] = 0.0
+        else:
+            self._next_chat_cooldown[chat_id] = random.uniform(c_min, c_max)
+        logger.info(f"[COOLDOWN UPDATED] Chat {chat_id} cooldown set to {c_min}s - {c_max}s (next: {self._next_chat_cooldown[chat_id]:.1f}s)")
+
+    def reset_chat_cooldown(self, chat_id: int) -> None:
+        """Reset chat cooldown to global defaults."""
+        if self.db:
+            self.db.set_state(f"chat_cooldown_min_{chat_id}", "")
+            self.db.set_state(f"chat_cooldown_max_{chat_id}", "")
+        self._next_chat_cooldown.pop(chat_id, None)
+        logger.info(f"[COOLDOWN RESET] Chat {chat_id} cooldown reset to global defaults.")
 
     def _pick_random_chat_cooldown(self, chat_id: Optional[int] = None) -> float:
         """Choose a random cooldown between min (default 5s) and max (default 60s) for a chat."""
@@ -393,15 +418,18 @@ class SafetyManager:
         # Global cooldown check (skipped if zero cooldown configured: sending requires no wait)
         if not zero_chat_cooldown and not zero_global_cooldown:
             time_since_global = now - self._last_global_reply_time
-            floor_global = min(5.0, self.min_global_cooldown)
-            if floor_global > 0 and time_since_global < floor_global:
-                wait_time = max(1, int(round(floor_global - time_since_global)))
+            if self.min_global_cooldown > 0 and time_since_global < self.min_global_cooldown:
+                wait_time = max(1, int(round(self.min_global_cooldown - time_since_global)))
                 return False, f"Global cooldown active ({wait_time}s remaining)"
 
-            next_global = self._next_global_cooldown if self._next_global_cooldown is not None else self._pick_random_global_cooldown()
-            global_cd = max(floor_global, next_global)
-            if global_cd > 0 and time_since_global < global_cd:
-                wait_time = max(1, int(round(global_cd - time_since_global)))
+            next_global = self._next_global_cooldown
+            if next_global is None or next_global < self.min_global_cooldown:
+                next_global = self._pick_random_global_cooldown()
+                self._next_global_cooldown = next_global
+
+            target_global = max(self.min_global_cooldown, next_global)
+            if target_global > 0 and time_since_global < target_global:
+                wait_time = max(1, int(round(target_global - time_since_global)))
                 return False, f"Global cooldown active ({wait_time}s remaining)"
 
         # Per-chat cooldown check (custom per-chat range or global floor + randomized interval)
@@ -415,17 +443,20 @@ class SafetyManager:
                 )
                 self._last_chat_reply_time[chat_id] = last_chat_time
             time_since_chat = now - last_chat_time
-            floor_chat = min(5.0, chat_min)
-            if floor_chat > 0 and time_since_chat < floor_chat:
-                wait_time = max(1, int(round(floor_chat - time_since_chat)))
+
+            # Strict check: NEVER send before chat_min seconds have passed
+            if chat_min > 0 and time_since_chat < chat_min:
+                wait_time = max(1, int(round(chat_min - time_since_chat)))
                 return False, f"Per-chat cooldown active for chat {chat_id} ({wait_time}s remaining)"
 
             next_chat = self._next_chat_cooldown.get(chat_id)
-            if next_chat is None:
+            if next_chat is None or next_chat < chat_min or (chat_max > chat_min and next_chat > chat_max):
                 next_chat = self._pick_random_chat_cooldown(chat_id)
-            chat_cd = max(floor_chat, next_chat)
-            if chat_cd > 0 and time_since_chat < chat_cd:
-                wait_time = max(1, int(round(chat_cd - time_since_chat)))
+                self._next_chat_cooldown[chat_id] = next_chat
+
+            target_cd = max(chat_min, next_chat)
+            if target_cd > 0 and time_since_chat < target_cd:
+                wait_time = max(1, int(round(target_cd - time_since_chat)))
                 return False, f"Per-chat cooldown active for chat {chat_id} ({wait_time}s remaining)"
 
         return True, "OK"

@@ -1,6 +1,7 @@
 """Tests for SafetyManager: rate limits, duplicate prevention, sensitive content, and emergency stop."""
 
 from pathlib import Path
+from unittest.mock import patch
 from app.config import AppConfig
 from app.safety_manager import SafetyManager
 from app.storage.database import Database
@@ -305,4 +306,56 @@ def test_zero_cooldown_no_wait_and_antispam_preserved(tmp_path: Path):
     can_reply3, reason3 = safety.can_reply(999, "Spam burst reply")
     assert can_reply3 is False
     assert "Anti-spam burst limit reached" in reason3
+
+
+def test_per_chat_cooldown_strictly_blocks_before_min_period(tmp_path: Path):
+    """Setting chat cooldown guarantees replies are strictly blocked before min cooldown period."""
+    import time as _time
+    cfg = AppConfig(
+        api_id=123,
+        api_hash="dummy_hash",
+        data_dir=tmp_path,
+        global_cooldown_seconds=5,
+        per_chat_cooldown_seconds=10,
+    )
+    db = Database(tmp_path / "test_strict_cd.db")
+    safety = SafetyManager(cfg, db)
+
+    chat_id = 888111
+    # Set chat cooldown to 30s min, 60s max
+    safety.set_chat_cooldown(chat_id, 30.0, 60.0)
+    assert 30.0 <= safety._next_chat_cooldown[chat_id] <= 60.0
+
+    # Mark reply sent at time T=1000
+    t0 = 1000.0
+    safety._last_chat_reply_time[chat_id] = t0
+    safety._last_global_reply_time = 0.0
+
+    # At T=1010 (10s elapsed < 30s min cooldown): MUST be blocked
+    monkeypatch_time = t0 + 10.0
+    with patch("time.time", return_value=monkeypatch_time):
+        can_send, reason = safety.can_reply(chat_id, "premature message")
+        assert can_send is False
+        assert "Per-chat cooldown active" in reason
+        assert "remaining" in reason
+
+    # At T=1029 (29s elapsed < 30s min cooldown): MUST be blocked
+    with patch("time.time", return_value=t0 + 29.0):
+        can_send, reason = safety.can_reply(chat_id, "almost ready message")
+        assert can_send is False
+        assert "Per-chat cooldown active" in reason
+
+    # At T=1065 (> 60s max cooldown): MUST pass
+    with patch("time.time", return_value=t0 + 65.0):
+        can_send, reason = safety.can_reply(chat_id, "valid delayed message")
+        assert can_send is True
+        assert reason == "OK"
+
+    # Reset chat cooldown: returns to global
+    safety.reset_chat_cooldown(chat_id)
+    assert chat_id not in safety._next_chat_cooldown
+    lo, hi = safety._get_chat_cooldown_range(chat_id)
+    assert lo == safety.min_chat_cooldown
+    assert hi == safety.max_chat_cooldown
+
 

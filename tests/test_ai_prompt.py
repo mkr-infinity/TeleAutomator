@@ -509,3 +509,40 @@ def test_dynamic_owner_name_without_hardcoding(tmp_path: Path):
     assert pm.clean_reply("Rohan: what's up") == "what's up"
 
 
+def test_custom_prompt_language_adherence():
+    """Verify custom prompt with explicit language overrides default English in instructions and user prompt."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif", language="english")
+
+    # 1. Hindi custom prompt
+    hindi_prompt = "Talk in Hindi, be casual and friendly."
+    inst_hi = pm.get_system_instructions(persona_override=hindi_prompt, is_group=True)
+    assert "Reply in that requested language" in inst_hi
+    assert "Reply ONLY in English" not in inst_hi
+
+    user_prompt_hi = pm.build_user_prompt("Bob", "namaste", persona_override=hindi_prompt)
+    assert "You MUST reply in the language requested by the custom prompt" in user_prompt_hi
+    assert "in the language requested by your custom prompt" in user_prompt_hi
+    assert "English Only" not in user_prompt_hi
+
+    # 2. Spanish custom prompt
+    spanish_prompt = "Speak in Spanish like a close peer."
+    user_prompt_es = pm.build_user_prompt("Bob", "hola amigo", persona_override=spanish_prompt)
+    assert "You MUST reply in the language requested by the custom prompt" in user_prompt_es
+    assert "English Only" not in user_prompt_es
+
+    # 3. Default prompt without language mentions falls back to configured English
+    casual_prompt = "Be ultra concise, keep replies under 5 words."
+    user_prompt_def = pm.build_user_prompt("Bob", "sup", persona_override=casual_prompt)
+    assert "English Only" in user_prompt_def
+
+
+def test_clean_reply_never_writes_usernames_or_names():
+    """Verify clean_reply strips all @usernames and user names from text."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif")
+    assert pm.clean_reply("@alice sounds good 👍") == "sounds good 👍"
+    assert pm.clean_reply("talk to @developer for help") == "talk to for help"
+    assert pm.clean_reply("Alice: hello there", sender_name="Alice") == "hello there"
+    assert pm.clean_reply("Alice, are you coming", sender_name="Alice") == "are you coming"
+
+
+

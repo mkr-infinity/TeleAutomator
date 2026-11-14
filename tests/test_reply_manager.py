@@ -248,6 +248,13 @@ def test_adaptive_delay_group_and_private(tmp_path: Path):
     assert zero_mgr.calculate_adaptive_delay(group_chat_id, "yo") == 0.0
     assert zero_mgr.calculate_adaptive_delay(private_chat_id, "yo") == 0.0
 
+    # 4. Custom per-chat cooldown strictly overrides default ranges
+    db.set_state("chat_cooldown_min_99999", "35.0")
+    db.set_state("chat_cooldown_max_99999", "55.0")
+    for _ in range(20):
+        cd_delay = mgr.calculate_adaptive_delay(99999, "Hey")
+        assert 35.0 <= cd_delay <= 55.0, f"Custom cooldown delay out of range: {cd_delay}"
+
 
 def test_send_reply_abort_on_emergency_stop(tmp_path: Path):
     """Verify _send_reply aborts without sending if emergency stop is triggered."""
@@ -938,8 +945,8 @@ def test_pure_laughter_reaction_instead_of_text_message(tmp_path: Path):
     asyncio.run(_run())
 
 
-def test_group_unthreaded_reply_without_mention(tmp_path: Path):
-    """Verify in groups when not mentioned, message is sent without quoting/reply_to."""
+def test_swipe_to_reply_always_quotes_message(tmp_path: Path):
+    """Verify in groups and DMs, message always swipes to reply (reply_to_msg_id) to the message being answered."""
     async def _run():
         cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
         db = Database(tmp_path / "test_unthreaded.db")
@@ -960,11 +967,11 @@ def test_group_unthreaded_reply_without_mention(tmp_path: Path):
         mock_client.send_message = AsyncMock(side_effect=mock_send)
         mgr.set_telegram_client(mock_client)
 
-        # 1. Group reply without mention: reply_to is None
+        # 1. Group reply without direct @mention: swipe-to-reply quotes the message being answered
         await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah true that", adaptive_delay=False, is_mention=False)
         assert len(sent_calls) == 1
         assert sent_calls[0][0] == -100222
-        assert sent_calls[0][2] is None
+        assert sent_calls[0][2] == 77
 
         # 2. Group reply with mention: swipe-to-reply preserves reply_to
         await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah true that", adaptive_delay=False, is_mention=True)
@@ -975,6 +982,21 @@ def test_group_unthreaded_reply_without_mention(tmp_path: Path):
         await mgr._send_reply(chat_id=12345, reply_to_msg_id=55, text="sounds good", adaptive_delay=False, is_mention=False)
         assert len(sent_calls) == 3
         assert sent_calls[2][2] == 55
+
+        # 4. Standalone message (no incoming message id, e.g. 0): reply_to is None
+        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=0, text="spontaneous thought", adaptive_delay=False, is_mention=False)
+        assert len(sent_calls) == 4
+        assert sent_calls[3][2] is None
+
+        # 5. Group general room greeting/broadcast (e.g. "good morning guys"): sends to room without swiping
+        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="good morning guys", adaptive_delay=False, is_mention=False)
+        assert len(sent_calls) == 5
+        assert sent_calls[4][2] is None
+
+        # 6. Group general greeting when explicitly mentioned: quotes the sender
+        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="good morning guys", adaptive_delay=False, is_mention=True)
+        assert len(sent_calls) == 6
+        assert sent_calls[5][2] == 77
 
     asyncio.run(_run())
 
@@ -2525,6 +2547,82 @@ def test_saved_messages_completely_ignored_and_outgoing_recorded(tmp_path: Path)
         assert history[0]["is_outgoing"] is True
 
     asyncio.run(_run())
+
+
+def test_per_chat_prompt_and_context_passed_to_generator(tmp_path: Path):
+    """Verify custom chat prompt and context notes set for a specific chat are passed directly to AI generator."""
+    from app.ai.prompt_manager import PromptManager
+
+    async def _run():
+        cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path, min_delay_seconds=0.0, max_delay_seconds=0.0)
+        db = Database(tmp_path / "test_chat_prompt_ctx.db")
+        db.set_state("typo_correction_enabled", "0")
+        db.set_state("debounce_enabled", "0")
+        db.set_state("chat_prompt_-100999", "Custom prompt: always mention @admin when asked")
+        db.set_permanent_context(-100999, notes="Group rules: no advertising allowed")
+
+        safety = SafetyManager(cfg, db)
+        safety.set_auto_authorization(True)
+        privacy = PrivacyManager(cfg, database=db)
+        privacy.allow_chat(-100999)
+        generator = MagicMock()
+        generator.prompt_manager = PromptManager(prompt_file=None, owner_name="Kaif")
+        generator.language = "english"
+        generator.style = "casual"
+        generator.generate = MagicMock(return_value="sure check with the lead")
+        mgr = ReplyManager(cfg, db, safety, privacy, generator)
+        mgr.set_mode("restricted_auto")
+
+        sent_calls = []
+        async def mock_send(chat_id, text, **kwargs):
+            sent_calls.append((chat_id, text, kwargs.get("reply_to")))
+            m = MagicMock()
+            m.id = 701
+            return m
+
+        mock_client = AsyncMock()
+        mock_client.send_message = AsyncMock(side_effect=mock_send)
+        mgr.set_telegram_client(mock_client)
+
+        await mgr._process_incoming_message(
+            chat_id=-100999,
+            chat_title="Special Group",
+            message_id=305,
+            sender_id=888111,
+            sender_name="Charlie",
+            text="who should I contact?",
+            conversation_history=[],
+            is_mention=False,
+        )
+
+        # Check generator was called with persona_override and permanent_context
+        assert generator.generate.called
+        call_kwargs = generator.generate.call_args[1]
+        assert call_kwargs["persona_override"] == "Custom prompt: always mention @admin when asked"
+        assert "no advertising allowed" in call_kwargs["permanent_context"]
+
+        # Check reply was sent with swipe-to-reply (reply_to=305) even though is_mention=False
+        assert len(sent_calls) == 1
+        chat_id, text, reply_to = sent_calls[0]
+        assert chat_id == -100999
+        assert reply_to == 305
+        assert "lead" in text
+
+    asyncio.run(_run())
+
+
+def test_prompt_ratio_parsing_six_in_ten():
+    """Verify regex parses 'message 6 times in 10 sends' and percentage into exact probability."""
+    import re
+    combined_rules = "Talk like a dev, message 6 times in 10 sends, keep it brief."
+    r_match = re.search(r"(\d+)\s*(?:times\s+in|out\s+of|\/)\s*(\d+)\s*(?:sends|messages|texts)?", combined_rules, re.IGNORECASE)
+    assert r_match is not None
+    assert float(r_match.group(1)) / float(r_match.group(2)) == 0.60
+
+    pct_rules = "Reply rate 75% in this group."
+    pct_match = re.search(r"(?:reply|message|talk|send)\s*(?:rate|frequency|chance|probability)?\s*(?:of|at|is)?\s*(\d+)%", pct_rules, re.IGNORECASE)
+    assert pct_match is not None
+    assert float(pct_match.group(1)) / 100.0 == 0.75
 
 
 

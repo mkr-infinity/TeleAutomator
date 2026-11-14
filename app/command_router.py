@@ -1444,29 +1444,38 @@ class CommandRouterMixin:
                 return (
                     f"⏱️ *Current Chat Reply Cooldown:* Random `{int(min_cd)}s` – `{int(max_cd)}s`\n\n"
                     f"Usage:\n"
-                    f"• `/chatcooldown <min> <max>` - Set random cooldown range (e.g. `/chatcooldown 5 60`)\n"
-                    f"• `/chatcooldown <seconds>` - Set cooldown (e.g. `/chatcooldown 30`)"
+                    f"• `/chatcooldown <min> <max>` - Set global chat cooldown range (e.g. `/chatcooldown 5 60`)\n"
+                    f"• `/chatcooldown <chat_id> <min> <max>` - Set custom cooldown for a specific chat\n"
+                    f"• `/chatcooldown <seconds>` - Set global cooldown (e.g. `/chatcooldown 30`)"
                 )
             try:
-                if len(cmd_parts) >= 3:
-                    min_val = max(1, int(cmd_parts[1]))
+                if len(cmd_parts) >= 4:
+                    target_cid = int(cmd_parts[1])
+                    min_val = max(0, int(cmd_parts[2]))
+                    max_val = max(min_val, int(cmd_parts[3]))
+                    self.safety.set_chat_cooldown(target_cid, min_val, max_val)
+                    return f"✅ Chat {target_cid} reply cooldown set to *{min_val}s* – *{max_val}s*."
+                elif len(cmd_parts) == 3:
+                    min_val = max(0, int(cmd_parts[1]))
                     max_val = max(min_val, int(cmd_parts[2]))
                     self.db.set_state("min_chat_cooldown_seconds", str(min_val))
                     self.db.set_state("max_chat_cooldown_seconds", str(max_val))
                     self.db.set_state("per_chat_cooldown_seconds", str(max_val))
+                    self.safety._next_chat_cooldown.clear()
                     return f"✅ Chat reply cooldown randomized range set to *{min_val}s* – *{max_val}s*."
                 else:
-                    secs = max(1, int(cmd_parts[1]))
-                    min_val = min(5, secs)
+                    secs = max(0, int(cmd_parts[1]))
+                    min_val = min(5, secs) if secs > 0 else 0
                     self.db.set_state("min_chat_cooldown_seconds", str(min_val))
                     self.db.set_state("max_chat_cooldown_seconds", str(secs))
                     self.db.set_state("per_chat_cooldown_seconds", str(secs))
+                    self.safety._next_chat_cooldown.clear()
                     return f"✅ Chat reply cooldown updated to *{secs}s*."
             except ValueError:
                 return (
                     "❌ /chatcooldown failed\n"
                     "Missing: Valid integer seconds\n"
-                    "Fix: /chatcooldown <min> <max> (e.g. /chatcooldown 5 60) or /chatcooldown 30"
+                    "Fix: /chatcooldown <min> <max> or /chatcooldown <chat_id> <min> <max>"
                 )
 
         if cmd in ("/globalcooldown", "/globalcd"):

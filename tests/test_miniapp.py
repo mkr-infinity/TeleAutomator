@@ -34,6 +34,15 @@ class FakeSafety:
     is_emergency_stopped = False
     quiet_hours_enabled = True
 
+    def __init__(self):
+        self._next_chat_cooldown = {}
+
+    def set_chat_cooldown(self, chat_id, c_min, c_max):
+        self._next_chat_cooldown[chat_id] = (c_min + c_max) / 2
+
+    def reset_chat_cooldown(self, chat_id):
+        self._next_chat_cooldown.pop(chat_id, None)
+
     def get_remaining_pause_seconds(self):
         return 0
 
@@ -612,13 +621,41 @@ def test_service_worker_asset_and_registration():
     sw_file = miniapp_dir / "sw.js"
     assert sw_file.is_file()
     sw_content = sw_file.read_text(encoding="utf-8")
-    assert "teleautomator-v3.0.2" in sw_content
+    assert "teleautomator-v3.0.4" in sw_content
     assert "caches.open" in sw_content
     assert "self.skipWaiting" in sw_content
     assert "self.clients.claim" in sw_content
 
     app_js = (miniapp_dir / "app.js").read_text(encoding="utf-8")
     assert "serviceWorker.register" in app_js
+
+
+def test_behavior_simulation_help_popups_and_guide():
+    miniapp_dir = Path(__file__).resolve().parent.parent / "miniapp"
+    index_html = (miniapp_dir / "index.html").read_text(encoding="utf-8")
+    app_js = (miniapp_dir / "app.js").read_text(encoding="utf-8")
+    style_css = (miniapp_dir / "style.css").read_text(encoding="utf-8")
+
+    # Verify Guide button and Help (?) buttons in HTML
+    assert 'id="btn-all-behavior-help"' in index_html
+    assert 'data-help="reaction"' in index_html
+    assert 'data-help="multibubble"' in index_html
+    assert 'data-help="typo"' in index_html
+    assert 'data-help="debounce"' in index_html
+    assert 'data-help="followup"' in index_html
+    assert 'data-help="mentiononly"' in index_html
+
+    # Verify JS functions and guide definitions
+    assert "openHelpSheet" in app_js
+    assert "openAllBehaviorGuideSheet" in app_js
+    assert "BEHAVIOR_HELP" in app_js
+    assert "WHEN ON" in app_js
+    assert "WHEN OFF" in app_js
+
+    # Verify CSS styling exists
+    assert ".help-btn" in style_css
+    assert ".help-guide-header-btn" in style_css
+    assert ".help-popup-content" in style_css
 
 
 def test_add_owner_by_username_and_avatar_rendering(tmp_path):
@@ -685,6 +722,8 @@ def test_chat_cooldown_action_and_chats_payload(tmp_path):
     res = api.handle_action(555000111, "chat_cooldown", {"chat_id": 111, "min": 15, "max": 45})
     assert res["ok"] is True
     assert "15s - 45s" in res["response"]
+    if hasattr(ctx, "safety") and ctx.safety:
+        assert 15.0 <= ctx.safety._next_chat_cooldown[111] <= 45.0
 
     # Verify chats payload reflects custom cooldown
     chats_after = api.handle_chats()["chats"]
@@ -693,10 +732,21 @@ def test_chat_cooldown_action_and_chats_payload(tmp_path):
     assert c_after["cooldown_max"] == 45.0
     assert c_after["cooldown_str"] == "15s - 45s"
 
+    # Set zero cooldown: Instant (no wait)
+    res_zero = api.handle_action(555000111, "chat_cooldown", {"chat_id": 111, "min": 0, "max": 0})
+    assert res_zero["ok"] is True
+    assert "0s (Instant - No Wait)" in res_zero["response"]
+    c_zero = next(x for x in api.handle_chats()["chats"] if x["id"] == 111)
+    assert c_zero["cooldown_min"] == 0.0
+    assert c_zero["cooldown_max"] == 0.0
+    assert c_zero["cooldown_str"] == "0s (Instant - No Wait)"
+
     # Reset cooldown to global default
     res_reset = api.handle_action(555000111, "chat_cooldown", {"chat_id": 111, "reset": True})
     assert res_reset["ok"] is True
     assert "reset to global default" in res_reset["response"]
+    if hasattr(ctx, "safety") and ctx.safety:
+        assert 111 not in ctx.safety._next_chat_cooldown
 
     chats_reset = api.handle_chats()["chats"]
     c_reset = next(x for x in chats_reset if x["id"] == 111)
@@ -765,6 +815,97 @@ def test_handle_fetch_models_base_url_normalization_and_errors(tmp_path, monkeyp
     assert res_conn["ok"] is False
     assert "Connection error" in res_conn["error"]
     assert "verify that base url" in res_conn["error"].lower()
+
+
+def test_handle_action_chat_prompt_and_context(tmp_path):
+    ctx, _ = make_ctx(tmp_path, authorized=(555000111,))
+    api = MiniAppAPI(ctx)
+
+    # 1. Save custom prompt for chat
+    res_p = api.handle_action(555000111, "chatprompt", {"chat_id": 111, "value": "Talk like a friendly crypto dev"})
+    assert res_p["ok"] is True
+    assert "Custom prompt saved" in res_p["response"]
+    assert ctx.db.get_state("chat_prompt_111") == "Talk like a friendly crypto dev"
+
+    # Verify handle_chats returns it
+    c = next(x for x in api.handle_chats()["chats"] if x["id"] == 111)
+    assert c["prompt"] == "Talk like a friendly crypto dev"
+
+    # 2. Reset custom prompt
+    res_pr = api.handle_action(555000111, "chatprompt", {"chat_id": 111, "value": "default"})
+    assert res_pr["ok"] is True
+    assert ctx.db.get_state("chat_prompt_111") == ""
+
+    # 3. Save permanent context notes
+    res_ctx = api.handle_action(555000111, "setcontext", {"chat_id": 111, "value": "Admin is @john, launch date is Dec 1"})
+    assert res_ctx["ok"] is True
+    assert "Context notes saved" in res_ctx["response"]
+    perm = ctx.db.get_permanent_context(111)
+    assert perm.get("notes") == "Admin is @john, launch date is Dec 1"
+
+    c = next(x for x in api.handle_chats()["chats"] if x["id"] == 111)
+    assert c["context"] == "Admin is @john, launch date is Dec 1"
+
+    # 4. Clear permanent context notes
+    res_del = api.handle_action(555000111, "delcontext", {"chat_id": 111})
+    assert res_del["ok"] is True
+    perm_after = ctx.db.get_permanent_context(111)
+    assert perm_after.get("notes") in ("", None)
+
+    # 5. Set custom chat style
+    res_style = api.handle_action(555000111, "chatstyle", {"chat_id": 111, "value": "concise"})
+    assert res_style["ok"] is True
+    assert ctx.db.get_state("chat_style_111") == "concise"
+
+
+def test_handle_action_ownreact_toggle(tmp_path):
+    ctx, _ = make_ctx(tmp_path, authorized=(555000111,))
+    api = MiniAppAPI(ctx)
+
+    # Initial default is ON
+    assert api.handle_state()["ownreact"] is True
+
+    # Turn OFF
+    res_off = api.handle_action(555000111, "ownreact", {"value": "off"})
+    assert res_off["ok"] is True
+    assert "turned OFF" in res_off["response"]
+    assert ctx.db.get_state("ownreact_enabled") == "0"
+    assert api.handle_state()["ownreact"] is False
+
+    # Turn ON
+    res_on = api.handle_action(555000111, "ownreact", {"value": "on"})
+    assert res_on["ok"] is True
+    assert "turned ON" in res_on["response"]
+    assert ctx.db.get_state("ownreact_enabled") == "1"
+    assert api.handle_state()["ownreact"] is True
+
+
+def test_dynamic_half_and_full_sheet_popups():
+    miniapp_dir = Path(__file__).resolve().parent.parent / "miniapp"
+    index_html = (miniapp_dir / "index.html").read_text(encoding="utf-8")
+    style_css = (miniapp_dir / "style.css").read_text(encoding="utf-8")
+    app_js = (miniapp_dir / "app.js").read_text(encoding="utf-8")
+
+    # Verify sheet expand/collapse button in markup
+    assert 'id="sheet-expand"' in index_html
+    assert 'icon-expand' in index_html
+    assert 'icon-collapse' in index_html
+
+    # Verify responsive dynamic viewport units and expanded state in CSS
+    assert "max-height: 56dvh;" in style_css
+    assert ".sheet.is-expanded" in style_css
+    assert "max-height: 92dvh;" in style_css
+    assert "transition: max-height" in style_css
+    assert ".sheet-grip" in style_css
+
+    # Verify gesture and toggle functions in JS
+    assert "initSheetGestures" in app_js
+    assert "toggleSheetExpanded" in app_js
+    assert "expandSheet" in app_js
+    assert "collapseSheet" in app_js
+    assert 'sheet.classList.remove("is-expanded")' in app_js
+
+
 
 
 

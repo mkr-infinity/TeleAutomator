@@ -40,6 +40,12 @@
       onText: "The bot analyzes message sentiment and naturally places an appropriate emoji reaction (such as thumbs-up, heart, or fire) before or alongside replying.",
       offText: "Emoji reactions are disabled. All responses from the account will be text-only.",
     },
+    ownreact: {
+      title: "React on Own Messages",
+      desc: "Occasionally reacts to your own sent replies with an emoji reaction, just like real people do when joking or emphasizing a message.",
+      onText: "Around 20% of newly sent replies will naturally receive an emoji reaction from your account.",
+      offText: "Your account will never react to its own messages and only react to incoming messages from peers.",
+    },
     multibubble: {
       title: "Multi-Bubble Splitting",
       desc: "Breaks longer replies into 2–3 natural consecutive message bubbles with realistic typing pauses between them.",
@@ -70,14 +76,56 @@
       onText: "In group chats, the bot stays silent unless someone explicitly quotes its message or mentions its @handle.",
       offText: "The bot participates in open group conversations based on its configured Chatty probability percentage.",
     },
+    quiethours: {
+      title: "Daily Quiet Window (Sleep Schedule)",
+      desc: "Pauses automated replies during sleep or off-hours in Indian Standard Time (IST).",
+      onText: "Replies are suspended during the configured sleep hours so your Telegram activity matches a realistic diurnal human rhythm.",
+      offText: "The bot replies around the clock 24/7 without observing sleep or quiet windows.",
+    },
+    thinking: {
+      title: "Reasoning Effort (Thinking)",
+      desc: "Sets how extensively reasoning models think before answering.",
+      onText: "Medium/High effort allows models to generate thorough, step-by-step reasoning for nuanced questions.",
+      offText: "Off or Low responds with minimal latency and minimal token usage for quick chatting.",
+    },
+    modelrotation: {
+      title: "Smart Model Rotation",
+      desc: "Automatic failover chain across multiple candidate models if rate limits or downtime occur.",
+      onText: "If the primary endpoint model hits 429 rate limit or 503 error, traffic instantly falls back to secondary models.",
+      offText: "Only the single active model is used, returning an error immediately if unavailable.",
+    },
+    cooldown: {
+      title: "Per-Chat Cooldown",
+      desc: "Controls the minimum and maximum seconds the bot waits before replying in a specific chat.",
+      onText: "Replies are delayed naturally between Min and Max seconds to simulate realistic reading and typing time.",
+      offText: "When Min and Max are set to 0, replies are sent without waiting (instant reply, strictly within anti-spam rate limits).",
+    },
   };
 
   function openHelpSheet(key) {
     const item = BEHAVIOR_HELP[key];
     if (!item) return;
+
+    const sw = $(`sw-${key}`);
+    const currentState = sw ? (sw.dataset.state || "off") : null;
+
+    let stateBanner = "";
+    if (currentState) {
+      const isCurrentlyOn = currentState === "on";
+      stateBanner = `
+        <div class="help-current-status">
+          <span>Current status:</span>
+          <span class="pill pill-compact ${isCurrentlyOn ? "pill-positive" : "pill-neutral"}">
+            ${isCurrentlyOn ? "ACTIVE (ON)" : "INACTIVE (OFF)"}
+          </span>
+        </div>
+      `;
+    }
+
     const bodyHtml = `
       <div class="help-popup-content">
         <p class="help-popup-desc">${esc(item.desc)}</p>
+        ${stateBanner}
         <div class="help-states-grid">
           <div class="help-state-card on">
             <div class="help-state-header">
@@ -94,7 +142,56 @@
         </div>
       </div>
     `;
-    openSheet(item.title, bodyHtml, [{ label: "Got it", kind: "primary" }]);
+
+    const buttons = [];
+    if (sw) {
+      const isCurrentlyOn = (sw.dataset.state || "off") === "on";
+      buttons.push({
+        label: isCurrentlyOn ? "Turn OFF" : "Turn ON",
+        kind: isCurrentlyOn ? "danger" : "primary",
+        onClick: () => {
+          if (sw) sw.click();
+        },
+      });
+    }
+    buttons.push({ label: "Got it", kind: "" });
+
+    openSheet(item.title, bodyHtml, buttons);
+  }
+
+  function openAllBehaviorGuideSheet() {
+    const keys = ["reaction", "ownreact", "multibubble", "typo", "debounce", "followup", "mentiononly"];
+    const bodyHtml = `
+      <div class="help-popup-content">
+        <p class="help-popup-desc">The bot includes natural human simulation engines to mimic realistic messaging cadence, avoid robotic patterns, and keep conversations engaging.</p>
+        <div class="help-guide-list">
+          ${keys.map((k) => {
+            const it = BEHAVIOR_HELP[k];
+            if (!it) return "";
+            const sw = $(`sw-${k}`);
+            const state = sw ? (sw.dataset.state || "off") : "";
+            const statePill = state ? `<span class="pill pill-compact ${state === "on" ? "pill-positive" : "pill-neutral"}" style="margin-left:8px;">${state.toUpperCase()}</span>` : "";
+            return `
+              <div class="help-guide-item">
+                <div class="help-guide-title"><strong>${esc(it.title)}</strong> ${statePill}</div>
+                <div class="help-popup-desc" style="font-size:12.5px;margin-bottom:8px;">${esc(it.desc)}</div>
+                <div class="help-states-grid">
+                  <div class="help-state-card on">
+                    <div class="help-state-header"><span class="help-state-badge on">WHEN ON</span></div>
+                    <div class="help-state-body" style="font-size:12px;">${esc(it.onText)}</div>
+                  </div>
+                  <div class="help-state-card off">
+                    <div class="help-state-header"><span class="help-state-badge off">WHEN OFF</span></div>
+                    <div class="help-state-body" style="font-size:12px;">${esc(it.offText)}</div>
+                  </div>
+                </div>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+    `;
+    openSheet("Behavior & Human Simulation Guide", bodyHtml, [{ label: "Close Guide", kind: "primary" }]);
   }
 
   // ------------------------------------------------------------ api layer
@@ -132,8 +229,8 @@
       owner_name: "Kaif", ai_engine: "Gemini", ai_model: "gemini-2.5-flash-lite", ai_base_url: "",
       available_models: ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"],
       models_manually_set: false,
-      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.2",
-      auto_reactions: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
+      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.4",
+      auto_reactions: true, ownreact: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
       thinking: "default", temperature: "0.7", lang: "english", max_tokens: "512",
       quiet_hours_start: "02:00", quiet_hours_end: "08:00", quiet_hours_schedule: "02:00 AM – 08:00 AM IST",
       rules: ["pricing => We update our rates monthly, DM for catalog!", "help => How can I assist you today?"],
@@ -175,7 +272,7 @@
   };
 
   async function demoApi(path, body) {
-    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.2", user: { id: 555000111, name: "Kaif" } };
+    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.4", user: { id: 555000111, name: "Kaif" } };
     if (path === "/api/state") return DEMO_DATA.state;
     if (path === "/api/chats") return { chats: DEMO_DATA.chats, chatty_global: DEMO_DATA.state.chatty_global };
     if (path === "/api/pending") return { pending: DEMO_DATA.pending };
@@ -383,7 +480,7 @@
         }
         return { ok: true, response: `Keyword rule deleted for "${p.value}".` };
       }
-      if (a === "reaction" || a === "multibubble" || a === "typo" || a === "debounce" || a === "followup" || a === "mentiononly") {
+      if (a === "reaction" || a === "ownreact" || a === "multibubble" || a === "typo" || a === "debounce" || a === "followup" || a === "mentiononly") {
         const mapKey = a === "reaction" ? "auto_reactions" : (a === "mentiononly" ? "mention_only" : a);
         DEMO_DATA.state[mapKey] = p.value === "on";
         return { ok: true, response: `${a} is now ${p.value.toUpperCase()}.` };
@@ -555,15 +652,20 @@
     el.className = `toast toast-${statusKind}`;
     const iconEl = $("toast-icon");
     const msgEl = $("toast-msg");
+    const closeBtn = $("toast-close");
     if (iconEl) iconEl.innerHTML = statusKind === "ok" ? SVGS.check : (statusKind === "err" ? SVGS.alert : SVGS.info);
     if (msgEl) msgEl.textContent = plainText;
     else el.textContent = plainText;
 
     el.classList.remove("hidden");
-    el.onclick = () => { el.classList.add("hidden"); clearTimeout(toastTimer); };
+    const dismiss = () => { el.classList.add("hidden"); clearTimeout(toastTimer); };
+    el.onclick = dismiss;
+    if (closeBtn) closeBtn.onclick = (e) => { e.stopPropagation(); dismiss(); };
     haptic(statusKind === "err" ? "err" : (statusKind === "ok" ? "ok" : "light"));
     clearTimeout(toastTimer);
-    const duration = plainText.length > 50 ? Math.min(6000, 3200 + (plainText.length - 50) * 35) : 3400;
+    const duration = statusKind === "err"
+      ? Math.min(9000, 4500 + plainText.length * 40)
+      : Math.min(7000, 3600 + plainText.length * 30);
     toastTimer = setTimeout(() => el.classList.add("hidden"), duration);
   }
 
@@ -575,9 +677,44 @@
     } catch { /* haptics are best-effort */ }
   }
 
+  function toggleSheetExpanded() {
+    const sheet = $("sheet");
+    if (!sheet) return;
+    const isExp = sheet.classList.toggle("is-expanded");
+    const expBtn = $("sheet-expand");
+    if (expBtn) expBtn.setAttribute("aria-expanded", isExp ? "true" : "false");
+    haptic("light");
+  }
+
+  function expandSheet() {
+    const sheet = $("sheet");
+    if (!sheet || sheet.classList.contains("is-expanded")) return;
+    sheet.classList.add("is-expanded");
+    const expBtn = $("sheet-expand");
+    if (expBtn) expBtn.setAttribute("aria-expanded", "true");
+    haptic("light");
+  }
+
+  function collapseSheet() {
+    const sheet = $("sheet");
+    if (!sheet || !sheet.classList.contains("is-expanded")) return;
+    sheet.classList.remove("is-expanded");
+    const expBtn = $("sheet-expand");
+    if (expBtn) expBtn.setAttribute("aria-expanded", "false");
+    haptic("light");
+  }
+
   function openSheet(title, bodyHtml, buttons) {
+    const sheet = $("sheet");
+    if (sheet) sheet.classList.remove("is-expanded");
+    const expBtn = $("sheet-expand");
+    if (expBtn) expBtn.setAttribute("aria-expanded", "false");
     $("sheet-title").textContent = title;
-    $("sheet-body").innerHTML = bodyHtml;
+    const bodyEl = $("sheet-body");
+    if (bodyEl) {
+      bodyEl.innerHTML = bodyHtml;
+      bodyEl.scrollTop = 0;
+    }
     const actions = $("sheet-actions");
     actions.innerHTML = "";
     (buttons || []).forEach((b) => {
@@ -610,14 +747,18 @@
       setTimeout(() => ta.focus(), 60);
     }
     $("sheet-backdrop").classList.remove("hidden");
-    $("sheet").classList.remove("hidden");
+    if (sheet) sheet.classList.remove("hidden");
     updateTmaBackButton();
     haptic("light");
   }
 
   function closeSheet() {
+    const sheet = $("sheet");
+    if (sheet) sheet.classList.remove("is-expanded");
+    const expBtn = $("sheet-expand");
+    if (expBtn) expBtn.setAttribute("aria-expanded", "false");
     $("sheet-backdrop").classList.add("hidden");
-    $("sheet").classList.add("hidden");
+    if (sheet) sheet.classList.add("hidden");
     updateTmaBackButton();
     haptic("light");
   }
@@ -1444,24 +1585,28 @@
           const initials = u.initials || (u.name || "U").slice(0, 2).toUpperCase();
           const cleanUser = u.username ? u.username.replace(/^@/, "").trim() : "";
           const userLink = cleanUser
-            ? `<a href="https://t.me/${encodeURIComponent(cleanUser)}" target="_blank" rel="noopener noreferrer" class="pill pill-neutral chat-user-link" title="Open in Telegram">@${esc(cleanUser)} ${SVGS.externalLink}</a>`
+            ? `<a href="https://t.me/${encodeURIComponent(cleanUser)}" target="_blank" rel="noopener noreferrer" class="pill pill-compact pill-neutral chat-user-link" title="Open @${esc(cleanUser)} in Telegram">@${esc(cleanUser)} ${SVGS.externalLink}</a>`
             : "";
           const avatarBg = u.avatar_bg || "linear-gradient(135deg, #1E293B 0%, #334155 100%)";
-          return `<div class="user-capsule">
-            <div class="user-avatar-wrap">
-              ${u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="${esc(u.name)}" class="user-avatar-img" loading="lazy" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />` : ""}
-              <div class="user-avatar-circle" style="${u.avatar_url ? 'display:none;' : ''}background:${avatarBg};">${esc(initials)}</div>
-            </div>
-            <div class="capsule-main">
-              <div class="capsule-head">
-                <span class="capsule-title">${esc(u.name)}</span>
-                ${userLink}
-                ${u.main ? '<span class="pill pill-positive">Owner</span>' : '<span class="pill pill-neutral">Authorized</span>'}
+          return `<div class="owner-capsule-card">
+            <div class="owner-capsule-left">
+              <div class="chat-avatar-wrap">
+                ${u.avatar_url ? `<img src="${esc(u.avatar_url)}" alt="${esc(u.name)}" class="chat-avatar-img" loading="lazy" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />` : ""}
+                <div class="chat-avatar fallback" style="background:${avatarBg}; ${u.avatar_url ? 'display:none;' : ''}">${esc(initials)}</div>
               </div>
-              <p class="capsule-sub num">ID: ${esc(String(u.id))}</p>
+              <div class="owner-capsule-info">
+                <div class="owner-capsule-name-row">
+                  <span class="owner-capsule-name">${esc(u.name)}</span>
+                  ${userLink}
+                  ${u.main ? '<span class="pill pill-compact pill-positive">Owner</span>' : '<span class="pill pill-compact pill-neutral">Authorized</span>'}
+                </div>
+                <div class="owner-capsule-sub-row">
+                  <span class="num">ID: ${esc(String(u.id))}</span>
+                </div>
+              </div>
             </div>
             <div class="capsule-side">
-              ${u.main ? "" : `<button class="btn small danger" data-unauth="${u.id}">Remove</button>`}
+              ${u.main ? "" : `<button type="button" class="btn small danger" data-unauth="${u.id}">Remove</button>`}
             </div>
           </div>`;
         }).join("")
@@ -1519,6 +1664,7 @@
     // 2. Behavior Toggles
     const toggleMap = {
       "reaction": s.auto_reactions,
+      "ownreact": s.ownreact,
       "multibubble": s.multibubble,
       "typo": s.typo,
       "debounce": s.debounce,
@@ -1808,6 +1954,94 @@
     }
   }
 
+  function initSheetGestures() {
+    const sheet = $("sheet");
+    if (!sheet) return;
+
+    const grip = sheet.querySelector(".sheet-grip");
+    const head = sheet.querySelector(".sheet-head");
+    const expandBtn = $("sheet-expand");
+    const body = $("sheet-body");
+
+    if (expandBtn) {
+      expandBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleSheetExpanded();
+      });
+    }
+
+    if (grip) {
+      grip.addEventListener("click", () => {
+        toggleSheetExpanded();
+      });
+    }
+
+    let startY = 0;
+    let startX = 0;
+    let lastY = 0;
+    let lastX = 0;
+    let tracking = false;
+    let touchArea = null;
+
+    const onTouchStart = (e) => {
+      if (!e.touches || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      startY = t.clientY;
+      startX = t.clientX;
+      lastY = startY;
+      lastX = startX;
+
+      if (grip && (e.target === grip || grip.contains(e.target))) {
+        touchArea = "grip";
+        tracking = true;
+      } else if (head && (e.target === head || head.contains(e.target))) {
+        if (e.target.closest("#sheet-close, #sheet-expand")) return;
+        touchArea = "head";
+        tracking = true;
+      } else if (body && (e.target === body || body.contains(e.target))) {
+        if (body.scrollTop <= 0) {
+          touchArea = "body";
+          tracking = true;
+        }
+      }
+    };
+
+    const onTouchMove = (e) => {
+      if (!tracking || !e.touches || e.touches.length !== 1) return;
+      lastY = e.touches[0].clientY;
+      lastX = e.touches[0].clientX;
+    };
+
+    const onTouchEnd = () => {
+      if (!tracking) return;
+      tracking = false;
+      const diffY = lastY - startY;
+      const diffX = lastX - startX;
+
+      if (Math.abs(diffY) > 28 && Math.abs(diffY) > Math.abs(diffX) * 1.1) {
+        if (diffY < 0) {
+          // Swiped UP on grip or header -> expand to full screen
+          if (touchArea === "grip" || touchArea === "head") {
+            expandSheet();
+          }
+        } else {
+          // Swiped DOWN
+          if (sheet.classList.contains("is-expanded")) {
+            collapseSheet();
+          } else if (diffY > 65) {
+            closeSheet();
+          }
+        }
+      }
+      touchArea = null;
+    };
+
+    sheet.addEventListener("touchstart", onTouchStart, { passive: true });
+    sheet.addEventListener("touchmove", onTouchMove, { passive: true });
+    sheet.addEventListener("touchend", onTouchEnd, { passive: true });
+    sheet.addEventListener("touchcancel", () => { tracking = false; touchArea = null; }, { passive: true });
+  }
+
   // ---------------------------------------------------------------- init
 
   function wire() {
@@ -1816,6 +2050,8 @@
 
     const sheetCloseBtn = $("sheet-close");
     if (sheetCloseBtn) sheetCloseBtn.addEventListener("click", closeSheet);
+
+    initSheetGestures();
 
     const toastEl = $("toast");
     if (toastEl) toastEl.addEventListener("click", () => toastEl.classList.add("hidden"));
@@ -1865,13 +2101,45 @@
 
     // Instant Tactile Haptic on buttons
     document.addEventListener("pointerdown", (e) => {
-      const target = e.target.closest(".btn, .pay-btn, .pay-check-btn, .chip, .seg, .model-chip, .preset-chip, .clay-switch, .m3-nav-item, .sheet-close-btn, .linklike, .kpi[data-goto], .usage-cell[data-goto], .help-btn, .clay-action-btn, .chat-capsule-card, .feed-clickable");
+      const target = e.target.closest(".btn, .pay-btn, .pay-check-btn, .chip, .seg, .model-chip, .preset-chip, .clay-switch, .m3-nav-item, .sheet-close-btn, .sheet-icon-btn, .sheet-grip, .linklike, .kpi[data-goto], .usage-cell[data-goto], .help-btn, .clay-action-btn, .chat-capsule-card, .feed-clickable");
       if (!target) return;
       haptic("light");
     }, { passive: true });
 
-    // Native Telegram message navigation & user profile link bridge
+    // Global click delegation for links, cards, help buttons & feeds
     document.addEventListener("click", (e) => {
+      const guideBtn = e.target.closest("#btn-all-behavior-help");
+      if (guideBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        haptic("light");
+        openAllBehaviorGuideSheet();
+        return;
+      }
+
+      const helpBtn = e.target.closest(".help-btn, [data-help]");
+      if (helpBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        haptic("light");
+        const key = helpBtn.dataset.help;
+        if (key) openHelpSheet(key);
+        return;
+      }
+
+      const chatCard = e.target.closest(".chat-capsule-card");
+      if (chatCard && !e.target.closest("button, a, input")) {
+        const cid = chatCard.dataset.cid;
+        if (cid) {
+          const c = chatCache.find((x) => String(x.id) === String(cid));
+          if (c) {
+            haptic("light");
+            openChatDetailSheet(c);
+            return;
+          }
+        }
+      }
+
       const feedRow = e.target.closest(".feed-clickable");
       if (feedRow) {
         const url = feedRow.dataset.msgUrl;
@@ -2276,14 +2544,32 @@
           if (res && res.results) {
             showHealthResultsPopup(res);
           } else {
-            toast("Health check found 0 working models");
+            const errMsg = (res && res.error) || "Health check found 0 working models";
+            openSheet(
+              "Health Check Failed",
+              `<div class="health-summary-banner negative">
+                <span class="pill pill-negative">0 Working Models</span>
+                <p style="margin-top:8px;font-size:13px;line-height:1.45;word-break:break-word;">${esc(errMsg)}</p>
+              </div>
+              <p class="field-hint">Check your API key, endpoint URL, or quota, then try again.</p>`,
+              [{ label: "Retry", kind: "primary", onClick: () => checkModelsHealth() }, { label: "Close" }]
+            );
+            toast(errMsg, "err");
           }
         }
       } catch (e) {
         badge.className = "pill pill-negative";
         badge.textContent = "Error";
         replyEl.textContent = "Health check request failed: " + e.message;
-        toast("Health check error: " + e.message);
+        openSheet(
+          "Health Check Request Error",
+          `<div class="health-summary-banner negative">
+            <span class="pill pill-negative">Connection Error</span>
+            <p style="margin-top:8px;font-size:13px;line-height:1.45;">${esc(e.message)}</p>
+          </div>`,
+          [{ label: "Close" }]
+        );
+        toast("Health check error: " + e.message, "err");
       } finally {
         btn.disabled = false;
         btn.textContent = "Check health";
@@ -2301,17 +2587,48 @@
       try {
         const res = await api("/api/fetch_models", { base_url: baseurl, api_key: apikey });
         if (!res || !res.ok) {
-          toast(res && res.error ? res.error : "Failed to load models from endpoint");
+          const errDetail = (res && res.error) || "Failed to load models from endpoint";
+          const errUrl = (res && res.url) || baseurl || "https://generativelanguage.googleapis.com/v1beta/models";
+          openSheet(
+            "Fetch Models Failed",
+            `<div class="health-summary-banner negative">
+              <span class="pill pill-negative">Endpoint Error</span>
+              <p style="margin-top:8px;font-size:13px;line-height:1.45;word-break:break-word;">${esc(errDetail)}</p>
+              <p class="faint sm" style="margin-top:6px;word-break:break-all;">Target URL: ${esc(errUrl)}</p>
+            </div>
+            <p class="field-hint">Verify your Base URL, API key, and network connectivity, then try again.</p>`,
+            [
+              { label: "Retry", kind: "primary", onClick: () => fetchModels() },
+              { label: "Close" }
+            ]
+          );
+          toast(errDetail, "err");
           return;
         }
         const models = res.models || [];
         if (!models.length) {
-          toast("Endpoint returned 0 models.");
+          openSheet(
+            "Fetch Models",
+            `<div class="health-summary-banner negative">
+              <span class="pill pill-negative">0 Models Returned</span>
+              <p style="margin-top:8px;font-size:13px;line-height:1.45;">The endpoint answered successfully but reported 0 generative text models.</p>
+            </div>`,
+            [{ label: "Close" }]
+          );
+          toast("Endpoint returned 0 models.", "info");
           return;
         }
         showFetchModelsPopup(models);
       } catch (e) {
-        toast("Error fetching models: " + e.message);
+        openSheet(
+          "Fetch Models Error",
+          `<div class="health-summary-banner negative">
+            <span class="pill pill-negative">Network Error</span>
+            <p style="margin-top:8px;font-size:13px;line-height:1.45;">${esc(e.message)}</p>
+          </div>`,
+          [{ label: "Close" }]
+        );
+        toast("Error fetching models: " + e.message, "err");
       } finally {
         btn.disabled = false;
         btn.textContent = "Fetch models";

@@ -231,6 +231,7 @@ class MiniAppAPI:
         qh_start = ctx.db.get_state("quiet_hours_start", getattr(ctx.reply_manager.config, "quiet_hours_start", "02:00"))
         qh_end = ctx.db.get_state("quiet_hours_end", getattr(ctx.reply_manager.config, "quiet_hours_end", "08:00"))
         auto_reactions = ctx.db.get_state("auto_reactions_enabled", "1") == "1"
+        ownreact = ctx.db.get_state("ownreact_enabled", "1") == "1"
         multibubble = ctx.db.get_state("multibubble_enabled", "1") == "1"
         typo = ctx.db.get_state("typo_correction_enabled", "1") == "1"
         debounce = ctx.db.get_state("debounce_enabled", "1") == "1"
@@ -282,6 +283,7 @@ class MiniAppAPI:
             "available_models": avail_models,
             "models_manually_set": ctx.db.get_state("models_manually_set", "0") == "1",
             "auto_reactions": auto_reactions,
+            "ownreact": ownreact,
             "multibubble": multibubble,
             "typo": typo,
             "debounce": debounce,
@@ -344,11 +346,14 @@ class MiniAppAPI:
             cooldown_min = None
             cooldown_max = None
             cooldown_str = ""
-            if c_min_str and c_max_str:
+            if c_min_str != "" and c_max_str != "":
                 try:
                     cooldown_min = float(c_min_str)
                     cooldown_max = float(c_max_str)
-                    cooldown_str = f"{int(cooldown_min)}s - {int(cooldown_max)}s"
+                    if cooldown_min == 0.0 and cooldown_max == 0.0:
+                        cooldown_str = "0s (Instant - No Wait)"
+                    else:
+                        cooldown_str = f"{int(cooldown_min)}s - {int(cooldown_max)}s"
                 except (ValueError, TypeError):
                     pass
 
@@ -461,6 +466,14 @@ class MiniAppAPI:
         for uid in ids:
             meta = self.ctx.db.get_chat_metadata(uid) or {} if hasattr(self.ctx.db, "get_chat_metadata") else {}
             username = meta.get("username") or ""
+            if not username:
+                try:
+                    _, resolved_meta, _ = self._resolve_user_target(str(uid))
+                    if resolved_meta and resolved_meta.get("username"):
+                        meta = resolved_meta
+                        username = meta.get("username") or ""
+                except Exception:
+                    pass
             clean_user = username.lstrip("@").strip()
             avatar_url = f"https://t.me/i/userpic/320/{clean_user}.jpg" if clean_user else ""
             title = meta.get("title") or ("Main Owner" if uid == main_id else f"User {uid}")
@@ -525,6 +538,7 @@ class MiniAppAPI:
         "ratelimit": "/ratelimit {value}",
         "quiethours": "/quiethours {value}",
         "reaction": "/reaction {value}",
+        "ownreact": "/ownreact {value}",
         "mentiononly": "/mentiononly {value}",
         "debounce": "/debounce {value}",
         "multibubble": "/multibubble {value}",
@@ -586,6 +600,8 @@ class MiniAppAPI:
             if is_reset:
                 ctx.db.set_state(f"chat_cooldown_min_{cid}", "")
                 ctx.db.set_state(f"chat_cooldown_max_{cid}", "")
+                if hasattr(ctx, "safety") and ctx.safety and hasattr(ctx.safety, "reset_chat_cooldown"):
+                    ctx.safety.reset_chat_cooldown(cid)
                 return {"ok": True, "response": f"Cooldown for chat {cid} reset to global default."}
             try:
                 c_min = float(params.get("min", 5))
@@ -596,9 +612,57 @@ class MiniAppAPI:
                     c_max = c_min
                 ctx.db.set_state(f"chat_cooldown_min_{cid}", str(round(c_min, 1)))
                 ctx.db.set_state(f"chat_cooldown_max_{cid}", str(round(c_max, 1)))
+                if hasattr(ctx, "safety") and ctx.safety and hasattr(ctx.safety, "set_chat_cooldown"):
+                    ctx.safety.set_chat_cooldown(cid, c_min, c_max)
+                if c_min == 0.0 and c_max == 0.0:
+                    return {"ok": True, "response": f"Cooldown for chat {cid} set to 0s (Instant - No Wait)."}
                 return {"ok": True, "response": f"Cooldown for chat {cid} set to {int(c_min)}s - {int(c_max)}s."}
             except (ValueError, TypeError) as e:
                 return {"ok": False, "response": f"Invalid cooldown values: {e}"}
+        if action == "chatprompt":
+            cid = int(params.get("chat_id", 0))
+            val = str(params.get("value", "")).strip()
+            if val.lower() in ("default", "clear", "reset", "none", ""):
+                ctx.db.set_state(f"chat_prompt_{cid}", "")
+                if hasattr(ctx.db, "sync_chat_context_file"):
+                    ctx.db.sync_chat_context_file(cid)
+                return {"ok": True, "response": f"Chat {cid} reset to default prompt."}
+            ctx.db.set_state(f"chat_prompt_{cid}", val)
+            if hasattr(ctx.db, "sync_chat_context_file"):
+                ctx.db.sync_chat_context_file(cid)
+            return {"ok": True, "response": f"Custom prompt saved for chat {cid}."}
+        if action == "setcontext":
+            cid = int(params.get("chat_id", 0))
+            val = str(params.get("value", "")).strip()
+            if hasattr(ctx.db, "set_permanent_context"):
+                ctx.db.set_permanent_context(cid, notes=val)
+            if hasattr(ctx.db, "sync_chat_context_file"):
+                ctx.db.sync_chat_context_file(cid)
+            return {"ok": True, "response": f"Context notes saved for chat {cid}."}
+        if action == "delcontext":
+            cid = int(params.get("chat_id", 0))
+            if hasattr(ctx.db, "delete_permanent_context"):
+                ctx.db.delete_permanent_context(cid)
+            if hasattr(ctx.db, "sync_chat_context_file"):
+                ctx.db.sync_chat_context_file(cid)
+            return {"ok": True, "response": f"Context notes cleared for chat {cid}."}
+        if action == "chatstyle":
+            cid = int(params.get("chat_id", 0))
+            val = str(params.get("value", "")).strip().lower()
+            if val in ("default", "clear", "reset", "none", ""):
+                ctx.db.set_state(f"chat_style_{cid}", "")
+                if hasattr(ctx.db, "sync_chat_context_file"):
+                    ctx.db.sync_chat_context_file(cid)
+                return {"ok": True, "response": f"Chat {cid} reset to default style."}
+            ctx.db.set_state(f"chat_style_{cid}", val)
+            if hasattr(ctx.db, "sync_chat_context_file"):
+                ctx.db.sync_chat_context_file(cid)
+            return {"ok": True, "response": f"Style set to {val} for chat {cid}."}
+        if action == "ownreact":
+            val = str(params.get("value", "")).lower().strip()
+            is_on = val in ("1", "true", "on", "yes", "enable")
+            ctx.db.set_state("ownreact_enabled", "1" if is_on else "0")
+            return {"ok": True, "response": f"Own-reply reactions turned {'ON' if is_on else 'OFF'}."}
         command = self.map_action_to_command(action, params)
         if not command:
             return {"ok": False, "response": f"Unknown action: {action}"}
@@ -664,6 +728,13 @@ class MiniAppAPI:
                 return {"ok": False, "response": err or f"Could not resolve '{raw_target}'."}
             target = resolved_id
             meta = resolved_meta
+        else:
+            if self.ctx.db and hasattr(self.ctx.db, "get_chat_metadata"):
+                meta = self.ctx.db.get_chat_metadata(target)
+            if not meta or not meta.get("username"):
+                _, resolved_meta, _ = self._resolve_user_target(str(target))
+                if resolved_meta:
+                    meta = resolved_meta
 
         if target <= 0:
             return {"ok": False, "response": "Authorized owners must be Telegram user accounts, not groups or channels."}
@@ -1252,7 +1323,9 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         if file_path.name == "sw.js":
             self.send_header("Service-Worker-Allowed", "/")
         self.end_headers()
