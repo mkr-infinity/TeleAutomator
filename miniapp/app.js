@@ -710,7 +710,11 @@
     const expBtn = $("sheet-expand");
     if (expBtn) expBtn.setAttribute("aria-expanded", "false");
     $("sheet-title").textContent = title;
-    $("sheet-body").innerHTML = bodyHtml;
+    const bodyEl = $("sheet-body");
+    if (bodyEl) {
+      bodyEl.innerHTML = bodyHtml;
+      bodyEl.scrollTop = 0;
+    }
     const actions = $("sheet-actions");
     actions.innerHTML = "";
     (buttons || []).forEach((b) => {
