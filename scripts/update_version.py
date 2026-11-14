@@ -25,6 +25,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 INIT_FILE = ROOT / "app" / "__init__.py"
 PYPROJECT_FILE = ROOT / "pyproject.toml"
+CITATION_FILE = ROOT / "CITATION.cff"
+INDEX_HTML = ROOT / "miniapp" / "index.html"
+APP_JS = ROOT / "miniapp" / "app.js"
+SW_JS = ROOT / "miniapp" / "sw.js"
 BANNER_SVG = ROOT / "assets" / "banner.svg"
 
 # Files/dirs never scanned (venvs, caches, git internals)
@@ -61,6 +65,46 @@ def sync_static_copies(version: str) -> None:
         print(f"✅ pyproject.toml -> {version}")
     else:
         print(f"•  pyproject.toml already at {version}")
+
+    # CITATION.cff (project version, keeping cff-version spec intact)
+    if CITATION_FILE.exists():
+        cff = CITATION_FILE.read_text(encoding="utf-8")
+        updated_cff = re.sub(r'((?<!cff-)version:\s*)\d+\.\d+\.\d+', rf'\g<1>{version}', cff, count=1)
+        if updated_cff != cff:
+            CITATION_FILE.write_text(updated_cff, encoding="utf-8")
+            print(f"✅ CITATION.cff -> {version}")
+        else:
+            print(f"•  CITATION.cff already at {version}")
+
+    # miniapp/index.html (JSON-LD structured data softwareVersion)
+    if INDEX_HTML.exists():
+        html = INDEX_HTML.read_text(encoding="utf-8")
+        updated_html = re.sub(r'("softwareVersion":\s*)"\d+\.\d+\.\d+"', rf'\1"{version}"', html, count=1)
+        if updated_html != html:
+            INDEX_HTML.write_text(updated_html, encoding="utf-8")
+            print(f"✅ miniapp/index.html -> {version}")
+        else:
+            print(f"•  miniapp/index.html already at {version}")
+
+    # miniapp/app.js (demo & fallback version strings)
+    if APP_JS.exists():
+        js = APP_JS.read_text(encoding="utf-8")
+        updated_js = re.sub(r'(version:\s*)"\d+\.\d+\.\d+"', rf'\1"{version}"', js)
+        if updated_js != js:
+            APP_JS.write_text(updated_js, encoding="utf-8")
+            print(f"✅ miniapp/app.js -> {version}")
+        else:
+            print(f"•  miniapp/app.js already at {version}")
+
+    # miniapp/sw.js (PWA offline cache version)
+    if SW_JS.exists():
+        sw = SW_JS.read_text(encoding="utf-8")
+        updated_sw = re.sub(r'(CACHE_NAME\s*=\s*"teleautomator-v)\d+\.\d+\.\d+"', rf'\g<1>{version}"', sw)
+        if updated_sw != sw:
+            SW_JS.write_text(updated_sw, encoding="utf-8")
+            print(f"✅ miniapp/sw.js -> v{version}")
+        else:
+            print(f"•  miniapp/sw.js already at v{version}")
 
     # assets/banner.svg branding text ("TELEAUTOMATOR vX.Y" — major.minor only)
     if BANNER_SVG.exists():

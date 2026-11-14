@@ -621,6 +621,19 @@ class Database:
             row = cursor.fetchone()
             return dict(row) if row else None
 
+    def find_chat_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+        """Retrieve stored metadata matching a username (case-insensitive)."""
+        clean = str(username).strip().lstrip("@").lower()
+        if not clean:
+            return None
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT chat_id, title, username, chat_type FROM known_chats WHERE LOWER(username) = ?",
+                (clean,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
     def _get_context_file_path(self, chat_id: int) -> Path:
         """Physical context file location for an individual chat/group."""
         return self.contexts_dir / f"{chat_id}.json"

@@ -4,7 +4,7 @@ authors:
   - family-names: "Raja"
     given-names: "Mohammad Kaif"
 title: "TeleAutomator: AI-Powered Telegram Userbot & Chat Automation Assistant"
-version: 2.9.0
+version: 3.0.2
 date-released: 2026-11-14
 url: "https://github.com/mkr-infinity/TeleAutomator"
 repository-code: "https://github.com/mkr-infinity/TeleAutomator"

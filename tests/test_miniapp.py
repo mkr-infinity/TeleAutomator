@@ -31,6 +31,7 @@ class FakePrivacy:
 
 class FakeSafety:
     is_emergency_stopped = False
+    quiet_hours_enabled = True
 
     def get_remaining_pause_seconds(self):
         return 0
@@ -213,6 +214,10 @@ def test_handle_state_and_activity(tmp_path):
     assert state["mode"]
     assert state["chats_allowed"] == 2
     assert "prompt" in state and "owner_name" in state
+    assert state["quiet_hours_enabled"] is True
+    ctx.safety.quiet_hours_enabled = False
+    assert api.handle_state()["quiet_hours_enabled"] is False
+    ctx.safety.quiet_hours_enabled = True
     # activity: real schema, one outgoing message
     with ctx.db._get_connection() as conn:
         conn.execute(
@@ -430,6 +435,76 @@ def test_resolve_miniapp_url_railway_and_custom(monkeypatch):
     assert resolve_miniapp_url() == "https://panel.mycustomdomain.com"
 
 
+def test_handle_fetch_models_gemini(tmp_path, monkeypatch):
+    ctx, _ = make_ctx(tmp_path)
+    api = MiniAppAPI(ctx)
+
+    class MockGeminiResponse:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def read(self):
+            return json.dumps({
+                "models": [
+                    {"name": "models/gemini-2.5-flash", "supportedGenerationMethods": ["generateContent"]},
+                    {"name": "models/gemini-2.5-flash-lite", "supportedGenerationMethods": ["generateContent"]},
+                    {"name": "models/text-embedding-004", "supportedGenerationMethods": ["embedContent"]},
+                ]
+            }).encode("utf-8")
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=10.0: MockGeminiResponse())
+    res = api.handle_fetch_models(api_key="AIzaSyTestKey")
+    assert res["ok"] is True
+    assert "gemini-2.5-flash-lite" in res["models"]
+    assert "gemini-2.5-flash" in res["models"]
+    assert "text-embedding-004" not in res["models"]
+
+
+def test_handle_test_model_gemini_custom_message(tmp_path, monkeypatch):
+    ctx, _ = make_ctx(tmp_path)
+    api = MiniAppAPI(ctx)
+
+    sent_prompt = None
+
+    class MockGeminiTestResp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def read(self):
+            return json.dumps({
+                "candidates": [
+                    {"content": {"parts": [{"text": f"Echo: {sent_prompt}"}]}}
+                ]
+            }).encode("utf-8")
+
+    def mock_gemini_open(req, timeout=12.0):
+        nonlocal sent_prompt
+        body = json.loads(req.data.decode("utf-8"))
+        sent_prompt = body["contents"][0]["parts"][0]["text"]
+        return MockGeminiTestResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_gemini_open)
+    res = api.handle_test_model(
+        message="custom test question 123",
+        model="gemini-2.5-flash",
+        api_key="AIzaSyTestKey",
+    )
+    assert res["ok"] is True
+    assert "custom test question 123" in res["reply"]
+    assert res["working_models"] == ["gemini-2.5-flash"]
+
+
+def test_map_action_allow_supports_username(tmp_path):
+    ctx, _ = make_ctx(tmp_path)
+    api = MiniAppAPI(ctx)
+    cmd = api.map_action_to_command("allow", {"chat_id": "@mygroup"})
+    assert cmd == "/allowchat @mygroup"
+    cmd_remove = api.map_action_to_command("remove", {"chat_id": "@mygroup"})
+    assert cmd_remove == "/removechat @mygroup"
+
+
 def test_validate_init_data_real_telegram_url_encoded():
     import urllib.parse
     token = TEST_TOKEN
@@ -529,6 +604,21 @@ def test_data_sync_actions_immediate_persistence(tmp_path):
     res = api.handle_action(555000111, "chat_chatty", {"chat_id": -222, "value": "45"})
     assert res["ok"] is True
     assert ctx.db.get_state("chat_chatty_-222") == "0.45"
+
+
+def test_service_worker_asset_and_registration():
+    miniapp_dir = Path(__file__).resolve().parent.parent / "miniapp"
+    sw_file = miniapp_dir / "sw.js"
+    assert sw_file.is_file()
+    sw_content = sw_file.read_text(encoding="utf-8")
+    assert "teleautomator-v3.0.2" in sw_content
+    assert "caches.open" in sw_content
+    assert "self.skipWaiting" in sw_content
+    assert "self.clients.claim" in sw_content
+
+    app_js = (miniapp_dir / "app.js").read_text(encoding="utf-8")
+    assert "serviceWorker.register" in app_js
+
 
 
 

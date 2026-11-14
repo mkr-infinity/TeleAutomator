@@ -231,6 +231,7 @@ class MiniAppAPI:
             "paused_remaining_sec": int(paused),
             "emergency": emergency,
             "quiet_hours": in_quiet,
+            "quiet_hours_enabled": getattr(ctx.safety, "quiet_hours_enabled", ctx.db.get_state("quiet_hours_enabled", "1") == "1"),
             "quiet_hours_start": qh_start,
             "quiet_hours_end": qh_end,
             "quiet_hours_schedule": f"{_format_ampm(qh_start)} – {_format_ampm(qh_end)} IST",
@@ -525,24 +526,95 @@ class MiniAppAPI:
         return {"ok": response is not None, "response": response or "No response."}
 
     def handle_fetch_models(self, base_url: str = "", api_key: Optional[str] = None) -> dict:
-        """Fetch available models from an OpenAI-compatible /models endpoint."""
-        raw_url = (base_url or "").strip().rstrip("/")
-        if not raw_url:
-            raw_url = (
-                self.ctx.db.get_state("ai_base_url")
-                or (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_base_url", ""))
-                or "https://api.openai.com/v1"
-            )
-        if raw_url.endswith("/chat/completions"):
-            raw_url = raw_url[:-len("/chat/completions")].rstrip("/")
-        models_url = raw_url if raw_url.endswith("/models") else f"{raw_url}/models"
+        """Fetch available models from Gemini or OpenAI-compatible endpoint."""
+        provider = (
+            self.ctx.db.get_state("ai_provider")
+            or (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_provider", "gemini"))
+            or "gemini"
+        ).strip().lower()
 
         key = (
             api_key
             or self.ctx.db.get_state("ai_api_key")
             or (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_api_key", ""))
             or ""
-        )
+        ).strip()
+
+        user_base = (base_url or "").strip().rstrip("/")
+        db_base = (self.ctx.db.get_state("ai_base_url") or "").strip().rstrip("/")
+        config_base = (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_base_url", "") or "").strip().rstrip("/")
+        effective_base = user_base or db_base or config_base
+
+        if effective_base:
+            is_gemini = "googleapis.com" in effective_base
+        else:
+            is_gemini = (provider == "gemini" or key.startswith("AIzaSy") or not provider)
+
+        if is_gemini:
+            if not key:
+                return {
+                    "ok": True,
+                    "models": [
+                        "gemini-2.5-flash-lite",
+                        "gemini-2.5-flash",
+                        "gemini-2.5-pro",
+                        "gemini-1.5-flash",
+                        "gemini-1.5-pro",
+                    ],
+                    "url": "https://generativelanguage.googleapis.com/v1beta/models",
+                }
+            models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
+            headers = {"Accept": "application/json", "x-goog-api-key": key}
+            req = urllib.request.Request(models_url, headers=headers, method="GET")
+            try:
+                with urllib.request.urlopen(req, timeout=10.0) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+                    raw_models = body.get("models") or []
+                    models: list[str] = []
+                    for item in raw_models:
+                        if isinstance(item, dict):
+                            methods = item.get("supportedGenerationMethods") or []
+                            name = str(item.get("name") or "")
+                            if "generateContent" in methods or not methods:
+                                clean_name = name.removeprefix("models/").strip()
+                                if clean_name and not any(bad in clean_name.lower() for bad in ("embedding", "aqa", "imagen")):
+                                    models.append(clean_name)
+                        elif isinstance(item, str):
+                            clean_name = item.removeprefix("models/").strip()
+                            if clean_name:
+                                models.append(clean_name)
+
+                    def _sort_gemini(m: str):
+                        ml = m.lower()
+                        if "flash-lite" in ml:
+                            return (0, ml)
+                        if "flash" in ml:
+                            return (1, ml)
+                        if "pro" in ml:
+                            return (2, ml)
+                        return (3, ml)
+
+                    models = sorted(list(dict.fromkeys(models)), key=_sort_gemini)
+                    if not models:
+                        models = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-1.5-flash"]
+                    return {"ok": True, "models": models, "url": "https://generativelanguage.googleapis.com/v1beta/models"}
+            except urllib.error.HTTPError as e:
+                err_msg = f"HTTP {e.code}"
+                try:
+                    eb = json.loads(e.read().decode("utf-8"))
+                    if isinstance(eb, dict) and "error" in eb:
+                        err_msg = f"HTTP {e.code}: {eb['error'].get('message', eb['error'])}"
+                except Exception:
+                    pass
+                return {"ok": False, "error": err_msg, "url": "https://generativelanguage.googleapis.com/v1beta/models"}
+            except Exception as e:
+                return {"ok": False, "error": str(e), "url": "https://generativelanguage.googleapis.com/v1beta/models"}
+
+        raw_url = effective_base or "https://api.openai.com/v1"
+        if raw_url.endswith("/chat/completions"):
+            raw_url = raw_url[:-len("/chat/completions")].rstrip("/")
+        models_url = raw_url if raw_url.endswith("/models") else f"{raw_url}/models"
+
         headers = {"Accept": "application/json"}
         if key:
             headers["Authorization"] = f"Bearer {key}"
@@ -584,78 +656,132 @@ class MiniAppAPI:
     ) -> dict:
         """Test chat message live in the GUI, test candidates, auto-prune dead models, and auto-save working rotation."""
         prompt = (message or "hello").strip()
-        raw_base = (
-            base_url
-            or self.ctx.db.get_state("ai_base_url")
-            or (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_base_url", ""))
-            or "https://api.openai.com/v1"
-        ).strip()
-        endpoint = raw_base.rstrip("/")
-        if not endpoint.endswith("/chat/completions"):
-            endpoint = f"{endpoint}/chat/completions"
+        provider = (
+            self.ctx.db.get_state("ai_provider")
+            or (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_provider", "gemini"))
+            or "gemini"
+        ).strip().lower()
 
         key = (
             api_key
             or self.ctx.db.get_state("ai_api_key")
             or (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_api_key", ""))
             or ""
-        )
+        ).strip()
 
+        user_base = (base_url or "").strip().rstrip("/")
+        db_base = (self.ctx.db.get_state("ai_base_url") or "").strip().rstrip("/")
+        config_base = (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_base_url", "") or "").strip().rstrip("/")
+        effective_base = user_base or db_base or config_base
+
+        if effective_base:
+            is_gemini = "googleapis.com" in effective_base
+        else:
+            is_gemini = (provider == "gemini" or key.startswith("AIzaSy") or not provider)
+
+        default_model = "gemini-2.5-flash-lite,gemini-2.5-flash" if is_gemini else "gpt-4o-mini"
         model_param = (
             model
             or self.ctx.db.get_state("ai_model")
             or (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_model", ""))
-            or "gpt-4o-mini"
+            or default_model
         )
-        candidates = [m.strip() for m in model_param.replace(";", ",").split(",") if m.strip()]
+        candidates = [m.strip().removeprefix("models/") for m in model_param.replace(";", ",").split(",") if m.strip()]
         if not candidates:
-            candidates = ["gpt-4o-mini"]
+            candidates = ["gemini-2.5-flash-lite"] if is_gemini else ["gpt-4o-mini"]
 
         results: list[dict] = []
         working_models: list[str] = []
         reply_text = ""
         first_working_model = ""
 
-        for m in candidates:
-            payload = {
-                "model": m,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 150,
-                "temperature": 0.7,
-            }
-            data = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(
-                endpoint,
-                data=data,
-                headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
-                method="POST",
-            )
-            try:
-                with urllib.request.urlopen(req, timeout=12.0) as resp:
-                    body = json.loads(resp.read().decode("utf-8"))
-                    choices = body.get("choices", [])
-                    if choices:
-                        content = choices[0].get("message", {}).get("content") or ""
-                        content = str(content).strip()
-                        if content and content.lower() not in ("none", "null", "undefined"):
-                            working_models.append(m)
-                            results.append({"model": m, "ok": True, "detail": "Working"})
-                            if not reply_text:
-                                reply_text = content
-                                first_working_model = m
-                            continue
-                    results.append({"model": m, "ok": False, "detail": "Empty response"})
-            except urllib.error.HTTPError as e:
-                detail = f"HTTP {e.code}"
+        if is_gemini:
+            for m in candidates:
+                clean_m = m.removeprefix("models/").strip()
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_m}:generateContent?key={key}"
+                payload = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 0.7, "maxOutputTokens": 200},
+                }
+                data = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(
+                    url,
+                    data=data,
+                    headers={"Content-Type": "application/json", "x-goog-api-key": key},
+                    method="POST",
+                )
                 try:
-                    eb = json.loads(e.read().decode("utf-8"))
-                    if isinstance(eb, dict) and "error" in eb:
-                        detail = f"HTTP {e.code}: {eb['error'].get('message', eb['error'])}"[:45]
-                except Exception:
-                    pass
-                results.append({"model": m, "ok": False, "detail": detail})
-            except Exception as e:
-                results.append({"model": m, "ok": False, "detail": str(e)[:45]})
+                    with urllib.request.urlopen(req, timeout=12.0) as resp:
+                        body = json.loads(resp.read().decode("utf-8"))
+                        choices = body.get("candidates", [])
+                        if choices:
+                            parts = choices[0].get("content", {}).get("parts", [])
+                            if parts:
+                                raw_text = parts[0].get("text")
+                                if raw_text is not None and str(raw_text).strip().lower() not in ("none", "null", "undefined", ""):
+                                    working_models.append(clean_m)
+                                    results.append({"model": clean_m, "ok": True, "detail": "Working"})
+                                    if not reply_text:
+                                        reply_text = str(raw_text).strip().strip('"')
+                                        first_working_model = clean_m
+                                    continue
+                        results.append({"model": clean_m, "ok": False, "detail": "Empty response"})
+                except urllib.error.HTTPError as e:
+                    detail = f"HTTP {e.code}"
+                    try:
+                        eb = json.loads(e.read().decode("utf-8"))
+                        if isinstance(eb, dict) and "error" in eb:
+                            detail = f"HTTP {e.code}: {eb['error'].get('message', eb['error'])}"[:45]
+                    except Exception:
+                        pass
+                    results.append({"model": clean_m, "ok": False, "detail": detail})
+                except Exception as e:
+                    results.append({"model": clean_m, "ok": False, "detail": str(e)[:45]})
+        else:
+            endpoint = (effective_base or "https://api.openai.com/v1").rstrip("/")
+            if not endpoint.endswith("/chat/completions"):
+                endpoint = f"{endpoint}/chat/completions"
+
+            for m in candidates:
+                payload = {
+                    "model": m,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 150,
+                    "temperature": 0.7,
+                }
+                data = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(
+                    endpoint,
+                    data=data,
+                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+                    method="POST",
+                )
+                try:
+                    with urllib.request.urlopen(req, timeout=12.0) as resp:
+                        body = json.loads(resp.read().decode("utf-8"))
+                        choices = body.get("choices", [])
+                        if choices:
+                            content = choices[0].get("message", {}).get("content") or ""
+                            content = str(content).strip()
+                            if content and content.lower() not in ("none", "null", "undefined"):
+                                working_models.append(m)
+                                results.append({"model": m, "ok": True, "detail": "Working"})
+                                if not reply_text:
+                                    reply_text = content
+                                    first_working_model = m
+                                continue
+                        results.append({"model": m, "ok": False, "detail": "Empty response"})
+                except urllib.error.HTTPError as e:
+                    detail = f"HTTP {e.code}"
+                    try:
+                        eb = json.loads(e.read().decode("utf-8"))
+                        if isinstance(eb, dict) and "error" in eb:
+                            detail = f"HTTP {e.code}: {eb['error'].get('message', eb['error'])}"[:45]
+                    except Exception:
+                        pass
+                    results.append({"model": m, "ok": False, "detail": detail})
+                except Exception as e:
+                    results.append({"model": m, "ok": False, "detail": str(e)[:45]})
 
         updated_chain = ""
         if working_models:
@@ -857,6 +983,8 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache")
+        if file_path.name == "sw.js":
+            self.send_header("Service-Worker-Allowed", "/")
         self.end_headers()
         self.wfile.write(body)
 

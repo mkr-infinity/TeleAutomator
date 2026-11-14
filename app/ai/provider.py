@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -59,24 +60,76 @@ class GeminiProvider(AIProvider):
 
     def __init__(self, api_key: str, model: str = "gemini-2.5-flash", usage_callback: Optional[Any] = None):
         self.api_key = api_key
-        clean = (model or "gemini-2.5-flash").strip()
-        if clean.startswith("models/"):
-            clean = clean[len("models/"):]
-        self.model = clean
+        raw = (model or "gemini-2.5-flash").strip()
+        cleaned_parts = [p.strip().removeprefix("models/") for p in raw.replace(";", ",").split(",") if p.strip()]
+        self.model = ",".join(cleaned_parts) if cleaned_parts else "gemini-2.5-flash"
         self.usage_callback = usage_callback
+
+    def get_candidate_models(self) -> list[str]:
+        configured = [m.strip().removeprefix("models/") for m in self.model.replace(";", ",").split(",") if m.strip()]
+        res: list[str] = []
+        for m in configured:
+            if m and m not in res:
+                res.append(m)
+        for fallback in (
+            "gemini-2.5-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+        ):
+            if fallback not in res:
+                res.append(fallback)
+        return res
+
+    def check_working_models(self, timeout: float = 8.0) -> list[tuple[str, bool, str]]:
+        """Ping candidate Gemini models with a minimal test prompt to verify live availability."""
+        candidates = self.get_candidate_models()
+        results: list[tuple[str, bool, str]] = []
+        working: list[str] = []
+        payload = {
+            "contents": [{"parts": [{"text": "hi"}]}],
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 10},
+        }
+        data = json.dumps(payload).encode("utf-8")
+        for m in candidates:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={self.api_key}"
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key},
+                method="POST",
+            )
+            try:
+                t0 = time.time()
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    latency = int((time.time() - t0) * 1000)
+                    body = json.loads(resp.read().decode("utf-8"))
+                    candidates_out = body.get("candidates", [])
+                    if candidates_out:
+                        results.append((m, True, f"200 OK ({latency}ms)"))
+                        working.append(m)
+                    else:
+                        results.append((m, False, "Empty candidates"))
+            except urllib.error.HTTPError as e:
+                detail = f"HTTP {e.code}"
+                try:
+                    eb = json.loads(e.read().decode("utf-8"))
+                    if isinstance(eb, dict) and "error" in eb:
+                        detail = f"HTTP {e.code}: {eb['error'].get('message', eb['error'])}"[:45]
+                except Exception:
+                    pass
+                results.append((m, False, detail))
+            except Exception as e:
+                results.append((m, False, str(e)[:35]))
+        if working:
+            self.model = ",".join(working)
+        return results
 
     def generate_reply(self, prompt: str, system_instructions: str) -> str:
         # Candidate models to try in sequence with priority for fast Flash and Lite options
-        candidate_models = [self.model]
-        for fallback in (
-            "gemini-3.5-flash-lite",
-            "gemini-3.5-flash",
-            "gemini-2.5-flash-lite",
-            "gemini-2.5-flash",
-            "gemini-1.5-flash",
-        ):
-            if fallback not in candidate_models:
-                candidate_models.append(fallback)
+        candidate_models = self.get_candidate_models()
 
         payload = {
             "system_instruction": {"parts": [{"text": system_instructions}]},
