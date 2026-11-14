@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use or reference TeleAutomator, please cite it as below."
+authors:
+  - family-names: "Raja"
+    given-names: "Mohammad Kaif"
+title: "TeleAutomator: AI-Powered Telegram Userbot & Chat Automation Assistant"
+version: 2.9.0
+date-released: 2026-11-14
+url: "https://github.com/mkr-infinity/TeleAutomator"
+repository-code: "https://github.com/mkr-infinity/TeleAutomator"
+keywords:
+  - telegram
+  - telegram-bot
+  - telegram-automation
+  - telegram-userbot
+  - telegram-miniapp
+  - telethon
+  - ai-agent
+  - gemini
+  - llm
+  - chatbot
+  - automation
+  - selfbot
+  - material-design
+  - claymorphism
+  - tma

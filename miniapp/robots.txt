@@ -1,0 +1,3 @@
+# Robots.txt for TeleAutomator Mini App
+User-agent: *
+Allow: /

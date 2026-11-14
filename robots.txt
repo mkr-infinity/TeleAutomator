@@ -1,0 +1,5 @@
+# Robots.txt for TeleAutomator
+User-agent: *
+Allow: /
+
+Sitemap: https://mkr-infinity.github.io/TeleAutomator/sitemap.xml
