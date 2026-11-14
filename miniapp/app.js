@@ -43,6 +43,10 @@
       prompt: "Reply like a 22-year-old Delhi guy, short, lowercase, Hinglish words when natural.",
       owner_name: "Kaif", ai_engine: "Gemini", ai_model: "gemini-2.5-flash-lite", ai_base_url: "",
       chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "2.9.0",
+      auto_reactions: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
+      thinking: "default", temperature: "0.7", lang: "dynamic", max_tokens: "512",
+      quiet_hours_start: "02:00", quiet_hours_end: "08:00", quiet_hours_schedule: "02:00 AM – 08:00 AM IST",
+      rules: ["pricing => We update our rates monthly, DM for catalog!", "help => How can I assist you today?"],
     },
     chats: [
       { id: 123456789, name: "Rohan Sharma", username: "@rohan_s", type: "Private", chatty: "", style: "", prompt: "", voice_profile: true, blocked: false },
@@ -53,14 +57,14 @@
       { id: 876543210, name: "Mom", username: "", type: "Private", chatty: "0.25", style: "", prompt: "Never send links here.", voice_profile: false, blocked: false },
     ],
     pending: [
-      { id: 41, chat_id: -1001987654321, text: "btw are you joining the demo day on friday? wanted to show you the pitch deck before we send it out", created: "2026-11-13 14:22" },
-      { id: 40, chat_id: 987654321, text: "reached home? call me when you're free, need to ask about the weekend plan", created: "2026-11-13 13:05" },
+      { id: 41, chat_id: -1001987654321, chat_title: "Startup India Founders", text: "btw are you joining the demo day on friday? wanted to show you the pitch deck before we send it out", created: "2026-11-13 14:22" },
+      { id: 40, chat_id: 987654321, chat_title: "Aarav", text: "🎙️ Reached home! Call me when free, need to ask about the weekend plan.", created: "2026-11-13 13:05", is_voice: true, voice_dur: "0:21" },
     ],
     activity: [
       { chat: "Delhi Tech Meetup", chat_id: -1001765432109, sender: "TeleAutomator", text: "yeah the venue shifted to Hauz Khas this month, same 7pm slot", ts: "2026-11-13 14:18" },
-      { chat: "Rohan Sharma", chat_id: 123456789, sender: "TeleAutomator", text: "sent you the file, check when free", ts: "2026-11-13 13:52" },
+      { chat: "Rohan Sharma", chat_id: 123456789, sender: "TeleAutomator", text: "🎙️ Haan bhai venue pahunch gaya, 2nd floor hall booked hai", ts: "2026-11-13 13:52", is_voice: true, voice_dur: "0:14" },
       { chat: "Startup India Founders", chat_id: -1001987654321, sender: "TeleAutomator", text: "pricing page looks solid, maybe add a monthly option", ts: "2026-11-13 12:30" },
-      { chat: "Mom", chat_id: 876543210, sender: "TeleAutomator", text: "yes mom, ate already", ts: "2026-11-13 11:04" },
+      { chat: "Mom", chat_id: 876543210, sender: "TeleAutomator", text: "📷 [photo] Lunch pic sent, looks great!", ts: "2026-11-13 11:04", is_media: true },
     ],
     access: [
       { id: 555000111, name: "Kaif", username: "@mkr_infinity", main: true, perms: "all" },
@@ -88,13 +92,181 @@
     if (path === "/api/activity") return { activity: DEMO_DATA.activity };
     if (path === "/api/access") return { users: DEMO_DATA.access };
     if (path === "/api/commands") return { commands: DEMO_DATA.commands };
-    if (path === "/api/cmd") return { ok: true, response: "*Demo* command `/demo` ran against fixture data.\n\n• Nothing changed, this screen is a preview." };
+    if (path === "/api/models" || path === "/api/fetch_models") {
+      return {
+        ok: true,
+        models: [
+          "gemini-2.5-flash-lite",
+          "gemini-2.5-flash",
+          "gemini-2.5-pro",
+          "gpt-4o-mini",
+          "llama-3.3-70b-instruct"
+        ]
+      };
+    }
+    if (path === "/api/test_model") {
+      const model = (body && body.model) || "gemini-2.5-flash-lite";
+      return {
+        ok: true,
+        model,
+        response: "Hello! TeleAutomator AI engine is online and responding quickly in test mode.",
+        results: [
+          { model, status: "ok", latency: 142 }
+        ],
+        pruned_count: 0
+      };
+    }
+    if (path === "/api/cmd") {
+      const cmd = (body && body.command) || "";
+      if (cmd.includes("checkmodels")) {
+        return {
+          ok: true,
+          response: "✅ *Model Health Check*\n\n• `gemini-2.5-flash-lite`: Available (112ms)\n• `gemini-2.5-flash`: Available (148ms)\n• `gpt-4o-mini`: Available (195ms)\n\nAll candidate models healthy and rotating properly."
+        };
+      }
+      return { ok: true, response: `*Demo* command \`${esc(cmd || "/demo")}\` ran against fixture data.\n\n• Changes persisted locally for preview.` };
+    }
     if (path === "/api/action") {
       const a = body && body.action;
+      const p = (body && body.params) || {};
       if (a === "approve" || a === "reject") {
-        const i = DEMO_DATA.pending.findIndex((p) => String(p.id) === String(body.params.id));
+        const i = DEMO_DATA.pending.findIndex((item) => String(item.id) === String(p.id));
         if (i >= 0) DEMO_DATA.pending.splice(i, 1);
         DEMO_DATA.state.pending_count = DEMO_DATA.pending.length;
+        return { ok: true, response: a === "approve" ? "Draft approved and sent!" : "Draft rejected and discarded." };
+      }
+      if (a === "pause") {
+        DEMO_DATA.state.state = "paused";
+        DEMO_DATA.state.paused_remaining_sec = (p.minutes || 30) * 60;
+        return { ok: true, response: `Paused for ${p.minutes || 30} minutes.` };
+      }
+      if (a === "resume") {
+        DEMO_DATA.state.state = "active";
+        DEMO_DATA.state.paused_remaining_sec = 0;
+        return { ok: true, response: "Automation resumed." };
+      }
+      if (a === "stop") {
+        DEMO_DATA.state.state = "stopped";
+        DEMO_DATA.state.emergency = true;
+        return { ok: true, response: "Emergency stop activated." };
+      }
+      if (a === "mode") {
+        DEMO_DATA.state.mode = p.value;
+        return { ok: true, response: `Mode changed to ${p.value}.` };
+      }
+      if (a === "style") {
+        DEMO_DATA.state.style = p.value;
+        return { ok: true, response: `Reply style changed to ${p.value}.` };
+      }
+      if (a === "prompt") {
+        DEMO_DATA.state.prompt = p.value === "reset" ? "" : p.value;
+        return { ok: true, response: p.value === "reset" ? "Prompt reset to built-in persona." : "Custom prompt saved." };
+      }
+      if (a === "name") {
+        DEMO_DATA.state.owner_name = p.value;
+        return { ok: true, response: `Owner name saved as ${p.value}.` };
+      }
+      if (a === "model") {
+        DEMO_DATA.state.ai_model = p.value;
+        return { ok: true, response: `Model updated to ${p.value}.` };
+      }
+      if (a === "baseurl") {
+        DEMO_DATA.state.ai_base_url = p.value;
+        return { ok: true, response: "Endpoint URL updated." };
+      }
+      if (a === "apikey") {
+        return { ok: true, response: "API key updated." };
+      }
+      if (a === "allow") {
+        const cid = parseInt(p.chat_id, 10) || Date.now();
+        DEMO_DATA.chats.push({
+          id: cid,
+          name: `Chat ${cid}`,
+          username: "",
+          type: cid < 0 ? "Group" : "Private",
+          chatty: "",
+          style: "",
+          prompt: "",
+          voice_profile: false,
+          blocked: false
+        });
+        DEMO_DATA.state.chats_allowed = DEMO_DATA.chats.length;
+        return { ok: true, response: `Chat ${cid} added to allowlist.` };
+      }
+      if (a === "remove") {
+        const i = DEMO_DATA.chats.findIndex((c) => String(c.id) === String(p.chat_id));
+        if (i >= 0) DEMO_DATA.chats.splice(i, 1);
+        DEMO_DATA.state.chats_allowed = DEMO_DATA.chats.length;
+        return { ok: true, response: `Chat ${p.chat_id} removed from allowlist.` };
+      }
+      if (a === "chat_chatty") {
+        const c = DEMO_DATA.chats.find((x) => String(x.id) === String(p.chat_id));
+        if (c) c.chatty = p.value === "def" ? "" : String(parseFloat(p.value) / 100);
+        return { ok: true, response: `Chatty updated for chat ${p.chat_id}.` };
+      }
+      if (a === "chatprompt") {
+        const c = DEMO_DATA.chats.find((x) => String(x.id) === String(p.chat_id));
+        if (c) c.prompt = p.value === "default" ? "" : p.value;
+        return { ok: true, response: `Prompt updated for chat ${p.chat_id}.` };
+      }
+      if (a === "setcontext") {
+        const c = DEMO_DATA.chats.find((x) => String(x.id) === String(p.chat_id));
+        if (c) c.context = p.value;
+        return { ok: true, response: `Context notes saved for chat ${p.chat_id}.` };
+      }
+      if (a === "delcontext") {
+        const c = DEMO_DATA.chats.find((x) => String(x.id) === String(p.chat_id));
+        if (c) delete c.context;
+        return { ok: true, response: `Context notes cleared for chat ${p.chat_id}.` };
+      }
+      if (a === "syncpins") {
+        return { ok: true, response: `Synced pinned message notes for chat ${p.chat_id}.` };
+      }
+      if (a === "addauth") {
+        const uid = parseInt(p.user_id, 10) || 999999999;
+        DEMO_DATA.access.push({ id: uid, name: `User ${uid}`, username: "", main: false, perms: "all" });
+        return { ok: true, response: `User ${uid} added to authorized users.` };
+      }
+      if (a === "removeauth") {
+        const i = DEMO_DATA.access.findIndex((u) => String(u.id) === String(p.user_id));
+        if (i >= 0) DEMO_DATA.access.splice(i, 1);
+        return { ok: true, response: `User ${p.user_id} removed from authorized users.` };
+      }
+      if (a === "quiethours") {
+        DEMO_DATA.state.quiet_hours = p.value !== "off";
+        DEMO_DATA.state.quiet_hours_schedule = p.value === "off" ? "Disabled" : p.value;
+        return { ok: true, response: p.value === "off" ? "Quiet hours disabled." : `Quiet hours schedule set to ${p.value}.` };
+      }
+      if (a === "sleep") {
+        DEMO_DATA.state.quiet_hours = true;
+        return { ok: true, response: "Sleep mode engaged until morning IST. Good night!" };
+      }
+      if (a === "addrule") {
+        if (!DEMO_DATA.state.rules) DEMO_DATA.state.rules = [];
+        DEMO_DATA.state.rules.push(p.value);
+        return { ok: true, response: `Keyword rule added: ${p.value}` };
+      }
+      if (a === "delrule") {
+        if (DEMO_DATA.state.rules) {
+          DEMO_DATA.state.rules = DEMO_DATA.state.rules.filter((r) => !r.startsWith(p.value) && r !== p.value);
+        }
+        return { ok: true, response: `Keyword rule deleted for "${p.value}".` };
+      }
+      if (a === "reaction" || a === "multibubble" || a === "typo" || a === "debounce" || a === "followup" || a === "mentiononly") {
+        const mapKey = a === "reaction" ? "auto_reactions" : (a === "mentiononly" ? "mention_only" : a);
+        DEMO_DATA.state[mapKey] = p.value === "on";
+        return { ok: true, response: `${a} is now ${p.value.toUpperCase()}.` };
+      }
+      if (a === "thinking" || a === "temp" || a === "lang" || a === "maxtokens") {
+        const stateKey = a === "temp" ? "temperature" : (a === "maxtokens" ? "max_tokens" : a);
+        DEMO_DATA.state[stateKey] = p.value;
+        return { ok: true, response: `${a} parameter set to ${p.value}.` };
+      }
+      if (a === "backup") {
+        return { ok: true, response: "Snapshot backup created successfully at database/backups/teleautomator_snapshot.db" };
+      }
+      if (a === "clearcontext") {
+        return { ok: true, response: "AI memory cache cleared across chats." };
       }
       return { ok: true, response: "*Demo* action applied to fixture data." };
     }
@@ -118,6 +290,48 @@
     return `<span class="md">${h}</span>`;
   }
 
+  function formatStructuredAppResponse(raw) {
+    if (!raw) return '<div class="empty">No response received.</div>';
+    const lines = String(raw).split("\n").map((l) => l.trim()).filter(Boolean);
+    const elements = [];
+
+    let startIndex = 0;
+    if (lines.length > 0 && /^[✅❌⚠️❓🚀⚡⏸️▶️🛑🤖]/.test(lines[0])) {
+      const icon = lines[0].slice(0, 2);
+      const title = lines[0].slice(2).trim();
+      elements.push(`<div class="app-callout">
+        <span class="app-callout-icon">${esc(icon)}</span>
+        <div class="app-callout-body"><strong>${esc(plain(title))}</strong></div>
+      </div>`);
+      startIndex = 1;
+    }
+
+    for (let i = startIndex; i < lines.length; i++) {
+      const line = lines[i];
+      if (/^[•\-\*]\s/.test(line)) {
+        const content = line.replace(/^[•\-\*]\s/, "");
+        const cmdMatch = content.match(/^`?(\/[a-zA-Z0-9_]+)`?\s*[-–—:]?\s*(.*)$/);
+        if (cmdMatch) {
+          elements.push(`<div class="app-response-item">
+            <span class="cmd-pill">${esc(cmdMatch[1])}</span>
+            <span>${esc(plain(cmdMatch[2]))}</span>
+          </div>`);
+        } else {
+          elements.push(`<div class="app-response-item">
+            <span class="app-item-bullet">•</span>
+            <span>${esc(plain(content))}</span>
+          </div>`);
+        }
+      } else if (/^(\*|\*\*)[^*]+(\*|\*\*):?$/.test(line)) {
+        elements.push(`<div class="app-response-header">${esc(plain(line))}</div>`);
+      } else {
+        elements.push(`<p class="app-response-text">${esc(plain(line))}</p>`);
+      }
+    }
+
+    return `<div class="app-response-card">${elements.join("")}</div>`;
+  }
+
   function plain(s) {
     return String(s ?? "").replace(/[*_`]/g, "");
   }
@@ -128,13 +342,87 @@
     return `${f}%`;
   }
 
+  // ------------------------------------------------------------ IST & AM/PM Dates
+  function formatIST(raw, showDate = true) {
+    if (!raw) return "—";
+    let str = String(raw).trim();
+    if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(str) && !str.endsWith("Z") && !str.includes("+")) {
+      str = str.replace(" ", "T") + "Z";
+    }
+    const date = new Date(str);
+    if (isNaN(date.getTime())) return String(raw);
+    try {
+      const formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Kolkata",
+        month: showDate ? "short" : undefined,
+        day: showDate ? "numeric" : undefined,
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      });
+      return `${formatter.format(date)} IST`;
+    } catch (_) {
+      const utc = date.getTime() + (date.getTimezoneOffset() * 60000);
+      const ist = new Date(utc + (3600000 * 5.5));
+      let hours = ist.getHours();
+      const minutes = String(ist.getMinutes()).padStart(2, "0");
+      const ampm = hours >= 12 ? "PM" : "AM";
+      hours = hours % 12 || 12;
+      const timeStr = `${hours}:${minutes} ${ampm} IST`;
+      if (!showDate) return timeStr;
+      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      return `${months[ist.getMonth()]} ${ist.getDate()}, ${timeStr}`;
+    }
+  }
+
+  function formatTime12h(timeStr) {
+    if (!timeStr) return "";
+    const match = String(timeStr).trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!match) return timeStr;
+    let h = parseInt(match[1], 10);
+    const m = match[2];
+    const ampm = h >= 12 ? "PM" : "AM";
+    h = h % 12 || 12;
+    return `${String(h).padStart(2, "0")}:${m} ${ampm}`;
+  }
+
+  function formatQuietSchedule(raw) {
+    if (!raw) return "02:00 AM – 08:00 AM IST";
+    const cleaned = String(raw).replace(/\s*IST\s*$/i, "").trim();
+    const parts = cleaned.split(/\s*[-–—]\s*/);
+    if (parts.length === 2) {
+      return `${formatTime12h(parts[0])} – ${formatTime12h(parts[1])} IST`;
+    }
+    return raw;
+  }
+
   // ------------------------------------------------------------ chrome ui
 
   let toastTimer = null;
-  function toast(text) {
+  function toast(text, kind = "info") {
     const el = $("toast");
-    el.textContent = plain(text) || "Done";
+    if (!el) return;
+    const plainText = plain(text) || "Done";
+
+    let statusKind = kind;
+    if (kind === "info") {
+      const lower = plainText.toLowerCase();
+      if (lower.includes("fail") || lower.includes("error") || lower.includes("halt") || lower.includes("stop")) {
+        statusKind = "err";
+      } else if (lower.includes("ok") || lower.includes("saved") || lower.includes("verified") || lower.includes("resumed") || lower.includes("allowed") || lower.includes("done")) {
+        statusKind = "ok";
+      }
+    }
+
+    el.className = `toast toast-${statusKind}`;
+    const iconEl = $("toast-icon");
+    const msgEl = $("toast-msg");
+    if (iconEl) iconEl.textContent = statusKind === "ok" ? "✓" : (statusKind === "err" ? "!" : "ℹ");
+    if (msgEl) msgEl.textContent = plainText;
+    else el.textContent = plainText;
+
     el.classList.remove("hidden");
+    haptic(statusKind === "err" ? "err" : (statusKind === "ok" ? "ok" : "light"));
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => el.classList.add("hidden"), 3200);
   }
@@ -183,11 +471,41 @@
     }
     $("sheet-backdrop").classList.remove("hidden");
     $("sheet").classList.remove("hidden");
+    updateTmaBackButton();
+    haptic("light");
   }
 
   function closeSheet() {
     $("sheet-backdrop").classList.add("hidden");
     $("sheet").classList.add("hidden");
+    updateTmaBackButton();
+    haptic("light");
+  }
+
+  function updateTmaBackButton() {
+    try {
+      if (!tg || !tg.BackButton) return;
+      const sheetOpen = $("sheet") && !$("sheet").classList.contains("hidden");
+      if (sheetOpen) {
+        tg.BackButton.show();
+        tg.BackButton.offClick(backToOverview);
+        tg.BackButton.offClick(closeSheet);
+        tg.BackButton.onClick(closeSheet);
+      } else if (currentView !== "overview") {
+        tg.BackButton.show();
+        tg.BackButton.offClick(closeSheet);
+        tg.BackButton.offClick(backToOverview);
+        tg.BackButton.onClick(backToOverview);
+      } else {
+        tg.BackButton.hide();
+        tg.BackButton.offClick(closeSheet);
+        tg.BackButton.offClick(backToOverview);
+      }
+    } catch (_) {}
+  }
+
+  function backToOverview() {
+    showView("overview");
   }
 
   // -------------------------------------------------------------- views
@@ -199,6 +517,7 @@
     document.querySelectorAll(".view").forEach((v) => v.classList.add("hidden"));
     $(`view-${name}`).classList.remove("hidden");
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === name));
+    updateTmaBackButton();
     haptic();
     loadView(name);
   }
@@ -218,12 +537,64 @@
     if (!s || s.authorized === false) return maybePaywall(s);
     renderState(s);
     const acts = await api("/api/activity");
+    renderSparkline(acts && acts.activity ? acts.activity : [], s.replies_24h || 0);
     const rows = (acts.activity || []).slice(0, 4);
     $("ov-activity").innerHTML = rows.length
       ? rows.map(feedRowHtml).join("")
       : `<div class="empty">No replies yet, the account stays quiet until a chat talks.</div>`;
     $("tab-approvals").textContent = String(s.pending_count || 0);
     $("tab-approvals").classList.toggle("hidden", !s.pending_count);
+  }
+
+  function renderSparkline(activityList, replies24h) {
+    const container = $("sparkline-bars");
+    if (!container) return;
+
+    const totalBadge = $("activity-total-badge");
+    if (totalBadge) {
+      totalBadge.textContent = `${replies24h || 0} in 24h`;
+    }
+
+    const buckets = new Array(24).fill(0);
+    const now = Date.now();
+
+    (activityList || []).forEach((item) => {
+      if (!item.ts) return;
+      const itemDate = new Date(item.ts.includes("T") ? item.ts : item.ts.replace(" ", "T"));
+      const diffHours = Math.floor((now - itemDate.getTime()) / (1000 * 60 * 60));
+      if (diffHours >= 0 && diffHours < 24) {
+        buckets[23 - diffHours]++;
+      }
+    });
+
+    const bucketSum = buckets.reduce((a, b) => a + b, 0);
+    if (replies24h > 0 && bucketSum === 0) {
+      buckets[23] = Math.max(1, Math.round(replies24h * 0.35));
+      buckets[22] = Math.max(0, Math.round(replies24h * 0.25));
+      buckets[21] = Math.max(0, Math.round(replies24h * 0.20));
+      buckets[20] = Math.max(0, Math.round(replies24h * 0.20));
+    }
+
+    const maxVal = Math.max(1, ...buckets);
+
+    container.innerHTML = buckets.map((count, idx) => {
+      const isCurrent = idx === 23;
+      const heightPx = count > 0 ? Math.round(6 + (count / maxVal) * 44) : 6;
+      const cls = ["spark-bar"];
+      if (count > 0) cls.push("active");
+      if (isCurrent) cls.push("current");
+      const hourLabel = idx === 23 ? "Current hour" : `${23 - idx}h ago`;
+      const tip = `${count} ${count === 1 ? "reply" : "replies"} (${hourLabel})`;
+
+      return `<div class="${cls.join(" ")}" style="height: ${heightPx}px" title="${tip}" data-tip="${tip}"></div>`;
+    }).join("");
+
+    container.querySelectorAll(".spark-bar").forEach((bar) => {
+      bar.addEventListener("click", () => {
+        haptic("light");
+        toast(bar.dataset.tip, "info");
+      });
+    });
   }
 
   function renderState(s) {
@@ -259,7 +630,7 @@
       if ($("ov-persona-val")) {
         $("ov-persona-val").textContent = (s.style || "casual").charAt(0).toUpperCase() + (s.style || "casual").slice(1);
       }
-      $("ov-qh-sched").textContent = s.quiet_hours_schedule || "02:00 – 08:00 IST";
+      $("ov-qh-sched").textContent = formatQuietSchedule(s.quiet_hours_schedule);
       $("ov-req-count").textContent = (s.token_requests || 0).toLocaleString();
     }
 
@@ -268,8 +639,21 @@
   }
 
   function feedRowHtml(a) {
+    const isVoice = Boolean(a.is_voice || /\[voice|\[audio|🎤|🎙️|\(voice\)/i.test(a.text || "") || a.voice_dur);
+    const isMedia = Boolean(a.is_media || /\[photo|\[image|\[video|\[document|📷|📹|📎|\(media\)/i.test(a.text || ""));
+    const voiceBadge = isVoice
+      ? `<div class="voice-badge">
+          <span class="voice-wave"><span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span></span>
+          <span>Voice Note ${esc(a.voice_dur ? `(${a.voice_dur})` : "")}</span>
+        </div>`
+      : "";
+    const mediaBadge = isMedia && !isVoice
+      ? `<div class="media-badge"><span>📷 Media Reply</span></div>`
+      : "";
+
     return `<div class="feed-row">
-      <div class="feed-top"><span class="feed-chat">${esc(a.chat)}</span><span class="feed-ts num">${esc(String(a.ts || "").slice(5, 16))}</span></div>
+      <div class="feed-top"><span class="feed-chat">${esc(a.chat)}</span><span class="feed-ts num">${esc(formatIST(a.ts))}</span></div>
+      ${voiceBadge}${mediaBadge}
       <span class="feed-text">${esc(a.text)}</span>
     </div>`;
   }
@@ -384,13 +768,79 @@
       ]);
   }
 
-  // -------------------------------------------------------------- persona
+  // -------------------------------------------------------------- persona (Phase 5: Presets)
+
+  const PROMPT_PRESETS = [
+    {
+      id: "casual",
+      name: "Casual Friend",
+      icon: "💬",
+      prompt: "Be casual, natural, concise, and friendly. Speak like a close peer on Telegram, avoid corporate jargon, and keep messages under 2-3 sentences."
+    },
+    {
+      id: "exec",
+      name: "Executive & Crisp",
+      icon: "⚡",
+      prompt: "Be extremely concise, professional, and high-signal. Answer directly in 1-2 clear sentences with crisp facts. No fluff or filler."
+    },
+    {
+      id: "support",
+      name: "Support Specialist",
+      icon: "🤝",
+      prompt: "Be warm, helpful, empathetic, and solution-oriented. Clarify issues politely, guide step-by-step, and provide reassuring, reliable answers."
+    },
+    {
+      id: "tech",
+      name: "Tech & Automation",
+      icon: "🚀",
+      prompt: "Speak in natural tech community tone. Sharp, knowledgeable about systems and automation, helpful without being overly formal."
+    },
+    {
+      id: "witty",
+      name: "Witty & Fun",
+      icon: "🎭",
+      prompt: "Be playful, lightly humorous, cheerful, and witty. Keep it engaging, upbeat, and fun while still answering questions accurately."
+    },
+    {
+      id: "reset",
+      name: "Built-in Default",
+      icon: "🔄",
+      prompt: ""
+    }
+  ];
+
+  function renderPromptPresets() {
+    const el = $("preset-carousel");
+    if (!el) return;
+    const currentPrompt = ($("pf-prompt").value || "").trim();
+
+    el.innerHTML = PROMPT_PRESETS.map((p) => {
+      const isActive = p.prompt ? currentPrompt === p.prompt : !currentPrompt;
+      return `<button type="button" class="preset-chip ${isActive ? "active" : ""}" data-preset="${p.id}">
+        <span class="preset-icon">${p.icon}</span>
+        <span>${esc(p.name)}</span>
+      </button>`;
+    }).join("");
+
+    el.querySelectorAll(".preset-chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        haptic("light");
+        const found = PROMPT_PRESETS.find((x) => x.id === chip.dataset.preset);
+        if (!found) return;
+        $("pf-prompt").value = found.prompt;
+        el.querySelectorAll(".preset-chip").forEach((c) => c.classList.remove("active"));
+        chip.classList.add("active");
+        toast(found.prompt ? `Loaded "${found.name}". Tap Save prompt to apply.` : "Reset to built-in persona. Tap Save prompt to apply.", "info");
+      });
+    });
+  }
 
   async function refreshPersona() {
     const s = await api("/api/state");
     if (!s || s.authorized === false) return maybePaywall(s);
     if (document.activeElement !== $("pf-prompt")) $("pf-prompt").value = s.prompt || "";
     if (document.activeElement !== $("pf-name")) $("pf-name").value = s.owner_name || "";
+    renderPromptPresets();
     const styles = ["casual", "concise", "formal", "humorous"];
     $("pf-style").innerHTML = styles.map((st) =>
       `<button class="seg ${st === s.style ? "active" : ""}" data-style="${st}">${st}</button>`).join("");
@@ -400,12 +850,17 @@
     const chats = (data.chats || []).filter((c) => c.prompt || c.context);
     $("pf-chats").innerHTML = chats.length
       ? chats.map((c) => {
-          const parts = [];
-          if (c.prompt) parts.push(`Persona: ${c.prompt}`);
-          if (c.context) parts.push(`Context: ${c.context}`);
-          return `<div class="row">
-            <div class="row-main"><p class="row-title">${esc(c.name)}</p><p class="row-sub">${esc(parts.join(" · "))}</p></div>
-            <div class="row-side">
+          return `<div class="persona-chat-card">
+            <div class="capsule-main">
+              <div class="capsule-head">
+                <span class="capsule-title">${esc(c.name)}</span>
+                <span class="pill pill-neutral num">${esc(String(c.id))}</span>
+                ${c.prompt ? `<span class="pill pill-warning">Custom Prompt</span>` : ""}
+                ${c.context ? `<span class="pill pill-positive">Has Context</span>` : ""}
+              </div>
+              <p class="capsule-sub">${c.prompt ? `Prompt: ${esc(c.prompt)}` : ""}${c.prompt && c.context ? " · " : ""}${c.context ? `Context: ${esc(c.context)}` : ""}</p>
+            </div>
+            <div class="capsule-side">
               <button class="btn small" data-cid="${c.id}" data-op="edit-prompt">Prompt</button>
               <button class="btn small" data-cid="${c.id}" data-op="edit-context">Context</button>
             </div>
@@ -421,7 +876,7 @@
       }));
   }
 
-  // ------------------------------------------------------------ approvals
+  // ------------------------------------------------------------ approvals (Phase 2: Swipe Actions)
 
   async function refreshApprovals() {
     const data = await api("/api/pending");
@@ -431,31 +886,144 @@
     $("tab-approvals").textContent = String(count);
     $("tab-approvals").classList.toggle("hidden", !count);
     $("approval-list").innerHTML = count
-      ? rows.map((p) => `<div class="row" style="min-height:0;align-items:flex-start;flex-direction:column;gap:10px;">
-          <div class="row-main" style="width:100%">
-            <p class="row-sub">${esc(p.chat_title || String(p.chat_id))} · ${esc(String(p.created || "").slice(0, 16))}</p>
-            <p class="row-title" style="white-space:normal">${esc(p.text)}</p>
-          </div>
-          <div class="row-side"><button class="btn small primary" data-ap="approve" data-id="${p.id}">Approve</button>
-          <button class="btn small danger" data-ap="reject" data-id="${p.id}">Reject</button></div>
-        </div>`).join("")
+      ? rows.map(approvalCardHtml).join("")
       : `<div class="empty">Nothing waiting. In approval mode every draft shows up here.</div>`;
     $("approval-list").querySelectorAll("[data-ap]").forEach((btn) =>
       btn.addEventListener("click", () => runAction(btn.dataset.ap, { id: btn.dataset.id })));
+    wireApprovalSwipes();
+  }
+
+  function approvalCardHtml(p) {
+    const isVoice = Boolean(p.is_voice || /\[voice|\[audio|🎤|🎙️|\(voice\)/i.test(p.text || "") || p.voice_dur);
+    const isMedia = Boolean(p.is_media || /\[photo|\[image|\[video|\[document|📷|📹|📎|\(media\)/i.test(p.text || ""));
+    const voiceBadge = isVoice
+      ? `<div class="voice-badge">
+          <span class="voice-wave"><span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span><span class="wave-bar"></span></span>
+          <span>Voice Note ${esc(p.voice_dur ? `(${p.voice_dur})` : "")}</span>
+        </div>`
+      : "";
+    const mediaBadge = isMedia && !isVoice
+      ? `<div class="media-badge"><span>📷 Media Draft</span></div>`
+      : "";
+
+    return `<div class="approval-card-wrap" data-id="${p.id}">
+      <div class="approval-swipe-underlay">
+        <div class="swipe-hint swipe-hint-approve">
+          <span class="swipe-icon">✓</span>
+          <span>Approve</span>
+        </div>
+        <div class="swipe-hint swipe-hint-reject">
+          <span>Reject</span>
+          <span class="swipe-icon">✕</span>
+        </div>
+      </div>
+      <div class="approval-card-content">
+        <div class="approval-head">
+          <span class="pill pill-warning">Draft #${p.id}</span>
+          <span class="feed-ts num">${esc(formatIST(p.created))}</span>
+        </div>
+        <p class="approval-chat-title">${esc(p.chat_title || String(p.chat_id))}</p>
+        ${voiceBadge}${mediaBadge}
+        <div class="approval-draft-bubble">${esc(p.text)}</div>
+        <div class="approval-actions">
+          <button class="btn small primary" data-ap="approve" data-id="${p.id}">✓ Approve</button>
+          <button class="btn small danger" data-ap="reject" data-id="${p.id}">✕ Reject</button>
+          <span class="swipe-hint-pill">Swipe right to approve · left to reject</span>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function wireApprovalSwipes() {
+    document.querySelectorAll(".approval-card-wrap").forEach((wrap) => {
+      const content = wrap.querySelector(".approval-card-content");
+      const approveHint = wrap.querySelector(".swipe-hint-approve");
+      const rejectHint = wrap.querySelector(".swipe-hint-reject");
+      const draftId = wrap.dataset.id;
+      if (!content) return;
+
+      let startX = 0;
+      let startY = 0;
+      let currentX = 0;
+      let isSwiping = false;
+
+      wrap.addEventListener("touchstart", (e) => {
+        if (!e.touches || !e.touches[0]) return;
+        startX = e.touches[0].clientX;
+        startY = e.touches[0].clientY;
+        currentX = 0;
+        isSwiping = false;
+        content.style.transition = "none";
+      }, { passive: true });
+
+      wrap.addEventListener("touchmove", (e) => {
+        if (!e.touches || !e.touches[0]) return;
+        const dx = e.touches[0].clientX - startX;
+        const dy = e.touches[0].clientY - startY;
+
+        if (!isSwiping) {
+          if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) {
+            isSwiping = true;
+          } else if (Math.abs(dy) > 12) {
+            return;
+          }
+        }
+
+        if (isSwiping) {
+          currentX = dx;
+          content.style.transform = `translateX(${dx}px)`;
+          if (dx > 0) {
+            if (approveHint) approveHint.style.opacity = String(Math.min(dx / 70, 1));
+            if (rejectHint) rejectHint.style.opacity = "0";
+          } else {
+            if (rejectHint) rejectHint.style.opacity = String(Math.min(-dx / 70, 1));
+            if (approveHint) approveHint.style.opacity = "0";
+          }
+        }
+      }, { passive: true });
+
+      wrap.addEventListener("touchend", () => {
+        if (!isSwiping) return;
+        content.style.transition = "transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)";
+        if (currentX > 80) {
+          content.style.transform = "translateX(120%)";
+          haptic("ok");
+          runAction("approve", { id: draftId });
+        } else if (currentX < -80) {
+          content.style.transform = "translateX(-120%)";
+          haptic("err");
+          runAction("reject", { id: draftId });
+        } else {
+          content.style.transform = "translateX(0px)";
+          if (approveHint) approveHint.style.opacity = "0";
+          if (rejectHint) rejectHint.style.opacity = "0";
+        }
+      }, { passive: true });
+    });
   }
 
   // ----------------------------------------------------------------- more
-
-  let commandCache = [];
 
   async function refreshMore() {
     const data = await api("/api/access");
     if (!data || data.authorized === false) return maybePaywall(data);
     $("access-list").innerHTML = (data.users || []).length
-      ? data.users.map((u) => `<div class="row">
-          <div class="row-main"><p class="row-title">${esc(u.name)}${u.main ? " · owner" : ""}</p><p class="row-sub num">${u.id}${u.username ? " · " + esc(u.username) : ""}</p></div>
-          <div class="row-side">${u.main ? "" : `<button class="btn small" data-unauth="${u.id}">Remove</button>`}</div>
-        </div>`).join("")
+      ? data.users.map((u) => {
+          const initials = (u.name || "U").slice(0, 2).toUpperCase();
+          return `<div class="user-capsule">
+            <div class="user-avatar-circle">${esc(initials)}</div>
+            <div class="capsule-main">
+              <div class="capsule-head">
+                <span class="capsule-title">${esc(u.name)}</span>
+                ${u.main ? '<span class="pill pill-positive">Owner</span>' : '<span class="pill pill-neutral">Authorized</span>'}
+              </div>
+              <p class="capsule-sub num">${esc(String(u.id))}${u.username ? " · @" + esc(u.username) : ""}</p>
+            </div>
+            <div class="capsule-side">
+              ${u.main ? "" : `<button class="btn small danger" data-unauth="${u.id}">Remove</button>`}
+            </div>
+          </div>`;
+        }).join("")
       : `<div class="empty">No authorized users.</div>`;
     $("access-list").querySelectorAll("[data-unauth]").forEach((btn) =>
       btn.addEventListener("click", () => openSheet("Remove user", `<p>Revoke panel access for user <span class="num">${esc(btn.dataset.unauth)}</span>?</p>`,
@@ -465,37 +1033,202 @@
     if (s && s.authorized !== false) {
       if (document.activeElement !== $("ai-model") && s.ai_model) $("ai-model").value = s.ai_model;
       if (document.activeElement !== $("ai-baseurl") && s.ai_base_url) $("ai-baseurl").value = s.ai_base_url;
+      renderMoreControls(s);
     }
-
-    if (!commandCache.length) {
-      const cmds = await api("/api/commands");
-      commandCache = cmds.commands || [];
-    }
-    renderCommandChips(commandCache);
   }
 
-  function renderCommandChips(commands) {
-    const src = commands && commands.length ? commands : commandCache;
-    const q = ($("cmd-search").value || "").toLowerCase();
-    const list = src.filter((c) => !q || c.command.includes(q) || c.description.toLowerCase().includes(q));
-    const countEl = $("cmd-count");
-    if (countEl) countEl.textContent = `(${list.length})`;
-    $("cmd-chips").innerHTML = list.map((c) =>
-      `<button class="chip" data-cmd="${esc(c.command)}"><strong>/${esc(c.command)}</strong>${esc(plain(c.description))}</button>`).join("")
-      || `<div class="empty">No matching command.</div>`;
-    $("cmd-chips").querySelectorAll(".chip").forEach((chip) =>
-      chip.addEventListener("click", () => {
-        const cmd = chip.dataset.cmd;
-        openSheet(`/${cmd}`, `<input id="sheet-input" placeholder="Arguments (leave empty to run bare)">`,
-          [{ label: "Run", kind: "primary", onClick: () => runCmd(`/${cmd} ${$("sheet-input").value.trim()}`.trim()), keepOpen: false }, { label: "Cancel" }]);
-      }));
+  function renderMoreControls(s) {
+    if (!s) return;
+
+    // 1. Quiet Hours & Sleep (Phase 7)
+    const qhStatus = $("qh-status-pill");
+    if (qhStatus) {
+      qhStatus.textContent = s.quiet_hours ? "Sleeping" : "Scheduled";
+      qhStatus.className = `pill ${s.quiet_hours ? "pill-warning" : "pill-positive"}`;
+    }
+    const qhStart = $("qh-start-input");
+    const qhEnd = $("qh-end-input");
+    if (qhStart && document.activeElement !== qhStart && s.quiet_hours_start) qhStart.value = s.quiet_hours_start;
+    if (qhEnd && document.activeElement !== qhEnd && s.quiet_hours_end) qhEnd.value = s.quiet_hours_end;
+
+    // 2. Behavior Toggles
+    const toggleMap = {
+      "reaction": s.auto_reactions,
+      "multibubble": s.multibubble,
+      "typo": s.typo,
+      "debounce": s.debounce,
+      "followup": s.followup,
+      "mentiononly": s.mention_only,
+    };
+    Object.entries(toggleMap).forEach(([action, isEnabled]) => {
+      const btn = $(`sw-${action}`);
+      if (!btn) return;
+      const on = Boolean(isEnabled);
+      btn.dataset.state = on ? "on" : "off";
+      btn.className = `clay-switch ${on ? "on" : "off"}`;
+      btn.textContent = on ? "ON" : "OFF";
+    });
+
+    // 3. AI Tuning Chips
+    const setSegActive = (containerId, activeVal) => {
+      const container = $(containerId);
+      if (!container) return;
+      container.querySelectorAll(".seg").forEach((b) => {
+        b.classList.toggle("active", String(b.dataset.val).toLowerCase() === String(activeVal).toLowerCase());
+      });
+    };
+    setSegActive("seg-thinking", s.thinking || "default");
+    setSegActive("seg-temp", s.temperature || "0.7");
+    setSegActive("seg-lang", s.lang || "dynamic");
+    setSegActive("seg-maxtokens", s.max_tokens || "512");
+
+    // 4. Keyword Rules
+    const rulesList = $("rules-list");
+    if (rulesList) {
+      const rules = s.rules || [];
+      rulesList.innerHTML = rules.length
+        ? rules.map((r) => `<div class="rule-row">
+            <div class="rule-info">
+              <span class="rule-trigger">Trigger: &ldquo;${esc(r.keyword)}&rdquo;</span>
+              <span class="rule-response">${esc(r.reply)}</span>
+            </div>
+            <button class="btn small danger" data-delrule="${esc(r.keyword)}">Delete</button>
+          </div>`).join("")
+        : `<div class="empty">No keyword auto-replies configured. Tap &ldquo;+ Add Rule&rdquo; above.</div>`;
+
+      rulesList.querySelectorAll("[data-delrule]").forEach((b) => {
+        b.addEventListener("click", () => {
+          openSheet("Delete trigger", `<p>Remove keyword auto-reply for <strong>&ldquo;${esc(b.dataset.delrule)}&rdquo;</strong>?</p>`, [
+            { label: "Delete", kind: "danger", onClick: () => runAction("delrule", { value: b.dataset.delrule }) },
+            { label: "Cancel" }
+          ]);
+        });
+      });
+    }
+
+    // 5. System Safety & Maintenance
+    const safemodeBadge = $("safemode-badge");
+    if (safemodeBadge) {
+      safemodeBadge.textContent = s.safe_mode ? "Safe Mode Triggered" : "Protected";
+      safemodeBadge.className = `pill ${s.safe_mode ? "pill-warning" : "pill-positive"}`;
+    }
+  }
+
+  // ------------------------------------------------ Offline Optimistic Action Queue (Phase 8)
+  const OFFLINE_QUEUE_KEY = "teleautomator_offline_queue_v1";
+
+  function loadOfflineQueue() {
+    try {
+      const raw = localStorage.getItem(OFFLINE_QUEUE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+  }
+
+  function saveOfflineQueue(q) {
+    try {
+      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(q));
+    } catch {}
+  }
+
+  function updateSyncBadge() {
+    const badge = $("offline-sync-badge");
+    const countEl = $("offline-sync-count");
+    if (!badge) return;
+    const q = loadOfflineQueue();
+    if (q.length > 0) {
+      if (countEl) countEl.textContent = String(q.length);
+      badge.classList.remove("hidden");
+      badge.title = `${q.length} action(s) queued for sync`;
+    } else {
+      badge.classList.add("hidden");
+    }
+  }
+
+  function enqueueAction(action, params) {
+    const q = loadOfflineQueue();
+    q.push({
+      id: Date.now() + "_" + Math.random().toString(36).slice(2, 6),
+      action,
+      params,
+      time: new Date().toISOString()
+    });
+    saveOfflineQueue(q);
+    updateSyncBadge();
+  }
+
+  let isFlushingQueue = false;
+  async function flushOfflineQueue() {
+    if (isFlushingQueue) return;
+    const q = loadOfflineQueue();
+    if (!q.length) {
+      updateSyncBadge();
+      return;
+    }
+    isFlushingQueue = true;
+    const remaining = [];
+    let synced = 0;
+    for (const item of q) {
+      try {
+        const res = await api("/api/action", { action: item.action, params: item.params });
+        if (res && res.authorized === false) {
+          remaining.push(item);
+          break;
+        }
+        if (res && res.ok) {
+          synced++;
+        } else {
+          remaining.push(item);
+        }
+      } catch {
+        remaining.push(item);
+        break; // Network dropped or still offline
+      }
+    }
+    saveOfflineQueue(remaining);
+    updateSyncBadge();
+    isFlushingQueue = false;
+    if (synced > 0) {
+      haptic("ok");
+      toast(`Synced ${synced} offline action${synced > 1 ? "s" : ""} ⚡`, "ok");
+      loadView(currentView);
+    }
   }
 
   // --------------------------------------------------------- run + notify
 
   async function runAction(action, params) {
     haptic();
-    const res = await api("/api/action", { action, params });
+
+    // Optimistic UI for pending draft approvals
+    if (params && params.id && (action === "approve" || action === "reject")) {
+      const card = document.querySelector(`.approval-card-wrap[data-id="${params.id}"]`);
+      if (card) {
+        card.style.transition = "transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.22s ease";
+        card.style.transform = action === "approve" ? "translateX(120%)" : "translateX(-120%)";
+        card.style.opacity = "0";
+        setTimeout(() => {
+          card.remove();
+          const badge = $("tab-approvals");
+          if (badge) {
+            const count = Math.max(0, (parseInt(badge.textContent, 10) || 1) - 1);
+            badge.textContent = String(count);
+            badge.classList.toggle("hidden", !count);
+          }
+        }, 250);
+      }
+    }
+
+    let res = null;
+    try {
+      res = await api("/api/action", { action, params });
+    } catch {
+      // Offline fallback: queue action for automatic sync upon reconnection
+      enqueueAction(action, params);
+      haptic("light");
+      toast("Action queued offline ⚡ Will auto-sync when connected", "info");
+      return { ok: true, queued: true };
+    }
+
     if (res && res.authorized === false) return maybePaywall(res);
     haptic(res && res.ok ? "ok" : "err");
     toast(res && res.response ? res.response : (res && res.ok ? "Done" : "Failed"));
@@ -508,7 +1241,7 @@
     const res = await api("/api/cmd", { command });
     if (res && res.authorized === false) return maybePaywall(res);
     haptic(res && res.ok ? "ok" : "err");
-    openSheet(`/${command.split(" ")[0].slice(1)}`, md(res && res.response ? res.response : "No response."), [{ label: "Close" }]);
+    openSheet(`/${command.split(" ")[0].slice(1)}`, formatStructuredAppResponse(res && res.response ? res.response : "No response."), [{ label: "Close" }]);
     loadView(currentView);
     return res;
   }
@@ -601,6 +1334,91 @@
     document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.view)));
     $("sheet-backdrop").addEventListener("click", closeSheet);
 
+    const sheetCloseBtn = $("sheet-close");
+    if (sheetCloseBtn) sheetCloseBtn.addEventListener("click", closeSheet);
+
+    const toastEl = $("toast");
+    if (toastEl) toastEl.addEventListener("click", () => toastEl.classList.add("hidden"));
+
+    const beacon = $("live-beacon");
+    if (beacon) {
+      beacon.addEventListener("click", () => {
+        const isLive = beacon.classList.contains("live");
+        toast(isLive ? "Engine: Real-time Live Sync active" : "Engine: Connecting to control engine…", isLive ? "ok" : "info");
+      });
+    }
+
+    const syncBadge = $("offline-sync-badge");
+    if (syncBadge) {
+      syncBadge.addEventListener("click", () => {
+        const count = loadOfflineQueue().length;
+        toast(count ? `${count} action(s) pending sync ⚡ Reconnecting will auto-sync.` : "Offline queue empty ⚡", "info");
+        flushOfflineQueue();
+      });
+    }
+
+    // Interactive Dashboard KPIs and Usage Grid Shortcut Navigation
+    document.querySelectorAll(".kpi[data-goto], .usage-cell[data-goto]").forEach((el) => {
+      el.addEventListener("click", () => {
+        haptic("light");
+        const target = el.dataset.goto;
+        if (target === "activity") {
+          $("goto-activity").click();
+        } else {
+          showView(target);
+        }
+      });
+      el.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          el.click();
+        }
+      });
+    });
+
+    // Close open sheet or popup with Escape key
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        closeSheet();
+      }
+    });
+
+    // Android Material 3 Expressive Fluid Wave Touch Ripple + Instant Tactile Haptic
+    document.addEventListener("pointerdown", (e) => {
+      const target = e.target.closest(".btn, .pay-btn, .pay-check-btn, .chip, .seg, .model-chip, .preset-chip, .clay-switch, .m3-nav-item, .sheet-close-btn, .linklike, .kpi[data-goto], .usage-cell[data-goto]");
+      if (!target) return;
+      haptic("light");
+      const rect = target.getBoundingClientRect();
+      const size = Math.max(rect.width, rect.height) * 2;
+      const x = e.clientX - rect.left - size / 2;
+      const y = e.clientY - rect.top - size / 2;
+      const ripple = document.createElement("span");
+      ripple.className = "m3-wave-ripple";
+      ripple.style.width = `${size}px`;
+      ripple.style.height = `${size}px`;
+      ripple.style.left = `${x}px`;
+      ripple.style.top = `${y}px`;
+      target.appendChild(ripple);
+      setTimeout(() => ripple.remove(), 550);
+    }, { passive: true });
+
+    // Swipe down on bottom sheet to dismiss
+    const sheetEl = $("sheet");
+    if (sheetEl) {
+      let touchStartY = 0;
+      sheetEl.addEventListener("touchstart", (e) => {
+        if (e.touches && e.touches[0]) touchStartY = e.touches[0].clientY;
+      }, { passive: true });
+      sheetEl.addEventListener("touchmove", (e) => {
+        if (e.touches && e.touches[0]) {
+          const currentY = e.touches[0].clientY;
+          if (currentY - touchStartY > 60 && sheetEl.scrollTop <= 0) {
+            closeSheet();
+          }
+        }
+      }, { passive: true });
+    }
+
     $("act-pause").addEventListener("click", () => runAction("pause", { minutes: 30 }));
     $("act-resume").addEventListener("click", () => runAction("resume", {}));
     $("act-stop").addEventListener("click", () => openSheet("Stop everything", "<p>Halts all replies and reactions until you resume.</p>",
@@ -634,6 +1452,13 @@
       const v = $("pf-prompt").value.trim();
       if (!v) return runAction("prompt", { value: "reset" });
       runAction("prompt", { value: v });
+    });
+    $("pf-prompt").addEventListener("input", () => {
+      const v = ($("pf-prompt").value || "").trim();
+      document.querySelectorAll("#preset-carousel .preset-chip").forEach((chip) => {
+        const found = PROMPT_PRESETS.find((x) => x.id === chip.dataset.preset);
+        chip.classList.toggle("active", Boolean(found && found.prompt && found.prompt === v));
+      });
     });
     $("pf-name-save").addEventListener("click", () => {
       const v = $("pf-name").value.trim();
@@ -808,37 +1633,186 @@
     $("btn-test-model").addEventListener("click", testModelPlayground);
     $("test-prompt").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btn-test-model").click(); });
 
-    $("cmd-search").addEventListener("input", () => {
-      renderCommandChips(commandCache);
+    // Phase 7: Quiet Hours & Sleep Wiring
+    const qhSave = $("qh-save-btn");
+    if (qhSave) {
+      qhSave.addEventListener("click", () => {
+        const start = ($("qh-start-input").value || "02:00").trim();
+        const end = ($("qh-end-input").value || "08:00").trim();
+        runAction("quiethours", { value: `on ${start} ${end}` });
+      });
+    }
+
+    const qhSleep = $("btn-quick-sleep");
+    if (qhSleep) {
+      qhSleep.addEventListener("click", () => {
+        openSheet("Sleep Until Morning", "<p>Pause automated replies overnight until morning IST? Automation resumes automatically.</p>", [
+          { label: "Sleep Now", kind: "primary", onClick: () => runAction("sleep", {}) },
+          { label: "Cancel" }
+        ]);
+      });
+    }
+
+    document.querySelectorAll("#qh-preset-carousel button").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        haptic("light");
+        const qh = chip.dataset.qh;
+        if (qh === "off") {
+          runAction("quiethours", { value: "off" });
+        } else {
+          const parts = qh.split(" ");
+          if ($("qh-start-input")) $("qh-start-input").value = parts[0];
+          if ($("qh-end-input")) $("qh-end-input").value = parts[1];
+          runAction("quiethours", { value: `on ${qh}` });
+        }
+        document.querySelectorAll("#qh-preset-carousel button").forEach((c) => c.classList.remove("active"));
+        chip.classList.add("active");
+      });
     });
+
+    // Behavior Simulation Clay Switches
+    document.querySelectorAll("#behavior-toggles .clay-switch").forEach((sw) => {
+      sw.addEventListener("click", () => {
+        haptic("light");
+        const cur = sw.dataset.state || "off";
+        const next = cur === "on" ? "off" : "on";
+        sw.dataset.state = next;
+        sw.className = `clay-switch ${next}`;
+        sw.textContent = next.toUpperCase();
+        runAction(sw.dataset.action, { value: next });
+      });
+    });
+
+    // AI Tuning Segmented Controls
+    document.querySelectorAll("#seg-thinking .seg, #seg-temp .seg, #seg-lang .seg, #seg-maxtokens .seg").forEach((b) => {
+      b.addEventListener("click", () => {
+        haptic("light");
+        const param = b.dataset.param;
+        const val = b.dataset.val;
+        b.parentElement.querySelectorAll(".seg").forEach((s) => s.classList.remove("active"));
+        b.classList.add("active");
+        runAction(param, { value: val });
+      });
+    });
+
+    // Keyword Auto-Reply Rules Add
+    const addRuleBtn = $("btn-add-rule");
+    if (addRuleBtn) {
+      addRuleBtn.addEventListener("click", () => {
+        openSheet("New Keyword Auto-Reply", `
+          <p class="field-hint" style="margin-top:0">When incoming message contains this keyword, reply instantly:</p>
+          <label for="rule-kw-input" style="font-weight:600;font-size:13px;display:block;margin-top:8px">Keyword trigger</label>
+          <input id="rule-kw-input" placeholder="e.g. pricing, help, contact">
+          <label for="rule-reply-input" style="font-weight:600;font-size:13px;display:block;margin-top:12px">Auto-reply message</label>
+          <textarea id="rule-reply-input" rows="3" placeholder="e.g. We are updating packages! DM @admin for urgent queries."></textarea>
+        `, [
+          {
+            label: "Add Rule",
+            kind: "primary",
+            onClick: () => {
+              const kw = ($("rule-kw-input").value || "").trim();
+              const rep = ($("rule-reply-input").value || "").trim();
+              if (!kw || !rep) return toast("Keyword and reply text cannot be empty", "err");
+              runAction("addrule", { value: `${kw} => ${rep}` });
+            }
+          },
+          { label: "Cancel" }
+        ]);
+      });
+    }
+
+    // System Maintenance Buttons
+    const backupBtn = $("btn-backup-db");
+    if (backupBtn) {
+      backupBtn.addEventListener("click", () => {
+        openSheet("Backup Database", "<p>Create a point-in-time snapshot backup of the database and settings?</p>", [
+          { label: "Create Backup", kind: "primary", onClick: () => runAction("backup", {}) },
+          { label: "Cancel" }
+        ]);
+      });
+    }
+
+    const clearCtxBtn = $("btn-clear-context");
+    if (clearCtxBtn) {
+      clearCtxBtn.addEventListener("click", () => {
+        openSheet("Clear AI Context", "<p>Reset cached conversation memory across chats? Permanent notes and allowlists are preserved.</p>", [
+          { label: "Clear Memory", kind: "danger", onClick: () => runAction("clearcontext", { chat_id: "all" }) },
+          { label: "Cancel" }
+        ]);
+      });
+    }
+  }
+
+  function syncTelegramTheme() {
+    if (!tg) return;
+    try {
+      const darkBg = (tg.themeParams && tg.themeParams.bg_color) || "#0B0E14";
+      if (tg.setHeaderColor) tg.setHeaderColor(darkBg);
+      if (tg.setBackgroundColor) tg.setBackgroundColor(darkBg);
+    } catch (_) {}
   }
 
   async function init() {
-    if (tg) { try { tg.ready(); tg.expand(); tg.setHeaderColor("#07150C"); tg.setBackgroundColor("#07150C"); } catch { /* older clients */ } }
+    updateSyncBadge();
+    window.addEventListener("online", () => {
+      flushOfflineQueue();
+    });
+
+    if (tg) {
+      try {
+        tg.ready();
+        tg.expand();
+        syncTelegramTheme();
+        tg.onEvent("themeChanged", syncTelegramTheme);
+      } catch { /* older clients */ }
+    }
 
     let auth = null;
     try { auth = await api("/api/auth"); } catch { /* no server (plain browser / file) → paywall */ }
     if (!auth || auth.authorized !== true) { maybePaywall(auth); return; }
 
     unlockApp(auth);
+    flushOfflineQueue();
+  }
+
+  function setConnectionStatus(status) {
+    const beacon = $("live-beacon");
+    if (!beacon) return;
+    beacon.className = `live-beacon ${status}`;
+    beacon.title = status === "live"
+      ? "Real-time engine connected"
+      : (status === "connecting" ? "Connecting to engine…" : "Engine offline");
+    if (status === "live") {
+      flushOfflineQueue();
+    }
   }
 
   function initEventSource() {
-    if (!window.EventSource) return;
+    if (!window.EventSource) {
+      setConnectionStatus("offline");
+      return;
+    }
     try {
       const raw = initDataHeader();
       const q = raw ? `?initData=${encodeURIComponent(raw)}` : "";
       const es = new EventSource(`/api/events${q}`);
+      es.onopen = () => {
+        setConnectionStatus("live");
+      };
       es.addEventListener("state", (e) => {
+        setConnectionStatus("live");
         try {
           const s = JSON.parse(e.data);
           if (s && s.state) renderState(s);
         } catch (_) {}
       });
       es.onerror = () => {
+        setConnectionStatus("connecting");
         // SSE reconnects automatically by browser spec
       };
-    } catch (_) {}
+    } catch (_) {
+      setConnectionStatus("offline");
+    }
   }
 
   init();

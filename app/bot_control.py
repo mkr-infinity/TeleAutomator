@@ -35,37 +35,33 @@ BOT_COMMAND_HELP = (
 UNAUTHORIZED_MESSAGE = (
     "🔒 *Access Restricted*\n"
     "━━━━━━━━━━━━━━━━━━━━\n"
-    "🤖 *TeleAutomator Control Panel*\n"
-    "This control panel belongs to a private automation project — "
-    "your account isn't authorized to use it yet.\n\n"
-    "💳 *Authentication Note:*\n"
-    "To get authorized access, pay *100 Stars* or *1 TON* to *@mkr_infinity*.\n\n"
-    "👉 *Contact & Verification:*\n"
-    "Reach out on Telegram: [@mkr_infinity](https://t.me/mkr_infinity)\n"
-    "Just mention *TeleAutomator* with payment confirmation for instant access.\n"
-    "━━━━━━━━━━━━━━━━━━━━\n"
-    "_Thanks for understanding! 🙏_"
+    "✨ *TeleAutomator Control*\n\n"
+    "This control panel belongs to a private automation project. "
+    "Your Telegram account is not authorized yet.\n\n"
+    "💳 *Authorization Plan:*\n"
+    "• ⭐ *100 Telegram Stars* or 💎 *1 TON* (1 month access)\n\n"
+    "💬 *Get Access:*\n"
+    "Contact [@mkr_infinity](https://t.me/mkr_infinity) on Telegram with payment confirmation for instant authorization.\n"
+    "━━━━━━━━━━━━━━━━━━━━"
 )
 
 UNAUTHORIZED_MESSAGE_HTML = (
-    "<b>🔒 Access Restricted</b>\n"
+    "🔒 <b>Access Restricted</b>\n"
     "━━━━━━━━━━━━━━━━━━━━\n"
-    "🤖 <b>TeleAutomator Control Panel</b>\n"
-    "This control panel belongs to a private automation project, "
-    "and your account isn't authorized to use it yet.\n\n"
-    "💳 <b>Authentication Note:</b>\n"
-    "To get authorized access, pay <b>100 Stars</b> or <b>1 TON</b> to <b>@mkr_infinity</b>.\n\n"
-    "👉 <b>Contact & Verification:</b>\n"
-    "Contact <b>@mkr_infinity</b> — <a href=\"https://t.me/mkr_infinity\">Open chat</a>\n"
-    "Just mention <b>TeleAutomator</b> with payment confirmation for instant access.\n"
-    "━━━━━━━━━━━━━━━━━━━━\n"
-    "<i>Thanks for understanding! 🙏</i>"
+    "✨ <b>TeleAutomator Control</b>\n\n"
+    "This control panel belongs to a private automation project. "
+    "Your Telegram account is not authorized yet.\n\n"
+    "💳 <b>Authorization Plan:</b>\n"
+    "• ⭐ <b>100 Telegram Stars</b> or 💎 <b>1 TON</b> (1 month access)\n\n"
+    "💬 <b>Get Access:</b>\n"
+    "Contact <b>@mkr_infinity</b> on Telegram with payment confirmation for instant authorization.\n"
+    "━━━━━━━━━━━━━━━━━━━━"
 )
 
 SPAM_WARNING_MESSAGE = (
-    "🙇 *Please don't spam*\n\n"
-    "This channel is for project control only. I'll stay silent until you're authorized.\n"
-    "For authentication, pay 100 Stars or 1 TON and contact <b>@mkr_infinity</b>."
+    "⚠️ <b>Notice: Private System</b>\n\n"
+    "This bot is reserved for authorized project administrators.\n"
+    "To authorize your account, pay 100 Stars or 1 TON and contact <b>@mkr_infinity</b>."
 )
 
 AUTHORIZED_NOTICE = (
@@ -872,11 +868,14 @@ class BotControl:
         self.db.set_state(key, str(strikes))
         if strikes <= 2:
             logger.info(f"Bot: unauthorized user {user_id} messaged (strike {strikes}).")
-            contact_markup = {
-                "inline_keyboard": [
-                    [{"text": "💬 Contact @mkr_infinity", "url": "https://t.me/mkr_infinity"}]
-                ]
-            }
+            from app.miniapp_server import resolve_miniapp_url
+            miniapp_url = resolve_miniapp_url()
+            buttons = [
+                [{"text": "💬 Contact @mkr_infinity", "url": "https://t.me/mkr_infinity"}]
+            ]
+            if miniapp_url:
+                buttons.append([{"text": "📱 Open Control Panel", "web_app": {"url": miniapp_url}}])
+            contact_markup = {"inline_keyboard": buttons}
             await self.send_message(chat_id, UNAUTHORIZED_MESSAGE_HTML, parse_markdown=False, reply_markup=contact_markup)
             if strikes == 2:
                 await asyncio.sleep(2.0)

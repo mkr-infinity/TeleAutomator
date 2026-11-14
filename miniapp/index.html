@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#07150C">
+<meta name="theme-color" content="#0B0E14">
 <title>TeleAutomator Control</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -15,7 +15,7 @@
 
 <!-- Shared top bar (single h1: the product name, visible in every state) -->
 <header class="topbar">
-  <div class="brand"><img class="logo sm" src="logo.svg" alt=""><h1 class="brand-name">TeleAutomator</h1><span id="app-version" class="version num"></span></div>
+  <div class="brand"><img class="logo sm" src="logo.svg" alt=""><h1 class="brand-name">TeleAutomator</h1><span id="live-beacon" class="live-beacon live" title="Real-time engine connected" aria-label="Real-time engine connected"><span class="beacon-dot"></span></span><span id="offline-sync-badge" class="sync-badge hidden" title="Offline action queued" aria-label="Offline actions queued"><span class="sync-icon">⚡</span><span id="offline-sync-count" class="num">0</span></span><span id="app-version" class="version num"></span></div>
   <span id="whoami" class="whoami"></span>
 </header>
 
@@ -95,10 +95,10 @@
       </div>
 
       <div class="kpi-strip" id="kpi-strip">
-        <div class="kpi"><p class="kpi-label">Chats allowed</p><p class="kpi-value" id="kpi-chats">—</p></div>
-        <div class="kpi"><p class="kpi-label">Pending drafts</p><p class="kpi-value" id="kpi-pending">—</p></div>
-        <div class="kpi"><p class="kpi-label">Replies 24h</p><p class="kpi-value" id="kpi-replies">—</p></div>
-        <div class="kpi"><p class="kpi-label">AI Engine</p><p class="kpi-value" id="kpi-engine">—</p></div>
+        <div class="kpi" data-goto="chats" role="button" tabindex="0" aria-label="Go to allowed chats"><p class="kpi-label">Chats allowed</p><p class="kpi-value" id="kpi-chats">—</p></div>
+        <div class="kpi" data-goto="approvals" role="button" tabindex="0" aria-label="Go to pending drafts"><p class="kpi-label">Pending drafts</p><p class="kpi-value" id="kpi-pending">—</p></div>
+        <div class="kpi" data-goto="activity" role="button" tabindex="0" aria-label="View recent replies"><p class="kpi-label">Replies 24h</p><p class="kpi-value" id="kpi-replies">—</p></div>
+        <div class="kpi" data-goto="more" role="button" tabindex="0" aria-label="Go to AI engine settings"><p class="kpi-label">AI Engine</p><p class="kpi-value" id="kpi-engine">—</p></div>
       </div>
 
       <!-- AI Engine & System Status Card -->
@@ -111,35 +111,54 @@
           <span class="pill pill-neutral" id="ov-status-pill">Active</span>
         </div>
         <div class="usage-grid">
-          <div class="usage-cell">
+          <div class="usage-cell" data-goto="more" role="button" tabindex="0" aria-label="Go to active model settings">
             <span class="usage-cell-label">Active Model</span>
             <span class="usage-cell-val" id="ov-model-val">—</span>
           </div>
-          <div class="usage-cell">
+          <div class="usage-cell" data-goto="persona" role="button" tabindex="0" aria-label="Go to speaking style settings">
             <span class="usage-cell-label">Speaking Style</span>
             <span class="usage-cell-val" id="ov-persona-val">Casual</span>
           </div>
-          <div class="usage-cell">
+          <div class="usage-cell" data-goto="more" role="button" tabindex="0" aria-label="Go to quiet hours schedule">
             <span class="usage-cell-label">Quiet Hours</span>
             <span class="usage-cell-val" id="ov-qh-sched">02:00 – 08:00 IST</span>
           </div>
-          <div class="usage-cell">
+          <div class="usage-cell" data-goto="activity" role="button" tabindex="0" aria-label="View total request activity">
             <span class="usage-cell-label">Total Requests</span>
             <span class="usage-cell-val num" id="ov-req-count">0</span>
           </div>
         </div>
       </div>
 
+      <!-- 24-Hour Activity Pulse & Sparkline (Phase 4) -->
+      <div class="card activity-card" id="ov-activity-card">
+        <div class="activity-card-head">
+          <div class="activity-title-group">
+            <span class="activity-card-title">Activity Pulse (24h)</span>
+            <span class="activity-sub" id="activity-chart-sub">Hourly reply distribution</span>
+          </div>
+          <span class="pill pill-positive" id="activity-total-badge">0 in 24h</span>
+        </div>
+        <div class="sparkline-container" id="sparkline-bars">
+          <!-- 24 hourly volumetric clay bars -->
+        </div>
+        <div class="sparkline-time-row">
+          <span>24h ago</span>
+          <span>12h ago</span>
+          <span>Just now</span>
+        </div>
+      </div>
+
       <h2 class="section-h">Quick actions</h2>
       <div class="actions">
-        <button class="btn primary" id="act-pause">Pause 30m</button>
-        <button class="btn" id="act-resume">Resume</button>
-        <button class="btn danger" id="act-stop">Stop</button>
-        <button class="btn" id="act-mode">Mode</button>
+        <button type="button" class="btn primary" id="act-pause">Pause 30m</button>
+        <button type="button" class="btn" id="act-resume">Resume</button>
+        <button type="button" class="btn danger" id="act-stop">Stop</button>
+        <button type="button" class="btn" id="act-mode">Mode</button>
       </div>
       <p class="field-hint" id="act-hint">Pause holds every automated reply. Stop halts all activity until you resume.</p>
 
-      <h2 class="section-h">Recent replies <button class="linklike" id="goto-activity">View all</button></h2>
+      <h2 class="section-h">Recent replies <button type="button" class="linklike" id="goto-activity">View all</button></h2>
       <div class="card list" id="ov-activity"></div>
     </section>
 
@@ -149,7 +168,7 @@
       <p class="view-sub">Where the account talks, and how much in each one.</p>
       <div class="allow-row">
         <input type="text" id="allow-id" inputmode="numeric" placeholder="Chat ID, e.g. -1001234567890">
-        <button class="btn primary" id="allow-btn">Allow</button>
+        <button type="button" class="btn primary" id="allow-btn">Allow</button>
       </div>
       <div class="card list" id="chat-list"></div>
     </section>
@@ -160,15 +179,19 @@
       <p class="view-sub">How the account texts, everywhere and per chat.</p>
 
       <div class="card form">
-        <label for="pf-prompt">Global prompt</label>
+        <div class="preset-section-head">
+          <label for="pf-prompt" style="margin-bottom:0">Global prompt</label>
+          <span class="preset-tag">1-Tap Presets</span>
+        </div>
+        <div class="preset-carousel" id="preset-carousel" role="region" aria-label="Prompt Presets"></div>
         <textarea id="pf-prompt" rows="4" placeholder="Leave empty to use the built-in persona"></textarea>
-        <button class="btn primary" id="pf-save">Save prompt</button>
+        <button type="button" class="btn primary" id="pf-save">Save prompt</button>
       </div>
 
       <div class="card form">
         <label for="pf-name">Your name (identity the AI texts as)</label>
         <input type="text" id="pf-name" placeholder="Kaif">
-        <button class="btn primary" id="pf-name-save">Save name</button>
+        <button type="button" class="btn primary" id="pf-name-save">Save name</button>
       </div>
 
       <div class="card form">
@@ -194,7 +217,7 @@
       <h3 class="section-h">Access</h3>
       <div class="allow-row">
         <input type="text" id="auth-id" inputmode="numeric" placeholder="Telegram user ID">
-        <button class="btn primary" id="auth-add">Add user</button>
+        <button type="button" class="btn primary" id="auth-add">Add user</button>
       </div>
       <div class="card list" id="access-list"></div>
 
@@ -203,19 +226,19 @@
         <label for="ai-baseurl">Custom endpoint</label>
         <input type="text" id="ai-baseurl" placeholder="https://integrate.api.nvidia.com/v1">
         <div class="inline-save">
-          <button class="btn primary" id="ai-baseurl-save">Save endpoint</button>
-          <button class="btn" id="ai-fetch-models">Fetch models</button>
+          <button type="button" class="btn primary" id="ai-baseurl-save">Save endpoint</button>
+          <button type="button" class="btn" id="ai-fetch-models">Fetch models</button>
         </div>
 
         <label for="ai-key">API key</label>
         <input type="password" id="ai-key" placeholder="Paste a new key to replace">
-        <button class="btn primary" id="ai-key-save">Save key</button>
+        <button type="button" class="btn primary" id="ai-key-save">Save key</button>
 
         <label for="ai-model">Active model / rotation <span class="faint">(comma-separated)</span></label>
         <input type="text" id="ai-model" placeholder="gemini-2.5-flash-lite,gpt-4o-mini">
         <div class="inline-save">
-          <button class="btn primary" id="ai-model-save">Save model</button>
-          <button class="btn" id="ai-check">Check health</button>
+          <button type="button" class="btn primary" id="ai-model-save">Save model</button>
+          <button type="button" class="btn" id="ai-check">Check health</button>
         </div>
 
         <div class="model-picker-wrap">
@@ -235,7 +258,7 @@
         <label for="test-prompt">Test prompt / message</label>
         <div class="test-row">
           <input type="text" id="test-prompt" value="hello" placeholder="Send a message (e.g. hello)">
-          <button class="btn primary" id="btn-test-model">Send test</button>
+          <button type="button" class="btn primary" id="btn-test-model">Send test</button>
         </div>
         <p class="field-hint">Tests the model live. Automatically prunes dead models and saves working models to rotation.</p>
         <div id="test-results-box" class="test-results-box hidden">
@@ -248,32 +271,222 @@
         </div>
       </div>
 
-      <h3 class="section-h">All commands <span id="cmd-count" class="cmd-count num"></span></h3>
-      <input type="search" id="cmd-search" placeholder="Search commands">
-      <div class="chipgrid" id="cmd-chips"></div>
+      <!-- Phase 7: Sleep Schedule & Quiet Hours Visual Picker -->
+      <h3 class="section-h">Sleep Schedule &amp; Quiet Hours</h3>
+      <div class="card form qh-card">
+        <div class="qh-head">
+          <div class="qh-title-group">
+            <span class="qh-title">🌙 Daily Quiet Window</span>
+            <span class="qh-sub">Pauses automated replies overnight (IST)</span>
+          </div>
+          <span class="pill pill-positive" id="qh-status-pill">Active</span>
+        </div>
+        <div class="preset-carousel" id="qh-preset-carousel">
+          <button type="button" class="preset-chip active" data-qh="02:00 08:00">Standard (02:00 AM – 08:00 AM IST)</button>
+          <button type="button" class="preset-chip" data-qh="23:00 07:00">Night Owl (11:00 PM – 07:00 AM IST)</button>
+          <button type="button" class="preset-chip" data-qh="00:00 06:00">Late Shift (12:00 AM – 06:00 AM IST)</button>
+          <button type="button" class="preset-chip" data-qh="off">Disable</button>
+        </div>
+        <div class="time-range-row">
+          <div class="time-field">
+            <label for="qh-start-input">Starts at</label>
+            <input type="time" id="qh-start-input" value="02:00">
+          </div>
+          <div class="time-sep">to</div>
+          <div class="time-field">
+            <label for="qh-end-input">Ends at</label>
+            <input type="time" id="qh-end-input" value="08:00">
+          </div>
+        </div>
+        <div class="inline-save">
+          <button type="button" class="btn primary" id="qh-save-btn">Save Schedule</button>
+          <button type="button" class="btn" id="btn-quick-sleep">😴 Sleep Until Morning</button>
+        </div>
+      </div>
+
+      <!-- Human Behavior Simulation Controls -->
+      <h3 class="section-h">Behavior &amp; Human Simulation</h3>
+      <div class="card list behavior-card" id="behavior-toggles">
+        <div class="setting-toggle-row">
+          <div class="toggle-info">
+            <span class="toggle-title">❤️ Auto-Reactions</span>
+            <span class="toggle-sub">Naturally react to incoming messages with emojis</span>
+          </div>
+          <button type="button" class="clay-switch on" id="sw-reaction" data-action="reaction" data-state="on">ON</button>
+        </div>
+        <div class="setting-toggle-row">
+          <div class="toggle-info">
+            <span class="toggle-title">🫧 Multi-Bubble Splitting</span>
+            <span class="toggle-sub">Split long thoughts into natural consecutive bubbles</span>
+          </div>
+          <button type="button" class="clay-switch on" id="sw-multibubble" data-action="multibubble" data-state="on">ON</button>
+        </div>
+        <div class="setting-toggle-row">
+          <div class="toggle-info">
+            <span class="toggle-title">✏️ Typo &amp; Self-Correction</span>
+            <span class="toggle-sub">Simulate natural typos and edit-fix seconds later</span>
+          </div>
+          <button type="button" class="clay-switch on" id="sw-typo" data-action="typo" data-state="on">ON</button>
+        </div>
+        <div class="setting-toggle-row">
+          <div class="toggle-info">
+            <span class="toggle-title">🧵 Message Burst Debounce</span>
+            <span class="toggle-sub">Stitch rapid fragmented messages before replying</span>
+          </div>
+          <button type="button" class="clay-switch on" id="sw-debounce" data-action="debounce" data-state="on">ON</button>
+        </div>
+        <div class="setting-toggle-row">
+          <div class="toggle-info">
+            <span class="toggle-title">💬 Spontaneous Follow-ups</span>
+            <span class="toggle-sub">Occasional natural delayed follow-ups for short replies</span>
+          </div>
+          <button type="button" class="clay-switch off" id="sw-followup" data-action="followup" data-state="off">OFF</button>
+        </div>
+        <div class="setting-toggle-row">
+          <div class="toggle-info">
+            <span class="toggle-title">🎯 Mention-Only in Groups</span>
+            <span class="toggle-sub">Respond only when explicitly @mentioned or replied to</span>
+          </div>
+          <button type="button" class="clay-switch off" id="sw-mentiononly" data-action="mentiononly" data-state="off">OFF</button>
+        </div>
+      </div>
+
+      <!-- AI Parameters & Tuning -->
+      <h3 class="section-h">AI Parameters &amp; Tuning</h3>
+      <div class="card form">
+        <label>Reasoning Effort (Thinking)</label>
+        <div class="segrow" id="seg-thinking">
+          <button type="button" class="seg active" data-param="thinking" data-val="default">Default</button>
+          <button type="button" class="seg" data-param="thinking" data-val="low">Low</button>
+          <button type="button" class="seg" data-param="thinking" data-val="medium">Medium</button>
+          <button type="button" class="seg" data-param="thinking" data-val="high">High</button>
+          <button type="button" class="seg" data-param="thinking" data-val="off">Off</button>
+        </div>
+
+        <label>Creativity (Temperature)</label>
+        <div class="segrow" id="seg-temp">
+          <button type="button" class="seg" data-param="temp" data-val="0.2">0.2 Precise</button>
+          <button type="button" class="seg" data-param="temp" data-val="0.5">0.5 Balanced</button>
+          <button type="button" class="seg active" data-param="temp" data-val="0.7">0.7 Natural</button>
+          <button type="button" class="seg" data-param="temp" data-val="1.0">1.0 Creative</button>
+        </div>
+
+        <label>Reply Language</label>
+        <div class="segrow" id="seg-lang">
+          <button type="button" class="seg active" data-param="lang" data-val="dynamic">Dynamic</button>
+          <button type="button" class="seg" data-param="lang" data-val="english">English</button>
+          <button type="button" class="seg" data-param="lang" data-val="hindi">Hindi</button>
+          <button type="button" class="seg" data-param="lang" data-val="hinglish">Hinglish</button>
+        </div>
+
+        <label>Max Response Length</label>
+        <div class="segrow" id="seg-maxtokens">
+          <button type="button" class="seg" data-param="maxtokens" data-val="256">256 Short</button>
+          <button type="button" class="seg active" data-param="maxtokens" data-val="512">512 Standard</button>
+          <button type="button" class="seg" data-param="maxtokens" data-val="1024">1024 Detailed</button>
+          <button type="button" class="seg" data-param="maxtokens" data-val="2048">2048 Long</button>
+        </div>
+      </div>
+
+      <!-- Keyword Auto-Reply Rules -->
+      <div class="section-head-btn">
+        <h3 class="section-h" style="margin-top:0">Keyword Auto-Replies</h3>
+        <button type="button" class="btn small primary" id="btn-add-rule">+ Add Rule</button>
+      </div>
+      <div class="card list" id="rules-list"></div>
+
+      <!-- System Maintenance & Safety -->
+      <h3 class="section-h">System Maintenance &amp; Safety</h3>
+      <div class="card form">
+        <div class="maintenance-row">
+          <div class="maintenance-info">
+            <span class="maintenance-title">🛡️ Crash-Loop Guard (Safe Mode)</span>
+            <span class="maintenance-sub">Automatically protects account if rapid errors occur</span>
+          </div>
+          <span class="pill pill-positive" id="safemode-badge">Protected</span>
+        </div>
+        <div class="inline-save">
+          <button type="button" class="btn" id="btn-backup-db">💾 Backup Database</button>
+          <button type="button" class="btn danger" id="btn-clear-context">🧹 Clear AI Memory</button>
+        </div>
+      </div>
     </section>
 
   </main>
 
-  <nav class="tabbar" aria-label="Sections">
-    <button class="tab active" data-view="overview">Overview</button>
-    <button class="tab" data-view="chats">Chats</button>
-    <button class="tab" data-view="persona">Persona</button>
-    <button class="tab" data-view="approvals">Approvals<span id="tab-approvals" class="tabcount hidden">0</span></button>
-    <button class="tab" data-view="more">More</button>
+  <!-- Material 3 Expressive Bottom Navigation -->
+  <nav class="m3-bottom-nav tabbar" aria-label="Sections">
+    <button type="button" class="tab m3-nav-item active" data-view="overview" aria-label="Overview">
+      <div class="m3-icon-wrap">
+        <div class="m3-indicator"></div>
+        <svg class="m3-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7" height="9" rx="1.5"></rect>
+          <rect x="14" y="3" width="7" height="5" rx="1.5"></rect>
+          <rect x="14" y="12" width="7" height="9" rx="1.5"></rect>
+          <rect x="3" y="16" width="7" height="5" rx="1.5"></rect>
+        </svg>
+      </div>
+      <span class="m3-label">Overview</span>
+    </button>
+    <button type="button" class="tab m3-nav-item" data-view="chats" aria-label="Chats">
+      <div class="m3-icon-wrap">
+        <div class="m3-indicator"></div>
+        <svg class="m3-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
+        </svg>
+      </div>
+      <span class="m3-label">Chats</span>
+    </button>
+    <button type="button" class="tab m3-nav-item" data-view="persona" aria-label="Persona">
+      <div class="m3-icon-wrap">
+        <div class="m3-indicator"></div>
+        <svg class="m3-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2L14.4 7.6 20 10l-5.6 2.4L12 18l-2.4-5.6L4 10l5.6-2.4L12 2z"></path>
+          <path d="M19 17l1 2.2 2.2 1-2.2 1-1 2.2-1-2.2-2.2-1 2.2-1L19 17z"></path>
+        </svg>
+      </div>
+      <span class="m3-label">Persona</span>
+    </button>
+    <button type="button" class="tab m3-nav-item" data-view="approvals" aria-label="Approvals">
+      <div class="m3-icon-wrap">
+        <div class="m3-indicator"></div>
+        <svg class="m3-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          <polyline points="9 12 11 14 15 10"></polyline>
+        </svg>
+        <span id="tab-approvals" class="tabcount hidden">0</span>
+      </div>
+      <span class="m3-label">Approvals</span>
+    </button>
+    <button type="button" class="tab m3-nav-item" data-view="more" aria-label="More">
+      <div class="m3-icon-wrap">
+        <div class="m3-indicator"></div>
+        <svg class="m3-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </div>
+      <span class="m3-label">More</span>
+    </button>
   </nav>
 </div>
 
 <!-- Bottom sheet -->
-<div id="sheet-backdrop" class="hidden"></div>
+<div id="sheet-backdrop" class="sheet-backdrop hidden"></div>
 <div id="sheet" class="sheet hidden" role="dialog" aria-modal="true">
   <div class="sheet-grip" aria-hidden="true"></div>
-  <h3 class="sheet-title" id="sheet-title">Sheet</h3>
+  <div class="sheet-head">
+    <h3 class="sheet-title" id="sheet-title">Sheet</h3>
+    <button type="button" class="sheet-close-btn" id="sheet-close" aria-label="Close sheet">✕</button>
+  </div>
   <div class="sheet-body" id="sheet-body"></div>
   <div class="sheet-actions" id="sheet-actions"></div>
 </div>
 
-<div id="toast" class="toast hidden" role="status"></div>
+<div id="toast" class="toast hidden" role="status">
+  <span class="toast-icon" id="toast-icon">✓</span>
+  <span class="toast-msg" id="toast-msg"></span>
+</div>
 
 <script src="app.js"></script>
 </body>

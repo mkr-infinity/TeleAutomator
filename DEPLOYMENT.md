@@ -1,7 +1,8 @@
 # TeleAutomator - 24/7 Cloud Deployment & Account Setup Guide
 
 > **Zero-Skip Step-by-Step Walkthrough for Beginners**  
-> Learn how to deploy TeleAutomator on a 24/7 cloud server (VPS/Docker) and connect your Telegram account safely.
+> Learn how to deploy TeleAutomator on a 24/7 cloud server (VPS/Docker) and connect your Telegram account safely.  
+> Looking for a breakdown of every `.env` variable and where to find keys? See **[REQUIREMENTS.md](REQUIREMENTS.md)**.
 
 ---
 
