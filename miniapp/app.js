@@ -1728,9 +1728,21 @@
 
     // 5. System Safety & Maintenance
     const safemodeBadge = $("safemode-badge");
+    const resetSafemodeBtn = $("btn-reset-safemode");
     if (safemodeBadge) {
-      safemodeBadge.textContent = s.safe_mode ? "Safe Mode Triggered" : "Protected";
-      safemodeBadge.className = `pill ${s.safe_mode ? "pill-warning" : "pill-positive"}`;
+      const isTripped = s.safe_mode_active || s.safe_mode;
+      safemodeBadge.textContent = isTripped ? "Safe Mode Triggered" : "Protected";
+      safemodeBadge.className = `pill ${isTripped ? "pill-warning" : "pill-positive"}`;
+      if (resetSafemodeBtn) {
+        resetSafemodeBtn.style.display = isTripped ? "inline-block" : "none";
+      }
+    }
+
+    const emergBtn = $("btn-emergency-toggle");
+    if (emergBtn) {
+      const isStopped = s.emergency_stopped || s.status === "stopped";
+      emergBtn.textContent = isStopped ? "Resume Engine" : "Halt Engine";
+      emergBtn.className = `btn small ${isStopped ? "primary" : "danger"}`;
     }
   }
 
@@ -1998,11 +2010,6 @@
         if (e.target.closest("#sheet-close, #sheet-expand")) return;
         touchArea = "head";
         tracking = true;
-      } else if (body && (e.target === body || body.contains(e.target))) {
-        if (body.scrollTop <= 0) {
-          touchArea = "body";
-          tracking = true;
-        }
       }
     };
 
@@ -2025,10 +2032,10 @@
             expandSheet();
           }
         } else {
-          // Swiped DOWN
+          // Swiped DOWN on grip or header
           if (sheet.classList.contains("is-expanded")) {
             collapseSheet();
-          } else if (diffY > 65) {
+          } else if (diffY > 55) {
             closeSheet();
           }
         }
@@ -2046,7 +2053,11 @@
 
   function wire() {
     document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.view)));
-    $("sheet-backdrop").addEventListener("click", closeSheet);
+    $("sheet-backdrop").addEventListener("click", (e) => {
+      if (e.target === $("sheet-backdrop")) {
+        closeSheet();
+      }
+    });
 
     const sheetCloseBtn = $("sheet-close");
     if (sheetCloseBtn) sheetCloseBtn.addEventListener("click", closeSheet);
@@ -2174,23 +2185,6 @@
         }
       }
     });
-
-    // Swipe down on bottom sheet to dismiss
-    const sheetEl = $("sheet");
-    if (sheetEl) {
-      let touchStartY = 0;
-      sheetEl.addEventListener("touchstart", (e) => {
-        if (e.touches && e.touches[0]) touchStartY = e.touches[0].clientY;
-      }, { passive: true });
-      sheetEl.addEventListener("touchmove", (e) => {
-        if (e.touches && e.touches[0]) {
-          const currentY = e.touches[0].clientY;
-          if (currentY - touchStartY > 60 && sheetEl.scrollTop <= 0) {
-            closeSheet();
-          }
-        }
-      }, { passive: true });
-    }
 
     $("act-pause").addEventListener("click", () => runAction("pause", { minutes: 30 }));
     $("act-resume").addEventListener("click", () => runAction("resume", {}));
@@ -2833,7 +2827,29 @@
       });
     }
 
-    // System Maintenance Buttons
+    // System Maintenance & Safety Buttons
+    const resetSafemodeBtn = $("btn-reset-safemode");
+    if (resetSafemodeBtn) {
+      resetSafemodeBtn.addEventListener("click", () => {
+        runAction("safemode_reset", {});
+      });
+    }
+
+    const emergToggleBtn = $("btn-emergency-toggle");
+    if (emergToggleBtn) {
+      emergToggleBtn.addEventListener("click", () => {
+        const isStopped = emergToggleBtn.textContent.includes("Resume");
+        if (isStopped) {
+          runAction("resume", {});
+        } else {
+          openSheet("Emergency Kill-Switch", "<p>Immediately halt all automated replies, reactions, and background tasks?</p>", [
+            { label: "Halt Engine Immediately", kind: "danger", onClick: () => runAction("stop", {}) },
+            { label: "Cancel" }
+          ]);
+        }
+      });
+    }
+
     const backupBtn = $("btn-backup-db");
     if (backupBtn) {
       backupBtn.addEventListener("click", () => {
@@ -2847,7 +2863,7 @@
     const clearCtxBtn = $("btn-clear-context");
     if (clearCtxBtn) {
       clearCtxBtn.addEventListener("click", () => {
-        openSheet("Clear AI Context", "<p>Reset cached conversation memory across chats? Permanent notes and allowlists are preserved.</p>", [
+        openSheet("Clear AI Memory", "<p>Reset cached conversation memory across all chats? Permanent notes, styles, and allowlists are strictly preserved.</p>", [
           { label: "Clear Memory", kind: "danger", onClick: () => runAction("clearcontext", { chat_id: "all" }) },
           { label: "Cancel" }
         ]);

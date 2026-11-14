@@ -159,6 +159,7 @@ class ReplyGenerator:
                 sender_name=sender_name,
                 custom_limit=custom_limit,
                 allow_mentions=allow_mentions,
+                incoming_text=incoming_text,
             )
         except Exception as e:
             logger.error(f"Failed to generate draft reply: {e}")

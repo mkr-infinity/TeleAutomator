@@ -549,6 +549,8 @@ class MiniAppAPI:
         "delrule": "/delrule {value}",
         "sleep": "/sleep {value}",
         "backup": "/backup",
+        "clearcontext": "/clearcontext {chat_id}",
+        "safemode": "/safemode {value}",
     }
 
     def map_action_to_command(self, action: str, params: dict) -> Optional[str]:
@@ -663,6 +665,27 @@ class MiniAppAPI:
             is_on = val in ("1", "true", "on", "yes", "enable")
             ctx.db.set_state("ownreact_enabled", "1" if is_on else "0")
             return {"ok": True, "response": f"Own-reply reactions turned {'ON' if is_on else 'OFF'}."}
+        if action == "clearcontext":
+            cid = str(params.get("chat_id", "all")).strip().lower()
+            if cid in ("all", "*", ""):
+                count = ctx.db.clear_all_chat_context()
+                return {"ok": True, "response": f"Cleared {count} cached AI context messages across all chats."}
+            try:
+                target_cid = int(cid)
+                count = ctx.db.clear_chat_context(target_cid)
+                return {"ok": True, "response": f"Cleared {count} cached context messages for chat {target_cid}."}
+            except ValueError:
+                return {"ok": False, "response": "Invalid chat ID for clearcontext."}
+        if action == "safemode_reset":
+            ctx.db.set_state("safe_mode_active", "0")
+            ctx.db.set_state("safe_mode_restarts", "0")
+            return {"ok": True, "response": "Safe Mode reset. Crash-loop guard is in Protected state."}
+        if action == "emergencystop":
+            val = str(params.get("value", "")).lower().strip()
+            is_stop = val in ("1", "true", "on", "yes", "stop")
+            if hasattr(ctx, "reply_manager") and hasattr(ctx.reply_manager, "safety"):
+                ctx.reply_manager.safety.set_emergency_stop(is_stop)
+            return {"ok": True, "response": f"Emergency stop {'activated' if is_stop else 'cleared'}."}
         command = self.map_action_to_command(action, params)
         if not command:
             return {"ok": False, "response": f"Unknown action: {action}"}
