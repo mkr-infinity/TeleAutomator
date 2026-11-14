@@ -1706,8 +1706,27 @@ class ReplyManager(CommandRouterMixin):
                     await asyncio.sleep(remain_cooldown)
 
             # Send first message part
-            # Always swipe-to-reply (quote-threading) the message being answered, in both DMs and groups
-            actual_reply_to = reply_to_msg_id if (reply_to_msg_id and reply_to_msg_id > 0) else None
+            # In DMs always swipe-to-reply; in groups swipe-to-reply to message being answered,
+            # except for room broadcasts / greetings for everyone (e.g. "good morning", "gm", "gn")
+            # or rare general stream chime-in.
+            actual_reply_to = None
+            if reply_to_msg_id and reply_to_msg_id > 0:
+                if chat_id > 0:
+                    actual_reply_to = reply_to_msg_id
+                else:
+                    # Group chat: check if message is a general greeting or broadcast intended for everyone
+                    clean_lower = first_part.strip().lower()
+                    is_room_broadcast = bool(re.search(
+                        r"\b(?:good\s*morning|good\s*night|good\s*afternoon|good\s*evening|gm|gn|hello\s+everyone|hey\s+everyone|hi\s+everyone|sup\s+everyone|hello\s+guys|hey\s+guys|hi\s+guys|bye\s+guys|bye\s+all|goodbye\s+all|gg\s+all|gm\s+all|gn\s+all)\b",
+                        clean_lower
+                    )) or ("everyone" in clean_lower or "all" in clean_lower.split())
+
+                    if is_mention:
+                        actual_reply_to = reply_to_msg_id
+                    elif is_room_broadcast:
+                        actual_reply_to = None
+                    else:
+                        actual_reply_to = reply_to_msg_id
             try:
                 first_sent = await self._client.send_message(chat_id, first_part, reply_to=actual_reply_to)
             except Exception as send_err:

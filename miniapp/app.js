@@ -40,6 +40,12 @@
       onText: "The bot analyzes message sentiment and naturally places an appropriate emoji reaction (such as thumbs-up, heart, or fire) before or alongside replying.",
       offText: "Emoji reactions are disabled. All responses from the account will be text-only.",
     },
+    ownreact: {
+      title: "React on Own Messages",
+      desc: "Occasionally reacts to your own sent replies with an emoji reaction, just like real people do when joking or emphasizing a message.",
+      onText: "Around 20% of newly sent replies will naturally receive an emoji reaction from your account.",
+      offText: "Your account will never react to its own messages and only react to incoming messages from peers.",
+    },
     multibubble: {
       title: "Multi-Bubble Splitting",
       desc: "Breaks longer replies into 2–3 natural consecutive message bubbles with realistic typing pauses between them.",
@@ -154,7 +160,7 @@
   }
 
   function openAllBehaviorGuideSheet() {
-    const keys = ["reaction", "multibubble", "typo", "debounce", "followup", "mentiononly"];
+    const keys = ["reaction", "ownreact", "multibubble", "typo", "debounce", "followup", "mentiononly"];
     const bodyHtml = `
       <div class="help-popup-content">
         <p class="help-popup-desc">The bot includes natural human simulation engines to mimic realistic messaging cadence, avoid robotic patterns, and keep conversations engaging.</p>
@@ -224,7 +230,7 @@
       available_models: ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"],
       models_manually_set: false,
       chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.4",
-      auto_reactions: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
+      auto_reactions: true, ownreact: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
       thinking: "default", temperature: "0.7", lang: "english", max_tokens: "512",
       quiet_hours_start: "02:00", quiet_hours_end: "08:00", quiet_hours_schedule: "02:00 AM – 08:00 AM IST",
       rules: ["pricing => We update our rates monthly, DM for catalog!", "help => How can I assist you today?"],
@@ -474,7 +480,7 @@
         }
         return { ok: true, response: `Keyword rule deleted for "${p.value}".` };
       }
-      if (a === "reaction" || a === "multibubble" || a === "typo" || a === "debounce" || a === "followup" || a === "mentiononly") {
+      if (a === "reaction" || a === "ownreact" || a === "multibubble" || a === "typo" || a === "debounce" || a === "followup" || a === "mentiononly") {
         const mapKey = a === "reaction" ? "auto_reactions" : (a === "mentiononly" ? "mention_only" : a);
         DEMO_DATA.state[mapKey] = p.value === "on";
         return { ok: true, response: `${a} is now ${p.value.toUpperCase()}.` };
@@ -1619,6 +1625,7 @@
     // 2. Behavior Toggles
     const toggleMap = {
       "reaction": s.auto_reactions,
+      "ownreact": s.ownreact,
       "multibubble": s.multibubble,
       "typo": s.typo,
       "debounce": s.debounce,

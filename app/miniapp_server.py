@@ -231,6 +231,7 @@ class MiniAppAPI:
         qh_start = ctx.db.get_state("quiet_hours_start", getattr(ctx.reply_manager.config, "quiet_hours_start", "02:00"))
         qh_end = ctx.db.get_state("quiet_hours_end", getattr(ctx.reply_manager.config, "quiet_hours_end", "08:00"))
         auto_reactions = ctx.db.get_state("auto_reactions_enabled", "1") == "1"
+        ownreact = ctx.db.get_state("ownreact_enabled", "1") == "1"
         multibubble = ctx.db.get_state("multibubble_enabled", "1") == "1"
         typo = ctx.db.get_state("typo_correction_enabled", "1") == "1"
         debounce = ctx.db.get_state("debounce_enabled", "1") == "1"
@@ -282,6 +283,7 @@ class MiniAppAPI:
             "available_models": avail_models,
             "models_manually_set": ctx.db.get_state("models_manually_set", "0") == "1",
             "auto_reactions": auto_reactions,
+            "ownreact": ownreact,
             "multibubble": multibubble,
             "typo": typo,
             "debounce": debounce,
@@ -536,6 +538,7 @@ class MiniAppAPI:
         "ratelimit": "/ratelimit {value}",
         "quiethours": "/quiethours {value}",
         "reaction": "/reaction {value}",
+        "ownreact": "/ownreact {value}",
         "mentiononly": "/mentiononly {value}",
         "debounce": "/debounce {value}",
         "multibubble": "/multibubble {value}",
@@ -655,6 +658,11 @@ class MiniAppAPI:
             if hasattr(ctx.db, "sync_chat_context_file"):
                 ctx.db.sync_chat_context_file(cid)
             return {"ok": True, "response": f"Style set to {val} for chat {cid}."}
+        if action == "ownreact":
+            val = str(params.get("value", "")).lower().strip()
+            is_on = val in ("1", "true", "on", "yes", "enable")
+            ctx.db.set_state("ownreact_enabled", "1" if is_on else "0")
+            return {"ok": True, "response": f"Own-reply reactions turned {'ON' if is_on else 'OFF'}."}
         command = self.map_action_to_command(action, params)
         if not command:
             return {"ok": False, "response": f"Unknown action: {action}"}

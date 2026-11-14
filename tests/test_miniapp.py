@@ -858,6 +858,28 @@ def test_handle_action_chat_prompt_and_context(tmp_path):
     assert ctx.db.get_state("chat_style_111") == "concise"
 
 
+def test_handle_action_ownreact_toggle(tmp_path):
+    ctx, _ = make_ctx(tmp_path, authorized=(555000111,))
+    api = MiniAppAPI(ctx)
+
+    # Initial default is ON
+    assert api.handle_state()["ownreact"] is True
+
+    # Turn OFF
+    res_off = api.handle_action(555000111, "ownreact", {"value": "off"})
+    assert res_off["ok"] is True
+    assert "turned OFF" in res_off["response"]
+    assert ctx.db.get_state("ownreact_enabled") == "0"
+    assert api.handle_state()["ownreact"] is False
+
+    # Turn ON
+    res_on = api.handle_action(555000111, "ownreact", {"value": "on"})
+    assert res_on["ok"] is True
+    assert "turned ON" in res_on["response"]
+    assert ctx.db.get_state("ownreact_enabled") == "1"
+    assert api.handle_state()["ownreact"] is True
+
+
 
 
 

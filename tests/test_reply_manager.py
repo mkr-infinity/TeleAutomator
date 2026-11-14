@@ -988,6 +988,16 @@ def test_swipe_to_reply_always_quotes_message(tmp_path: Path):
         assert len(sent_calls) == 4
         assert sent_calls[3][2] is None
 
+        # 5. Group general room greeting/broadcast (e.g. "good morning guys"): sends to room without swiping
+        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="good morning guys", adaptive_delay=False, is_mention=False)
+        assert len(sent_calls) == 5
+        assert sent_calls[4][2] is None
+
+        # 6. Group general greeting when explicitly mentioned: quotes the sender
+        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="good morning guys", adaptive_delay=False, is_mention=True)
+        assert len(sent_calls) == 6
+        assert sent_calls[5][2] == 77
+
     asyncio.run(_run())
 
 
@@ -2559,7 +2569,7 @@ def test_per_chat_prompt_and_context_passed_to_generator(tmp_path: Path):
         generator.prompt_manager = PromptManager(prompt_file=None, owner_name="Kaif")
         generator.language = "english"
         generator.style = "casual"
-        generator.generate = MagicMock(return_value="sure contact @admin")
+        generator.generate = MagicMock(return_value="sure check with the lead")
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
         mgr.set_mode("restricted_auto")
 
@@ -2596,9 +2606,23 @@ def test_per_chat_prompt_and_context_passed_to_generator(tmp_path: Path):
         chat_id, text, reply_to = sent_calls[0]
         assert chat_id == -100999
         assert reply_to == 305
-        assert "@admin" in text
+        assert "lead" in text
 
     asyncio.run(_run())
+
+
+def test_prompt_ratio_parsing_six_in_ten():
+    """Verify regex parses 'message 6 times in 10 sends' and percentage into exact probability."""
+    import re
+    combined_rules = "Talk like a dev, message 6 times in 10 sends, keep it brief."
+    r_match = re.search(r"(\d+)\s*(?:times\s+in|out\s+of|\/)\s*(\d+)\s*(?:sends|messages|texts)?", combined_rules, re.IGNORECASE)
+    assert r_match is not None
+    assert float(r_match.group(1)) / float(r_match.group(2)) == 0.60
+
+    pct_rules = "Reply rate 75% in this group."
+    pct_match = re.search(r"(?:reply|message|talk|send)\s*(?:rate|frequency|chance|probability)?\s*(?:of|at|is)?\s*(\d+)%", pct_rules, re.IGNORECASE)
+    assert pct_match is not None
+    assert float(pct_match.group(1)) / 100.0 == 0.75
 
 
 

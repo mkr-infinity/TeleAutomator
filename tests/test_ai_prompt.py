@@ -509,29 +509,40 @@ def test_dynamic_owner_name_without_hardcoding(tmp_path: Path):
     assert pm.clean_reply("Rohan: what's up") == "what's up"
 
 
-def test_custom_prompt_with_mentions_and_clean_reply():
-    """Verify custom prompt requesting user mentions enables mentioning in instructions and preserves @mentions in replies."""
+def test_custom_prompt_language_adherence():
+    """Verify custom prompt with explicit language overrides default English in instructions and user prompt."""
+    pm = PromptManager(prompt_file=None, owner_name="Kaif", language="english")
+
+    # 1. Hindi custom prompt
+    hindi_prompt = "Talk in Hindi, be casual and friendly."
+    inst_hi = pm.get_system_instructions(persona_override=hindi_prompt, is_group=True)
+    assert "Reply in that requested language" in inst_hi
+    assert "Reply ONLY in English" not in inst_hi
+
+    user_prompt_hi = pm.build_user_prompt("Bob", "namaste", persona_override=hindi_prompt)
+    assert "You MUST reply in the language requested by the custom prompt" in user_prompt_hi
+    assert "in the language requested by your custom prompt" in user_prompt_hi
+    assert "English Only" not in user_prompt_hi
+
+    # 2. Spanish custom prompt
+    spanish_prompt = "Speak in Spanish like a close peer."
+    user_prompt_es = pm.build_user_prompt("Bob", "hola amigo", persona_override=spanish_prompt)
+    assert "You MUST reply in the language requested by the custom prompt" in user_prompt_es
+    assert "English Only" not in user_prompt_es
+
+    # 3. Default prompt without language mentions falls back to configured English
+    casual_prompt = "Be ultra concise, keep replies under 5 words."
+    user_prompt_def = pm.build_user_prompt("Bob", "sup", persona_override=casual_prompt)
+    assert "English Only" in user_prompt_def
+
+
+def test_clean_reply_never_writes_usernames_or_names():
+    """Verify clean_reply strips all @usernames and user names from text."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
-
-    # 1. In-text mentions preserved by default
-    assert pm.clean_reply("contact @support for help") == "contact @support for help"
-
-    # 2. Leading mentions preserved when allow_mentions=True
-    assert pm.clean_reply("@alice check this out", allow_mentions=True) == "@alice check this out"
-
-    # 3. Leading mentions cleaned when allow_mentions=False
-    assert pm.clean_reply("@alice check this out", allow_mentions=False) == "check this out"
-
-    # 4. Custom prompt with mention directive allows mentioning in system instructions
-    custom_persona = "You are an assistant. When asked about help, mention @helpdesk."
-    instructions = pm.get_system_instructions(persona_override=custom_persona, is_group=True)
-    assert "MENTIONS: When your custom prompt instructs to mention or tag users" in instructions
-    assert "NEVER write anyone's name, user name, or @username" not in instructions
-
-    # 5. build_user_prompt with persona_override permitting mentions
-    prompt = pm.build_user_prompt("Bob", "how do I get help", persona_override=custom_persona)
-    assert "When your prompt instructions ask to mention or tag people" in prompt
-    assert "follow custom prompt for user mentions" in prompt
+    assert pm.clean_reply("@alice sounds good 👍") == "sounds good 👍"
+    assert pm.clean_reply("talk to @developer for help") == "talk to for help"
+    assert pm.clean_reply("Alice: hello there", sender_name="Alice") == "hello there"
+    assert pm.clean_reply("Alice, are you coming", sender_name="Alice") == "are you coming"
 
 
 
