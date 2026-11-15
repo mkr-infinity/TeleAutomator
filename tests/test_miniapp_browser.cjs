@@ -66,7 +66,7 @@ function telegramMock({ version }) {
       let result = {};
       if (pathname === "/api/auth") {
         if (authFailure) { res.statusCode = 503; result = { ok: false, response: "The engine is starting. Try again." }; }
-        else result = { authorized: true, is_main: isMainUser, can_feedback: isMainUser, version: "3.0.7", user: { name: "Test owner" } };
+        else result = { authorized: true, is_main: isMainUser, can_feedback: isMainUser, version: "3.0.8", user: { id: 555000111, name: "Test owner" } };
       } else if (pathname === "/api/state") result = data.state;
       else if (pathname === "/api/history") {
         if (historyFailure) { historyFailure = false; res.statusCode = 503; result = { ok: false, response: "History unavailable. Retry." }; }
@@ -188,6 +188,15 @@ function telegramMock({ version }) {
     for (const [selector, title] of [["#act-mode", "mode"], ["#act-stop", "Stop"], ["#goto-activity", "Recent"]]) {
       await page.locator(selector).click(); await checkSheet(page, title); await close(page);
     }
+    const stopsBefore = requests.filter(request => request.body.action === "stop").length;
+    await page.locator("#act-stop").click();
+    await page.context().setOffline(true);
+    await page.locator("#sheet-actions .danger").click();
+    await expect(page.locator("#sheet-error")).toContainText("not queued");
+    assert(await page.evaluate(() => !Object.keys(localStorage).some(key => (localStorage.getItem(key) || "").includes('"action":"stop"'))));
+    await close(page);
+    await page.context().setOffline(false);
+    assert.equal(requests.filter(request => request.body.action === "stop").length, stopsBefore, "offline stop must not replay later");
     await page.locator("#goto-activity").click();
     await expect(page.locator("#sheet .feedback-button")).toHaveCount(3);
     await page.locator("#sheet .feedback-button").first().click();

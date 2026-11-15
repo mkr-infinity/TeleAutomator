@@ -55,6 +55,7 @@ class ReplyManager(CommandRouterMixin):
         self.privacy = privacy_manager
         self.generator = reply_generator
         self.context_agent = ContextAgent(database, privacy_manager, reply_generator)
+        self._approval_batch_task = None
         self._client: Any = None
         # Optional Bot API control channel (set by main.py when BOT_API_KEY is configured).
         # When set: all alerts route to the bot's main user, Saved Messages stays as delivery fallback only.
@@ -143,7 +144,14 @@ class ReplyManager(CommandRouterMixin):
                               and self.db.get_state("safe_mode_active", "0") != "1"))
         )
 
-    async def _deliver_message(self, chat_id: int, text: str, reply_to=None, *, approved: bool = False, allow_quiet_hours: bool = False, context=None):
+    def _operator_allowed(self, operator_id):
+        if operator_id is None:
+            return True
+        from app.bot_control import authorized_user_ids, can_run_command
+        main_id = int(self.db.get_state("main_owner_id", "0") or 0) or min(self.config.bot_authorized_users or {0})
+        return operator_id in authorized_user_ids(self.db, self.config.bot_authorized_users) and can_run_command(self.db, operator_id, "/approve", main_id)
+
+    async def _deliver_message(self, chat_id: int, text: str, reply_to=None, *, approved: bool = False, allow_quiet_hours: bool = False, context=None, operator_id=None):
         text = capitalize_message(text)
         # Group messages go to the room without a quoted reply notification.
         reply_to = reply_to if chat_id > 0 and reply_to and reply_to > 0 else None
@@ -155,7 +163,7 @@ class ReplyManager(CommandRouterMixin):
             return None
         while True:
             async with self._outgoing_lock:
-                if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours) or not self.context_agent.is_current(context):
+                if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours) or not self.context_agent.is_current(context) or not self._operator_allowed(operator_id):
                     return None
                 can_send, reason = self.safety.can_reply(chat_id, text, allow_quiet_hours=allow_quiet_hours)
                 wait = self.safety.burst_wait_needed(chat_id)
@@ -164,6 +172,10 @@ class ReplyManager(CommandRouterMixin):
                         return None
                     wait = max(wait, self.safety.cooldown_remaining(chat_id)[0])
                 if can_send and wait <= 0:
+                    reason = self._outgoing_text_reason(chat_id, text)
+                    if reason:
+                        self.db.record_action("automation", "reply", "blocked", reason, chat_id=chat_id)
+                        return None
                     try:
                         message = await self._client.send_message(chat_id, text, reply_to=reply_to)
                     except Exception as e:
@@ -440,6 +452,11 @@ class ReplyManager(CommandRouterMixin):
             return
         # Sanitize incoming text before passing to generator
         clean_text = self.privacy.sanitize_text(text)
+
+        age_question = re.search(r"\b(?:how old are you|(?:your|ur|tumhari|aapki)\s+(?:age|umar)|kitne saal ke)\b", text, re.IGNORECASE)
+        if age_question and self.generator.prompt_manager.known_owner_age(self.db.get_chat_prompt(chat_id)) is None:
+            self.db.record_action("automation", "reply", "skipped", "Age is not configured; answer left to the account owner", chat_id=chat_id)
+            return
 
         if re.search(r"\b(?:are|r)\s+(?:you|u)\s+(?:(?:an?|really|actually|just)\s+)*(?:ai|bot|human|real|automated)\b|\b(?:what|which)\s+(?:ai|model|bot)\s+(?:are|r)\s+(?:you|u)\b", text, re.IGNORECASE):
             self.db.record_action("automation", "reply", "skipped", "Identity question left for the account owner", chat_id=chat_id)
@@ -858,16 +875,24 @@ class ReplyManager(CommandRouterMixin):
             )
 
             history = self.db.get_recent_chat_messages(chat_id, limit=5)
+            context = self.context_agent.snapshot(chat_id, history, require_latest=True)
+            if context is None:
+                return
             followup_raw = await asyncio.to_thread(
                 self.generator.generate,
                 sender_name="Contact",
                 incoming_text=prompt_instruction,
-                conversation_history=history,
+                conversation_history=context.history,
+                permanent_context=context.background or None,
+                style_override=context.style or None,
+                persona_override=context.persona or None,
                 is_group=(chat_id < 0),
                 is_mention=False,
             )
 
             followup_clean = capitalize_message(self.generator.prompt_manager.clean_reply(followup_raw))
+            if not self.context_agent.is_current(context):
+                return
             if not followup_clean or len(followup_clean.split()) > 8:
                 return
 
@@ -899,7 +924,7 @@ class ReplyManager(CommandRouterMixin):
             if self.safety.is_emergency_stopped:
                 return
 
-            sent_msg = await self._deliver_message(chat_id, followup_clean)
+            sent_msg = await self._deliver_message(chat_id, followup_clean, context=context)
             if sent_msg is None:
                 return
             sent_id = getattr(sent_msg, "id", 0)
@@ -1624,7 +1649,7 @@ class ReplyManager(CommandRouterMixin):
         if should_send:
             try:
                 _, allowed_groups = self.privacy.get_all_allowed_chats()
-                allowed_groups = list(allowed_groups)
+                allowed_groups = [gid for gid in allowed_groups if time.time() - self.db.get_last_reply_timestamp(gid) < 900]
             except Exception:
                 allowed_groups = []
             if allowed_groups:
@@ -1656,6 +1681,7 @@ class ReplyManager(CommandRouterMixin):
         approved: bool = False,
         allow_quiet_hours: bool = False,
         context=None,
+        operator_id=None,
     ) -> bool:
         """Send message using Telethon client with adaptive human reading/typing delay and error handling."""
         if not self._client:
@@ -1824,7 +1850,7 @@ class ReplyManager(CommandRouterMixin):
                             await asyncio.sleep(typing_duration)
 
                 # Send first message part
-                first_sent = await self._deliver_message(chat_id, first_part, reply_to_msg_id, approved=approved, allow_quiet_hours=allow_quiet_hours, context=context)
+                first_sent = await self._deliver_message(chat_id, first_part, reply_to_msg_id, approved=approved, allow_quiet_hours=allow_quiet_hours, context=context, operator_id=operator_id)
                 if first_sent is None:
                     return False
                 sent_any = True
@@ -1944,7 +1970,7 @@ class ReplyManager(CommandRouterMixin):
                     except Exception:
                         await asyncio.sleep(followup_typing)
 
-                    sub_sent = await self._deliver_message(chat_id, part, approved=approved, allow_quiet_hours=allow_quiet_hours, context=context)
+                    sub_sent = await self._deliver_message(chat_id, part, approved=approved, allow_quiet_hours=allow_quiet_hours, context=context, operator_id=operator_id)
                     if sub_sent is None:
                         break
                     sub_msg_id = getattr(sub_sent, "id", 0)

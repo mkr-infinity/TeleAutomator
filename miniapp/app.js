@@ -9,6 +9,7 @@
   const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
   const DEMO = new URLSearchParams(location.search).has("demo");
   let canGiveFeedback = false;
+  let activeUserId = null;
   const FEEDBACK_LABELS = { helpful: "Helpful", unnecessary: "Unneeded", off_topic: "Off-topic", style: "Style mismatch" };
 
   const SVGS = {
@@ -268,7 +269,7 @@
       owner_name: "Kaif", ai_engine: "Gemini", ai_model: "gemini-2.5-flash-lite", ai_base_url: "",
       available_models: ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"],
       models_manually_set: false,
-      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.7",
+      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.8",
       auto_reactions: true, ownreact: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
       thinking: "default", temperature: "0.7", lang: "english", max_tokens: "512",
       quiet_hours_start: "02:00", quiet_hours_end: "08:00", quiet_hours_schedule: "02:00 AM – 08:00 AM IST",
@@ -311,7 +312,7 @@
   };
 
   async function demoApi(path, body) {
-    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.7", user: { id: 555000111, name: "Kaif" } };
+    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.8", user: { id: 555000111, name: "Kaif" } };
     if (path === "/api/state") return DEMO_DATA.state;
     if (path === "/api/chats") return { chats: DEMO_DATA.chats, chatty_global: DEMO_DATA.state.chatty_global };
     if (path === "/api/pending") return { pending: DEMO_DATA.pending };
@@ -1523,14 +1524,17 @@
 
   // ------------------------------------------------------------ approvals (Phase 2: Swipe Actions)
 
+  let approvalTotal = 0;
   async function refreshApprovals() {
     const data = await api("/api/pending");
     if (!data || data.authorized === false) return maybePaywall(data);
     if (data.ok === false) throw new Error(data.response);
     const rows = data.pending || [];
     const count = rows.length;
-    $("tab-approvals").textContent = String(count);
-    $("tab-approvals").classList.toggle("hidden", !count);
+    approvalTotal = data.total ?? count;
+    $("tab-approvals").textContent = String(approvalTotal);
+    $("tab-approvals").classList.toggle("hidden", !approvalTotal);
+    $("approval-summary").textContent = count < approvalTotal ? `Showing ${count} of ${approvalTotal} drafts. Approve this batch to see the next drafts.` : `${count} pending draft(s).`;
     if ($("approval-batch-bar")) {
       $("approval-batch-bar").classList.toggle("hidden", count < 2);
     }
@@ -2008,87 +2012,90 @@
     }
   }
 
-  // ------------------------------------------------ Offline Optimistic Action Queue (Phase 8)
-  const OFFLINE_QUEUE_KEY = "teleautomator_offline_queue_v1";
+  // Queue only bounded, non-secret preferences for the authenticated account.
+  const OFFLINE_QUEUE_PREFIX = "teleautomator_offline_queue_v2:";
+  const QUEUED_PREFERENCES = new Set(["style", "chatstyle", "lang", "temp", "maxtokens", "thinking", "chat_chatty"]);
 
-  function loadOfflineQueue() {
+  function safeQueuedAction(item) {
+    if (!item || !QUEUED_PREFERENCES.has(item.action) || !item.params || typeof item.params !== "object") return false;
+    if (Object.keys(item.params).some(key => !["value", "chat_id"].includes(key))) return false;
+    const value = item.params.value;
+    if (typeof value !== "string" || !value || value.length > 40) return false;
+    if (["chatstyle", "chat_chatty"].includes(item.action) && !/^-?\d+$/.test(String(item.params.chat_id || ""))) return false;
+    if (["style", "chatstyle"].includes(item.action)) return ["casual", "concise", "formal", "humorous"].includes(value);
+    if (item.action === "lang") return /^[a-zA-Z][a-zA-Z -]{0,39}$/.test(value);
+    if (item.action === "thinking") return ["default", "off", "none", "low", "medium", "high"].includes(value);
+    if (item.action === "maxtokens" && value === "default") return true;
+    if (item.action === "chat_chatty" && ["def", "default"].includes(value)) return true;
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 && (item.action === "temp" ? number <= 2 : item.action === "chat_chatty" ? number <= 100 : Number.isInteger(number) && number > 0 && number <= 1000000);
+  }
+
+  function loadOfflineQueue(userId = activeUserId) {
     try {
-      const raw = localStorage.getItem(OFFLINE_QUEUE_KEY);
-      return raw ? JSON.parse(raw) : [];
+      localStorage.removeItem("teleautomator_offline_queue_v1");
+      if (!userId) return [];
+      const parsed = JSON.parse(localStorage.getItem(OFFLINE_QUEUE_PREFIX + userId) || "[]");
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(item => safeQueuedAction(item) && item.id && Number.isFinite(Date.parse(item.time)) && Math.abs(Date.now() - Date.parse(item.time)) < 3600000).slice(-50);
     } catch { return []; }
   }
 
-  function saveOfflineQueue(q) {
+  function saveOfflineQueue(queue, userId = activeUserId) {
+    if (!userId) return false;
     try {
-      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(q));
-    } catch {}
+      localStorage.setItem(OFFLINE_QUEUE_PREFIX + userId, JSON.stringify(queue.filter(safeQueuedAction).slice(-50)));
+      return true;
+    } catch { return false; }
   }
 
   function updateSyncBadge() {
     const badge = $("offline-sync-badge");
     const countEl = $("offline-sync-count");
     if (!badge) return;
-    const q = loadOfflineQueue();
-    if (q.length > 0) {
-      if (countEl) countEl.textContent = String(q.length);
-      badge.classList.remove("hidden");
-      badge.title = `${q.length} action(s) queued for sync`;
-    } else {
-      badge.classList.add("hidden");
-    }
+    const count = loadOfflineQueue().length;
+    if (countEl) countEl.textContent = String(count);
+    badge.classList.toggle("hidden", count === 0);
+    badge.title = `${count} preference change(s) queued for this account`;
   }
 
   function enqueueAction(action, params) {
-    const q = loadOfflineQueue();
-    if (q.some(item => item.action === action && JSON.stringify(item.params) === JSON.stringify(params))) return;
-    q.push({
-      id: Date.now() + "_" + Math.random().toString(36).slice(2, 6),
-      action,
-      params,
-      time: new Date().toISOString()
-    });
-    saveOfflineQueue(q);
+    if (!activeUserId || !safeQueuedAction({ action, params })) return false;
+    const queue = loadOfflineQueue();
+    if (queue.some(item => item.action === action && JSON.stringify(item.params) === JSON.stringify(params))) return true;
+    queue.push({ id: Date.now() + "_" + Math.random().toString(36).slice(2, 6), action, params, time: new Date().toISOString() });
+    const saved = saveOfflineQueue(queue);
     updateSyncBadge();
+    return saved;
   }
 
   let isFlushingQueue = false;
   async function flushOfflineQueue() {
-    if (isFlushingQueue) return;
-    const q = loadOfflineQueue();
-    if (!q.length) {
-      updateSyncBadge();
-      return;
-    }
+    if (isFlushingQueue || !activeUserId) return;
+    const userId = activeUserId;
+    const queue = loadOfflineQueue(userId);
+    if (!queue.length) { updateSyncBadge(); return; }
     isFlushingQueue = true;
     const remaining = [];
     let synced = 0;
-    for (let index = 0; index < q.length; index++) {
-      const item = q[index];
-      try {
-        const res = await api("/api/action", { action: item.action, params: item.params });
-        if (res && res.authorized === false) {
-          remaining.push(...q.slice(index));
-          break;
-        }
-        if (res && res.ok) {
-          synced++;
-        } else {
-          remaining.push(item);
-        }
-      } catch {
-        remaining.push(...q.slice(index));
-        break; // Network dropped or still offline
+    try {
+      for (let index = 0; index < queue.length; index++) {
+        if (activeUserId !== userId) { remaining.push(...queue.slice(index)); break; }
+        const item = queue[index];
+        try {
+          const result = await api("/api/action", { action: item.action, params: item.params });
+          if (result?.authorized === false) { remaining.push(...queue.slice(index)); break; }
+          if (result?.ok) synced++;
+          else remaining.push(item);
+        } catch { remaining.push(...queue.slice(index)); break; }
       }
-    }
-    const originalIds = new Set(q.map((item) => item.id));
-    saveOfflineQueue(remaining.concat(loadOfflineQueue().filter((item) => !originalIds.has(item.id))));
-    updateSyncBadge();
-    isFlushingQueue = false;
-    if (synced > 0) {
-      haptic("ok");
-      toast(`Synced ${synced} offline action${synced > 1 ? "s" : ""}`, "ok");
-      loadView(currentView);
-    }
+      const ids = new Set(queue.map(item => item.id));
+      saveOfflineQueue([...remaining, ...loadOfflineQueue(userId).filter(item => !ids.has(item.id))], userId);
+      if (activeUserId === userId) {
+        updateSyncBadge();
+        if (synced) { toast(`Synced ${synced} preference change(s)`, "ok"); loadView(currentView); }
+      }
+    } finally { isFlushingQueue = false; }
   }
 
   // --------------------------------------------------------- run + notify
@@ -2122,10 +2129,11 @@
       return res;
     } catch (error) {
       if (navigator.onLine === false) {
-        enqueueAction(action, params);
-        toast("Action queued offline. Reconnect to sync it.", "info");
+        const queued = enqueueAction(action, params);
+        const response = queued ? "Preference queued for this account. Reconnect to sync it." : "Offline: this action is not queued. Reconnect and check its result before trying again.";
+        toast(response, queued ? "info" : "err");
         updateClosingConfirmation();
-        return { ok: false, queued: true, response: "Offline. Your action is queued; reconnect before making more changes." };
+        return { ok: false, queued, response };
       }
       const response = error.message || "The request failed. Refresh to check its result before trying again.";
       toast(response, "err");
@@ -2221,6 +2229,9 @@
   }
 
   function unlockApp(auth) {
+    const nextUserId = auth.user?.id || null;
+    if (activeUserId !== nextUserId) { stopUpdates(); activeUserId = nextUserId; }
+    updateSyncBadge();
     if (paywallPoll) { clearInterval(paywallPoll); paywallPoll = null; }
     hideLoading();
     $("paywall").classList.add("hidden");
@@ -2431,8 +2442,8 @@
       btnApproveAll.addEventListener("click", () => {
         const count = document.querySelectorAll(".approval-card-wrap").length;
         if (!count) return;
-        openSheet("Approve all drafts",
-          `<p>Send all <strong>${count} pending drafts</strong> to their chats now?</p>`,
+        openSheet("Approve pending batch",
+          `<p>Send these <strong>${count} pending drafts</strong> in the background? ${approvalTotal > count ? `${approvalTotal - count} more drafts will remain for review.` : ""}</p>`,
           [
             { label: `Approve all (${count})`, kind: "primary", onClick: () => runAction("approve_all") },
             { label: "Cancel" }
@@ -2443,7 +2454,7 @@
     const btnRejectAll = $("btn-reject-all");
     if (btnRejectAll) {
       btnRejectAll.addEventListener("click", () => {
-        const count = document.querySelectorAll(".approval-card-wrap").length;
+        const count = approvalTotal || document.querySelectorAll(".approval-card-wrap").length;
         if (!count) return;
         openSheet("Reject all drafts",
           `<p>Discard all <strong>${count} pending drafts</strong>?</p>`,

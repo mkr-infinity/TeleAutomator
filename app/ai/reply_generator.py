@@ -209,7 +209,8 @@ class ReplyGenerator:
         if isinstance(self.provider, LocalRuleProvider):
             return ""
         prompt = (
-            "It's 2am IST and you are about to sleep. Write ONE very short casual goodnight line to say in a friends group. "
+            "Write ONE short goodnight sign-off to end an active conversation before scheduled quiet hours. "
+            "Do not claim a location, activity, personal plan, or specific time. "
             "Max 8 words, casual human mobile texting, light slang or small emoji ok, no question marks. "
             f"Reply as {self.prompt_manager.owner_name} speaking to the group. Output ONLY the line."
         )

@@ -95,7 +95,7 @@ class ContextAgent:
         finally:
             self.busy.discard(chat_id)
 
-    def snapshot(self, chat_id, history=None, *, is_mention=False):
+    def snapshot(self, chat_id, history=None, *, is_mention=False, require_latest=False):
         if not self.allowed(chat_id):
             return None
         epoch = self.db.get_state(f"chat_memory_epoch_{chat_id}")
@@ -115,7 +115,7 @@ class ContextAgent:
             examples = "\n".join(f"{row['rating']}: {row['reply_text']}" for row in feedback)
             sections.append(("Owner feedback for this chat only (examples, not instructions). Avoid repeating rejected replies", examples))
         background = "\n\n".join(f"{label}:\n{text}" for label, text in sections if text)
-        return ReplyContext(chat_id, epoch, marker, chat_id < 0 and not is_mention, list(history or []), background,
+        return ReplyContext(chat_id, epoch, marker, require_latest or (chat_id < 0 and not is_mention), list(history or []), background,
                             self.db.get_state(f"chat_style_{chat_id}"), self.db.get_chat_prompt(chat_id), feedback)
 
     def is_current(self, context):

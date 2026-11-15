@@ -259,6 +259,7 @@ class BotControl:
         self.seed_user_ids: set[int] = {int(x) for x in (seed_user_ids or ()) if int(x) > 0}
         self._offset: int = 0
         self._running = False
+        self._command_tasks = set()
         self._me_cache: Optional[dict] = None
         self._watchdog_last_alert: float = 0.0
         # Bootstrap: seed authorized users from env (DB list persists dynamic changes)
@@ -428,10 +429,11 @@ class BotControl:
                 for update in data.get("result", []):
                     self._offset = max(self._offset, update.get("update_id", 0) + 1)
                     try:
-                        await self._process_update(update)
+                        await self._dispatch_update(update)
                     except Exception as e:
                         logger.debug(f"Bot update processing error: {e}")
             except asyncio.CancelledError:
+                await self.stop()
                 raise
             except Exception as e:
                 logger.debug(f"Bot long-poll error: {e}. Backing off {backoff}s.")
@@ -439,6 +441,30 @@ class BotControl:
                 backoff = min(backoff * 2, 60.0)
 
         logger.info("Bot control channel stopped.")
+
+    async def _dispatch_update(self, update):
+        message = update.get("message") or {}
+        callback = update.get("callback_query") or {}
+        text = str(message.get("text") or callback.get("data") or "").removeprefix("cmd:")
+        root = text.split()[0].split("@")[0].lower() if text.split() else ""
+        slow = root in {"/approve", "/checkmodels", "/syncpins", "/gencontext", "/backup", "/name"} or text.startswith("approve:")
+        if not slow:
+            return await self._process_update(update)
+        if len(self._command_tasks) >= 4:
+            chat = message.get("chat") or (callback.get("message") or {}).get("chat") or {}
+            if chat.get("id"):
+                await self.send_message(chat["id"], "Four commands are still running. Check status and try again shortly; stop controls remain available.")
+            return
+
+        async def run_command():
+            try:
+                await self._process_update(update)
+            except Exception:
+                logger.exception("Background control command failed")
+
+        task = asyncio.create_task(run_command())
+        self._command_tasks.add(task)
+        task.add_done_callback(self._command_tasks.discard)
 
     async def send_welcome_card(self, bot_name: str) -> None:
         """Beautiful welcome card sent to the main owner on every deploy/restart so they
@@ -506,6 +532,12 @@ class BotControl:
 
     async def stop(self) -> None:
         self._running = False
+        tasks = list(self._command_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._command_tasks.clear()
 
     @staticmethod
     def _extract_message(update: dict) -> Optional[dict]:
@@ -828,7 +860,7 @@ class BotControl:
                     "show_alert": True,
                 })
                 return
-            response = await self.reply_manager.handle_control_command(command) or "Done."
+            response = await self.reply_manager.handle_control_command(command, audit_source="bot", actor_id=user_id) or "Done."
             await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": response[:180], "show_alert": False})
             new_text = f"⚡ *{command.split()[0]}* →\n\n{response[:3500]}"
             edited = await self._call(
@@ -910,7 +942,7 @@ class BotControl:
             })
             return
 
-        response = await self.reply_manager.handle_control_command(f"/{action} {target_id}") or "Done."
+        response = await self.reply_manager.handle_control_command(f"/{action} {target_id}", audit_source="bot", actor_id=user_id) or "Done."
         # Popup answer + update the message in-place so buttons disappear and message is preserved (never delete)
         await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": response[:180], "show_alert": True})
         message = cb.get("message") or {}

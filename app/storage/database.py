@@ -155,6 +155,7 @@ class Database:
                 );
                 """
             )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_pending_status_id ON pending_approvals(status,id)")
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(chat_messages)")}
             if "is_automated" not in columns:
                 conn.execute("ALTER TABLE chat_messages ADD COLUMN is_automated INTEGER NOT NULL DEFAULT 0")
@@ -179,7 +180,12 @@ class Database:
                 """,
                 (chat_id, chat_title, reply_to_msg_id, sender_id, incoming_text, draft_text),
             )
+            self._pending_revision(conn)
             return int(cursor.lastrowid)
+
+    @staticmethod
+    def _pending_revision(conn):
+        conn.execute("INSERT INTO runtime_state(key,value) VALUES('state_revision',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(time.time_ns()),))
 
     def get_pending_approval(self, approval_id: int) -> Optional[Dict[str, Any]]:
         with self._get_connection() as conn:
@@ -205,6 +211,7 @@ class Database:
             )
             if not claimed.rowcount:
                 return None
+            self._pending_revision(conn)
             return dict(conn.execute("SELECT * FROM pending_approvals WHERE id = ?", (approval_id,)).fetchone())
 
     def update_approval_status(self, approval_id: int, status: str, expected_status: Optional[str] = None) -> bool:
@@ -217,7 +224,16 @@ class Database:
             cursor = conn.execute(
                 query, params,
             )
+            if cursor.rowcount:
+                self._pending_revision(conn)
             return cursor.rowcount > 0
+
+    def reject_all_pending(self) -> int:
+        with self._get_connection() as conn:
+            changed = conn.execute("UPDATE pending_approvals SET status='rejected' WHERE status='pending'").rowcount
+            if changed:
+                self._pending_revision(conn)
+            return changed
 
     def is_duplicate_message(self, msg_hash: str) -> bool:
         with self._get_connection() as conn:
@@ -253,6 +269,37 @@ class Database:
                 (key,),
             ).fetchone()
             return str(row["value"]) if row else default
+
+    def get_chat_panel_data(self, chat_ids):
+        """Read chat cards in one connection instead of opening a connection for every field."""
+        ids = tuple(chat_ids)
+        metadata, contexts, states = {}, {}, {}
+        if not ids:
+            return metadata, contexts, states
+        with self._get_connection() as conn:
+            for offset in range(0, len(ids), 400):
+                batch = ids[offset:offset + 400]
+                slots = ",".join("?" for _ in batch)
+                metadata.update((row["chat_id"], dict(row)) for row in conn.execute("SELECT * FROM known_chats WHERE chat_id IN (" + slots + ")", batch))
+                contexts.update((row["chat_id"], dict(row)) for row in conn.execute("SELECT * FROM permanent_chat_context WHERE chat_id IN (" + slots + ")", batch))
+            prefixes = ("chat_chatty_*", "chat_style_*", "chat_prompt_*", "chat_cooldown_min_*", "chat_cooldown_max_*", "chat_voice_profile_*")
+            rows = conn.execute("SELECT key,value FROM runtime_state WHERE " + " OR ".join("key GLOB ?" for _ in prefixes), prefixes)
+            states = {row["key"]: row["value"] for row in rows}
+        for cid in ids:
+            if cid not in contexts and self._get_context_file_path(cid).is_file():
+                contexts[cid] = self.get_permanent_context(cid)
+        return metadata, contexts, states
+
+    def count_pending_approvals(self) -> int:
+        with self._get_connection() as conn:
+            return int(conn.execute("SELECT COUNT(*) FROM pending_approvals WHERE status='pending'").fetchone()[0])
+
+    def backup_to(self, path: Path) -> None:
+        """Use SQLite's consistent backup snapshot while the live database keeps receiving writes."""
+        ensure_secure_dir(path.parent)
+        with self._get_connection() as source, sqlite3.connect(str(path)) as target:
+            source.backup(target)
+        ensure_secure_file(path)
 
     def record_action(self, source: str, action: str, status: str, detail: str = "", *, chat_id=None, actor_id=None) -> None:
         """Keep bounded metadata, never command arguments or message bodies; auditing cannot interrupt delivery."""
@@ -901,7 +948,7 @@ class Database:
                 "SELECT pinned_text, notes FROM permanent_chat_context WHERE chat_id = ?",
                 (chat_id,),
             ).fetchone()
-            if row and (row["pinned_text"] or row["notes"]):
+            if row:
                 pinned = row["pinned_text"] or ""
                 notes = row["notes"] or ""
                 file_path = self._get_context_file_path(chat_id)

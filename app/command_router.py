@@ -13,9 +13,9 @@ import asyncio
 import datetime
 import difflib
 import json
+import math
 import random
 import re
-import shutil
 import time
 from typing import Optional, Any
 
@@ -54,6 +54,18 @@ class CommandRouterMixin:
     async def handle_control_command(self, text: str, *, audit_source="control", actor_id=None) -> Optional[str]:
         root = text.strip().split()[0].lower().split("@")[0] if text.strip() else ""
         action = root if root in _BOT_COMMAND_NAMES else "unknown_command"
+        numeric_commands = {"/pause", "/off", "/sleep", "/goodnight", "/contextttl", "/aging", "/chatty", "/banter",
+                            "/reactioncooldown", "/reactcd", "/reactionlimit", "/reactioninterval", "/chatcooldown", "/chatcd",
+                            "/globalcooldown", "/globalcd", "/ratelimit", "/spamlimits", "/rate", "/antispam",
+                            "/debounce", "/burst", "/debouncer", "/temp", "/temperature"}
+        if root in numeric_commands:
+            for token in text.strip().split()[1:]:
+                try:
+                    value = float(token.rstrip("%sSmMhHdD"))
+                except ValueError:
+                    continue
+                if not math.isfinite(value):
+                    return "❌ Enter finite numeric values; NaN and infinity are not valid settings."
         try:
             response = await self._execute_control_command(text, actor_id=actor_id)
         except Exception:
@@ -86,7 +98,7 @@ class CommandRouterMixin:
         )
 
         for router in routers:
-            res = await router(cmd, cmd_parts, text)
+            res = await router(cmd, cmd_parts, text, actor_id=actor_id) if router == self._route_rules_and_drafts else await router(cmd, cmd_parts, text)
             if res is not None:
                 return res
 
@@ -387,7 +399,7 @@ class CommandRouterMixin:
 
         return None
 
-    async def _route_rules_and_drafts(self, cmd: str, cmd_parts: list[str], text: str) -> Optional[str]:
+    async def _route_rules_and_drafts(self, cmd: str, cmd_parts: list[str], text: str, *, actor_id=None) -> Optional[str]:
         if cmd in ("/rules", "/listrules"):
             rules = self.db.list_keyword_rules()
             if not rules:
@@ -449,19 +461,7 @@ class CommandRouterMixin:
                     "Fix: /approve <id> (e.g. /approve 1) or /approve all"
                 )
             if cmd_parts[1].strip().lower() == "all":
-                pending = self.db.list_pending_approvals()
-                if not pending:
-                    return "No drafts currently pending approval."
-                sent_count = 0
-                failed_count = 0
-                for item in pending:
-                    approval_id = item["id"]
-                    success, _ = await self._approve_draft(approval_id)
-                    if success:
-                        sent_count += 1
-                    else:
-                        failed_count += 1
-                return f"✅ Batch approved: {sent_count} sent, {failed_count} failed."
+                return self._start_approval_batch(actor_id)
 
             try:
                 approval_id = int(cmd_parts[1])
@@ -472,7 +472,7 @@ class CommandRouterMixin:
                     "Fix: /approve <id> (e.g. /approve 1) or /approve all"
                 )
 
-            _, response = await self._approve_draft(approval_id)
+            _, response = await self._approve_draft(approval_id, actor_id=actor_id)
             return response
 
         if cmd == "/reject":
@@ -483,12 +483,7 @@ class CommandRouterMixin:
                     "Fix: /reject <id> (e.g. /reject 1) or /reject all"
                 )
             if cmd_parts[1].strip().lower() == "all":
-                pending = self.db.list_pending_approvals()
-                if not pending:
-                    return "No drafts currently pending approval."
-                count = len(pending)
-                for item in pending:
-                    self.db.update_approval_status(item["id"], "rejected", expected_status="pending")
+                count = self.db.reject_all_pending()
                 return f"🗑️ Batch rejected: {count} drafts discarded."
 
             try:
@@ -514,12 +509,47 @@ class CommandRouterMixin:
 
         return None
 
-    async def _approve_draft(self, approval_id: int) -> tuple[bool, str]:
+    def _start_approval_batch(self, actor_id=None):
+        task = self._approval_batch_task
+        if task and not task.done():
+            return "An approval batch is already running. Check pending drafts or action history."
+        pending = self.db.list_pending_approvals()
+        if not pending:
+            return "No drafts currently pending approval."
+
+        async def deliver():
+            sent = 0
+            status = "success"
+            try:
+                for item in pending:
+                    if not self.privacy.is_chat_allowed(item["chat_id"], item["chat_id"] < 0):
+                        status = "blocked"
+                        continue
+                    if not self._operator_allowed(actor_id) or not self._outgoing_allowed(item["chat_id"], approved=True):
+                        status = "blocked"
+                        break
+                    success, _ = await self._approve_draft(item["id"], actor_id=actor_id)
+                    sent += int(success)
+                    if not success:
+                        status = "blocked"
+            except asyncio.CancelledError:
+                status = "blocked"
+                raise
+            except Exception:
+                status = "failed"
+                logger.exception("Approval batch failed")
+            finally:
+                self.db.record_action("control", "approval_batch", status, f"{sent} sent; {len(pending) - sent} not sent; review pending drafts and history", actor_id=actor_id)
+
+        self._approval_batch_task = asyncio.create_task(deliver())
+        return f"✅ Approval batch started for {len(pending)} visible drafts. It runs in the background and follows live safety controls."
+
+    async def _approve_draft(self, approval_id: int, *, actor_id=None) -> tuple[bool, str]:
         item = self.db.claim_approval(approval_id)
         if not item:
             return False, f"❌ Draft #{approval_id} no longer exists or is already being handled. Use /pending to see current drafts."
         try:
-            sent = await self._send_reply(item["chat_id"], item["reply_to_msg_id"], item["draft_text"], adaptive_delay=False, approved=True)
+            sent = await self._send_reply(item["chat_id"], item["reply_to_msg_id"], item["draft_text"], adaptive_delay=False, approved=True, operator_id=actor_id)
         except BaseException:
             # An interrupted send has an unknown delivery outcome; never retry it automatically.
             self.db.update_approval_status(approval_id, "failed", expected_status="sending")
@@ -969,12 +999,10 @@ class CommandRouterMixin:
                 )
             backup_dir = db_path.parent / "backups"
             backup_dir.mkdir(parents=True, exist_ok=True)
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             backup_file = backup_dir / f"teleautomator_backup_{ts}.db"
             try:
-                with self.db._get_connection() as conn:
-                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                shutil.copy2(db_path, backup_file)
+                await asyncio.to_thread(self.db.backup_to, backup_file)
                 if getattr(self, "bot_control", None) and hasattr(self.bot_control, "send_message"):
                     await self.bot_control.send_message(
                         self.bot_control.main_user_id,

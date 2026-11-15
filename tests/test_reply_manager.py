@@ -130,7 +130,8 @@ def test_approval_mode_and_commands(tmp_path: Path):
         db.add_approval(100, "Friend", 58, 123, "Query 4", "Draft 4")
         db.add_approval(100, "Friend", 59, 123, "Query 5", "Draft 5")
         app_res = await mgr.handle_control_command("/approve all")
-        assert "Batch approved: 2 sent" in app_res
+        assert "background" in app_res
+        await mgr._approval_batch_task
         assert len(db.list_pending_approvals()) == 0
 
         # 3. /stop and /resume

@@ -233,7 +233,7 @@ def test_custom_prompt_wrapping_and_anti_ai_guardrails():
     assert "crypto trader and gamer" in instructions
     # Core anti-AI guardrails are strictly preserved
     assert "NATURAL MESSAGE LENGTH" in instructions
-    assert "Identity or automation questions are left to the account owner" in instructions
+    assert "Automation or bot/human verification questions are left to the account owner" in instructions
     assert "MANDATORY REPLY POLICY" in instructions
     assert "SLANG" in instructions
     assert "NO CODE" in instructions

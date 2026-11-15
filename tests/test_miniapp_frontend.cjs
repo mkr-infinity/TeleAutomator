@@ -12,15 +12,19 @@ function element(id) {
   });
   return elements.get(id);
 }
-let queue = [];
+const storage = new Map();
+const queueKey = userId => `teleautomator_offline_queue_v2:${userId}`;
+const queued = (userId = 111) => JSON.parse(storage.get(queueKey(userId)) || "[]");
+const item = (id, action = "style", params = { value: "casual" }) => ({ id, action, params, time: new Date().toISOString() });
 let duringRequest = () => {};
 const context = {
   console, URLSearchParams, AbortController, setTimeout() {}, clearTimeout() {}, navigator: {},
   location: { search: "" }, window: { addEventListener() {} },
   document: { activeElement: null, getElementById: element, querySelectorAll() { return []; } },
   localStorage: {
-    getItem() { return JSON.stringify(queue); },
-    setItem(key, value) { queue = JSON.parse(value); },
+    getItem(key) { return storage.get(key) || null; },
+    setItem(key, value) { storage.set(key, value); },
+    removeItem(key) { storage.delete(key); },
   },
   fetch: async (url) => {
     if (url === "/api/action") { duringRequest(); throw new Error("offline"); }
@@ -34,7 +38,7 @@ const context = {
 vm.createContext(context);
 const file = path.join(__dirname, "../miniapp/app.js");
 const source = fs.readFileSync(file, "utf8").replace(
-  /\n  init\(\)\.catch\([^\n]+\);\n/, "\n  globalThis.testAPI = { api, syncField, refreshMore, renderMoreControls, flushOfflineQueue };\n"
+  /\n  init\(\)\.catch\([^\n]+\);\n/, "\n  globalThis.testAPI = { api, syncField, refreshMore, renderMoreControls, flushOfflineQueue, enqueueAction, loadOfflineQueue, setUser(id) { activeUserId = id; } };\n"
 );
 assert.match(source, /globalThis.testAPI/);
 vm.runInContext(source, context, { filename: file });
@@ -63,12 +67,30 @@ vm.runInContext(source, context, { filename: file });
   await Promise.all([context.testAPI.api("/api/state"), context.testAPI.api("/api/state")]);
   assert.equal(reads, 1, "overlapping reads should share one request");
 
-  queue = [1, 2, 3].map(id => ({ id, action: "style", params: { value: "casual" } }));
+  assert.equal(context.testAPI.enqueueAction("style", { value: "casual" }), false, "unauthenticated actions must not persist");
+  context.testAPI.setUser(111);
+  storage.set("teleautomator_offline_queue_v1", JSON.stringify([item(0, "apikey", { value: "fixture-secret" })]));
+  context.testAPI.loadOfflineQueue();
+  assert(!storage.has("teleautomator_offline_queue_v1"), "retire the old shared queue, including any credentials");
+  for (const action of ["apikey", "setai", "prompt", "setcontext", "approve", "approve_all", "stop", "resume", "mode"]) {
+    assert.equal(context.testAPI.enqueueAction(action, { value: "fixture-secret" }), false, `${action} must require an online request`);
+  }
+  storage.set(queueKey(111), '{}');
+  assert.equal(context.testAPI.loadOfflineQueue().length, 0, "malformed queues must not break startup");
+  storage.set(queueKey(111), JSON.stringify([{ ...item(0), time: new Date(Date.now() - 7200000).toISOString() }]));
+  assert.equal(context.testAPI.loadOfflineQueue().length, 0, "expired changes must not replay");
+  storage.set(queueKey(111), JSON.stringify([1, 2, 3].map(id => item(id))));
+  context.testAPI.setUser(222);
+  assert.equal(context.testAPI.loadOfflineQueue().length, 0, "one account must not inherit another's changes");
+  context.testAPI.setUser(111);
   await context.testAPI.flushOfflineQueue();
-  assert.deepEqual(queue.map(item => item.id), [1, 2, 3]);
-  duringRequest = () => { queue.push({ id: 4, action: "pause", params: {} }); };
+  assert.deepEqual(queued().map(item => item.id), [1, 2, 3]);
+  duringRequest = () => { storage.set(queueKey(111), JSON.stringify([...queued(), item(4, "lang", { value: "english" })])); };
   await context.testAPI.flushOfflineQueue();
-  assert.deepEqual(queue.map(item => item.id), [1, 2, 3, 4]);
+  assert.deepEqual(queued().map(item => item.id), [1, 2, 3, 4]);
+  storage.delete(queueKey(111));
+  for (let index = 0; index < 75; index++) context.testAPI.enqueueAction("chatstyle", { chat_id: index + 1, value: "formal" });
+  assert.equal(queued().length, 50, "offline preferences must remain bounded");
 
   const handlers = {};
   const cached = new Map();
@@ -84,7 +106,7 @@ vm.runInContext(source, context, { filename: file });
   const swContext = vm.createContext({
     URL, Response, setTimeout(callback) { callback(); },
     self: { location: { origin }, addEventListener(event, handler) { handlers[event] = handler; }, skipWaiting() {}, clients: { async claim() {} } },
-    caches: { async open() { return cache; }, async keys() { return ["teleautomator-v3.0.4", "teleautomator-v3.0.7", "another-app"]; }, async delete(name) { deleted.push(name); } },
+    caches: { async open() { return cache; }, async keys() { return ["teleautomator-v3.0.4", "teleautomator-v3.0.8", "another-app"]; }, async delete(name) { deleted.push(name); } },
     async fetch() { networkReads++; return new Response("temporarily unavailable", { status: 503 }); },
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../miniapp/sw.js"), "utf8"), swContext);
@@ -99,7 +121,7 @@ vm.runInContext(source, context, { filename: file });
     handlers.fetch({ request: { method: "GET", url }, respondWith() { assert.fail("private APIs and external requests must bypass this cache"); } });
   }
   let asset;
-  handlers.fetch({ request: { method: "GET", mode: "cors", url: origin + "/app.js?v=3.0.7" }, respondWith(promise) { asset = promise; } });
+  handlers.fetch({ request: { method: "GET", mode: "cors", url: origin + "/app.js?v=3.0.8" }, respondWith(promise) { asset = promise; } });
   assert.equal(await (await asset).text(), "cached asset");
   assert.equal(networkReads, 0, "versioned assets should load immediately from cache");
   let navigation;

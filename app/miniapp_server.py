@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import gzip
 import json
+import math
 import re
 import secrets
 import threading
@@ -25,6 +27,7 @@ import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
@@ -100,7 +103,7 @@ def validate_init_data(init_data: str, bot_token: str) -> Optional[dict]:
             else:
                 return None
         auth_date = float(parsed.get("auth_date", "0"))
-        if auth_date <= 0 or (time.time() - auth_date) > INIT_DATA_MAX_AGE_SECONDS:
+        if not math.isfinite(auth_date) or auth_date <= 0 or auth_date > time.time() + 300 or (time.time() - auth_date) > INIT_DATA_MAX_AGE_SECONDS:
             return None
         user_val = parsed.get("user")
         if not user_val:
@@ -218,6 +221,8 @@ class MiniAppAPI:
         configured_chatty = getattr(ctx.reply_manager.config, "chatty_probability", 0.15)
         try:
             chatty_global = float(ctx.db.get_state("chatty_probability", str(configured_chatty)))
+            if not math.isfinite(chatty_global):
+                chatty_global = configured_chatty
         except (ValueError, TypeError):
             chatty_global = configured_chatty
         try:
@@ -296,7 +301,7 @@ class MiniAppAPI:
             "max_tokens": maxtokens,
             "rules": rules,
             "chats_allowed": len(priv | grps),
-            "pending_count": len(ctx.db.list_pending_approvals()),
+            "pending_count": ctx.db.count_pending_approvals(),
             "replies_24h": ctx.db.get_recent_reply_count(86400.0),
             "tokens_today": tokens_today,
             "total_tokens": token_stats.get("total_tokens", 0),
@@ -316,6 +321,7 @@ class MiniAppAPI:
         default_min = getattr(ctx.safety, "min_chat_cooldown", 5.0)
         default_max = getattr(ctx.safety, "max_chat_cooldown", 60.0)
         all_cids = sorted((priv | grps) | blocked)
+        metadata, contexts, settings = ctx.db.get_chat_panel_data(all_cids)
         import re
         gradients = [
             "linear-gradient(135deg, #153421 0%, #1E3F2A 100%)",
@@ -326,8 +332,8 @@ class MiniAppAPI:
             "linear-gradient(135deg, #312e81 0%, #4c1d95 100%)",
         ]
         for cid in all_cids:
-            meta = ctx.db.get_chat_metadata(cid) or {}
-            perm = ctx.db.get_permanent_context(cid) if hasattr(ctx.db, "get_permanent_context") else {}
+            meta = metadata.get(cid, {})
+            perm = contexts.get(cid, {})
             title = meta.get("title") or f"Chat {cid}"
             username = meta.get("username") or ""
 
@@ -344,8 +350,8 @@ class MiniAppAPI:
             clean_user = username.lstrip("@").strip()
             avatar_url = f"https://t.me/i/userpic/320/{clean_user}.jpg" if clean_user else ""
 
-            c_min_str = ctx.db.get_state(f"chat_cooldown_min_{cid}") or ""
-            c_max_str = ctx.db.get_state(f"chat_cooldown_max_{cid}") or ""
+            c_min_str = settings.get(f"chat_cooldown_min_{cid}") or ""
+            c_max_str = settings.get(f"chat_cooldown_max_{cid}") or ""
             cooldown_min = None
             cooldown_max = None
             cooldown_str = ""
@@ -353,12 +359,15 @@ class MiniAppAPI:
                 try:
                     cooldown_min = float(c_min_str)
                     cooldown_max = float(c_max_str)
+                    if not (math.isfinite(cooldown_min) and math.isfinite(cooldown_max) and 0 <= cooldown_min <= cooldown_max):
+                        raise ValueError("Invalid saved cooldown")
                     if cooldown_min == 0.0 and cooldown_max == 0.0:
                         cooldown_str = "0s (Instant - No Wait)"
                     else:
                         cooldown_str = f"{int(cooldown_min)}s - {int(cooldown_max)}s"
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError, OverflowError):
+                    cooldown_min = cooldown_max = None
+                    cooldown_str = ""
 
             chats.append({
                 "id": cid,
@@ -368,20 +377,22 @@ class MiniAppAPI:
                 "avatar_bg": avatar_bg,
                 "avatar_url": avatar_url,
                 "type": "Group" if cid < 0 else "Private",
-                "chatty": ctx.db.get_state(f"chat_chatty_{cid}") or "",
-                "style": ctx.db.get_state(f"chat_style_{cid}") or "",
-                "prompt": ctx.db.get_state(f"chat_prompt_{cid}") or "",
+                "chatty": settings.get(f"chat_chatty_{cid}") or "",
+                "style": settings.get(f"chat_style_{cid}") or "",
+                "prompt": settings.get(f"chat_prompt_{cid}") or "",
                 "context": perm.get("notes") or "",
                 "cooldown_min": cooldown_min,
                 "cooldown_max": cooldown_max,
                 "cooldown_default_min": default_min,
                 "cooldown_default_max": default_max,
                 "cooldown_str": cooldown_str,
-                "voice_profile": bool(ctx.db.get_state(f"chat_voice_profile_{cid}")),
+                "voice_profile": bool(settings.get(f"chat_voice_profile_{cid}")),
                 "blocked": cid in blocked,
             })
         try:
-            chatty_global = float(ctx.db.get_state("chatty_probability", "0.15") or 0.15)
+            chatty_global = float(ctx.db.get_state("chatty_probability", str(getattr(ctx.reply_manager.config, "chatty_probability", 0.15))))
+            if not math.isfinite(chatty_global):
+                chatty_global = getattr(ctx.reply_manager.config, "chatty_probability", 0.15)
         except (ValueError, TypeError):
             chatty_global = 0.15
         return {"chats": chats, "chatty_global": chatty_global}
@@ -412,7 +423,8 @@ class MiniAppAPI:
                 "text": r.get("draft_text") or r.get("incoming_text") or "",
                 "created": r.get("created_at") or "",
             })
-        return {"pending": pending_list}
+        return {"pending": pending_list, "total": self.ctx.db.count_pending_approvals(),
+                "batch_running": bool(getattr(self.ctx.reply_manager, "_approval_batch_task", None) and not self.ctx.reply_manager._approval_batch_task.done())}
 
     def handle_activity(self) -> dict:
         """Recent outgoing (automated + manual) messages across chats, newest first."""
@@ -590,10 +602,15 @@ class MiniAppAPI:
         return f"{cmd_name} {rest.strip()}".strip()
 
     def handle_action(self, user_id: int, action: str, params: dict) -> dict:
+        if not isinstance(params, dict):
+            return {"ok": False, "response": "Action parameters must be an object"}
         known = action in self.ACTION_TO_COMMAND or action in {"chat_chatty", "chat_cooldown", "save_available_models", "safemode_reset", "emergencystop", "addauth", "removeauth"}
         label = action if known else "unknown_action"
         try:
             result = self._perform_action(user_id, action, params)
+        except (ValueError, TypeError, OverflowError):
+            self.ctx.db.record_action("miniapp", label, "failed", "Invalid action parameters", actor_id=user_id)
+            return {"ok": False, "response": "Invalid action parameters. Review the values and try again."}
         except Exception:
             self.ctx.db.record_action("miniapp", label, "failed", "Action failed; review its inputs", actor_id=user_id)
             raise
@@ -648,10 +665,8 @@ class MiniAppAPI:
             try:
                 c_min = float(params.get("min", 5))
                 c_max = float(params.get("max", 60))
-                if c_min < 0:
-                    c_min = 0.0
-                if c_max < c_min:
-                    c_max = c_min
+                if not (math.isfinite(c_min) and math.isfinite(c_max) and 0 <= c_min <= c_max <= 86400):
+                    return {"ok": False, "response": "Cooldowns must be finite numbers from 0 to 86400 seconds, with maximum at least minimum."}
                 ctx.db.set_state(f"chat_cooldown_min_{cid}", str(round(c_min, 1)))
                 ctx.db.set_state(f"chat_cooldown_max_{cid}", str(round(c_max, 1)))
                 if hasattr(ctx, "safety") and ctx.safety and hasattr(ctx.safety, "set_chat_cooldown"):
@@ -835,7 +850,13 @@ class MiniAppAPI:
         if ctx.loop is None or ctx.loop.is_closed():
             # Headless (tests): run inline
             import asyncio
-            response = asyncio.run(ctx.reply_manager.handle_control_command(command, audit_source="miniapp" if audit else None, actor_id=user_id))
+            async def execute_inline():
+                result = await ctx.reply_manager.handle_control_command(command, audit_source="miniapp" if audit else None, actor_id=user_id)
+                task = getattr(ctx.reply_manager, "_approval_batch_task", None)
+                if command.strip().lower() == "/approve all" and task and not task.done():
+                    await task
+                return result
+            response = asyncio.run(execute_inline())
         else:
             import asyncio
             future = asyncio.run_coroutine_threadsafe(ctx.reply_manager.handle_control_command(command, audit_source="miniapp" if audit else None, actor_id=user_id), ctx.loop)
@@ -1295,6 +1316,12 @@ class MiniAppAPI:
         }
 
 
+@lru_cache(maxsize=16)
+def _static_bytes(path: Path, _modified_ns: int):
+    body = path.read_bytes()
+    return body, gzip.compress(body, mtime=0)
+
+
 class MiniAppRequestHandler(BaseHTTPRequestHandler):
     api: MiniAppAPI = None  # injected at server construction
     static_dir: Path = MINIAPP_DIR
@@ -1315,12 +1342,20 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
 
     def _json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode()
+        body, compressed = self._encode_body(body)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Vary", "Accept-Encoding")
+        if compressed:
+            self.send_header("Content-Encoding", "gzip")
         self.end_headers()
         self.wfile.write(body)
+
+    def _encode_body(self, body, compressed_body=None):
+        accepts_gzip = any(part.strip() == "gzip" for part in self.headers.get("Accept-Encoding", "").split(","))
+        return ((compressed_body if compressed_body is not None else gzip.compress(body, mtime=0)), True) if accepts_gzip and len(body) >= 512 else (body, False)
 
     def _unauthorized_payload(self) -> dict:
         return {"authorized": False, "paywall": PAYWALL, "version": APP_VERSION}
@@ -1507,7 +1542,7 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/action":
                 action = str(body.get("action", "")).strip()
                 params = body.get("params") or {}
-                if not action:
+                if not action or not isinstance(params, dict):
                     self._json(400, {"ok": False, "response": "Provide an action."})
                     return
                 self._json(200, self.api.handle_action(user_id, action, params))
@@ -1533,7 +1568,10 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
                 model = str(body.get("model") or "").strip() or None
                 base_url = str(body.get("base_url") or "").strip() or None
                 api_key = str(body.get("api_key") or "").strip() or None
-                auto_apply = bool(body.get("auto_apply", False))
+                auto_apply = body.get("auto_apply", False)
+                if type(auto_apply) is not bool:
+                    self._json(400, {"ok": False, "response": "auto_apply must be true or false"})
+                    return
                 result = self.api.handle_test_model(message, model, base_url, api_key, auto_apply=auto_apply)
                 self.api.ctx.db.record_action("miniapp", "model_test", "success" if result.get("ok") else "failed", "Provider and model check completed", actor_id=user_id)
                 self._json(200, result)
@@ -1557,10 +1595,14 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"Not found")
             return
         content_type = CONTENT_TYPES.get(file_path.suffix, "application/octet-stream")
-        body = file_path.read_bytes()
+        body, compressed_body = _static_bytes(file_path, file_path.stat().st_mtime_ns)
+        body, compressed = self._encode_body(body, compressed_body)
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Vary", "Accept-Encoding")
+        if compressed:
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
