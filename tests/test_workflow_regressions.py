@@ -179,7 +179,7 @@ def test_real_non_latin_questions_are_not_thread_endings(text):
     assert not is_thread_ender(text)
 
 
-def test_custom_frequency_can_reply_to_another_group_member(tmp_path):
+def test_custom_frequency_cannot_interrupt_another_group_member(tmp_path):
     s = make_stack(tmp_path)
     s.db.set_state("chat_prompt_-100111", "reply 6 times in 10 sends")
     handlers = []
@@ -199,7 +199,8 @@ def test_custom_frequency_can_reply_to_another_group_member(tmp_path):
     s.client.get_messages.return_value = []
     with patch("random.random", return_value=0):
         asyncio.run(handlers[0](event))
-    s.manager.handle_incoming_eligible_message.assert_awaited_once()
+    s.manager.handle_incoming_eligible_message.assert_not_awaited()
+    assert s.db.list_actions()[0]["status"] == "skipped"
 
 
 def test_sensitive_history_is_filtered_for_every_ai_path(tmp_path):

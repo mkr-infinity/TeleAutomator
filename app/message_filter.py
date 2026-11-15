@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Optional, Tuple
 
 from app.logger import setup_logger
@@ -9,6 +10,16 @@ from app.privacy_manager import PrivacyManager
 from app.safety_manager import SafetyManager
 
 logger = setup_logger(__name__)
+
+
+def is_account_addressed(text: str, username: str = "", owner_name: str = "", mentioned: bool = False) -> bool:
+    if mentioned or (username and re.search(r"@" + re.escape(username.lstrip("@")) + r"(?!\w)", text, re.IGNORECASE)):
+        return True
+    name = owner_name.strip()
+    return len(name) >= 3 and bool(re.search(
+        r"^(?:(?:hey|hi|hello|yo)\s+)?" + re.escape(name) + r"(?!\w)|,\s*" + re.escape(name) + r"\s*[.?!]*$",
+        text.strip(), re.IGNORECASE,
+    ))
 
 
 class MessageFilter:
@@ -80,18 +91,10 @@ class MessageFilter:
         if is_group and self.db:
             strict_mention_only = self.db.get_state("group_mention_only", "0") == "1"
             if strict_mention_only:
-                is_mentioned = False
-                if message_obj and getattr(message_obj, "mentioned", False):
-                    is_mentioned = True
-                elif self.my_username and f"@{self.my_username}" in raw_text.lower():
-                    is_mentioned = True
-                else:
-                    import re
-                    owner_name = (self.db.get_state("owner_name", "") or "").strip().lower()
-                    if owner_name and len(owner_name) >= 3 and re.search(r"\b" + re.escape(owner_name) + r"\b", raw_text.lower()):
-                        is_mentioned = True
-                    elif getattr(event, "is_reply", False):
-                        is_mentioned = True
+                is_mentioned = is_account_addressed(raw_text, self.my_username, self.db.get_state("owner_name"),
+                                                   bool(message_obj and getattr(message_obj, "mentioned", False)))
+                # Reply ownership is verified asynchronously by the event handler.
+                is_mentioned = is_mentioned or bool(getattr(event, "is_reply", False))
 
                 if not is_mentioned:
                     return False, "Strict mention-only mode is enabled for groups"

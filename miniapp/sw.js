@@ -1,10 +1,10 @@
 /* Cache public assets only. API responses and Telegram credentials stay on the network. */
-const CACHE_NAME = "teleautomator-v3.0.5";
+const CACHE_NAME = "teleautomator-v3.0.6";
 const ASSETS_TO_CACHE = [
   "./",
   "./index.html",
-  "./style.css?v=3.0.5",
-  "./app.js?v=3.0.5",
+  "./style.css?v=3.0.6",
+  "./app.js?v=3.0.6",
   "./logo.svg"
 ];
 

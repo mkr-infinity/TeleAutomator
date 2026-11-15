@@ -57,6 +57,8 @@ TeleAutomator includes a built-in Telegram Mini App running concurrently on the 
 - **Chats & Memory Management**: Capsule-style chat cards showing profile initials, titles, allowlist status, per-chat custom personas, voice profiles, and isolated disk context files (`data/contexts/{chat_id}.json`).
 - **AI Engine & Testing Playground**: Custom base URL configuration, live model fetch from `/models` endpoints, multi-model selection with automatic fallback rotation, and an interactive test playground.
 - **Draft Approvals**: Approve or reject drafts with in-place card updates (zero message deletions on Telegram).
+- **Action History & Diagnostics**: More → Action history shows sent, skipped, blocked, and failed actions with filters and live engine details. It keeps at most 1,100 metadata entries, excluding message bodies and command arguments.
+- **Preference Export & Import**: The main owner can download a JSON backup and preview a merge before applying it. Reply settings, keyword rules, and separate chat profiles are included; credentials, access permissions, and conversation history are excluded. Keep exported prompts and notes private.
 - **Access Control & Paywall**: Multi-user permissions with an automated authorization note (100 Stars or 1 TON to `@mkr_infinity`).
 
 ---
@@ -125,6 +127,8 @@ Manage your automation straight from your phone by texting your **Control Bot**:
 Custom chat cooldowns override the default range; resetting a chat restores the default. Each outgoing bubble follows the current cooldown and safety controls. Removed chats and revoked users stay removed after a restart, including entries originally configured in the environment.
 
 Only allowed chats are processed or cached. `/clearcontext` clears that chat's rolling history and recap while keeping its permanent notes, pins, persona, and voice profile. In-flight summaries and history fetches cannot restore cleared memory. The Mini App enforces the same command grants as the control bot.
+
+Group participation samples relevant conversations using the per-chat rate or global default (15% unless configured). Other people's reply threads and routine closers are ignored. Group messages post without quoted replies. The master prompt permits `NONE` for intentional silence; custom personas inherit the same rules. Outgoing checks block @tags, links, and known participant names, including keyword replies and approvals. Unfamiliar names still rely on the prompt. Identity and automation questions stay silent for the account owner to answer.
 
 ---
 

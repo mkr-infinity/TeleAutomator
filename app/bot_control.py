@@ -746,7 +746,7 @@ class BotControl:
             return
 
         # All remaining commands route to the shared command engine of ReplyManager
-        response = await self.reply_manager.handle_control_command(text)
+        response = await self.reply_manager.handle_control_command(text, audit_source="bot", actor_id=user_id)
         if response:
             if len(response) > 4000:
                 response = response[:4000] + "\n…"
@@ -876,14 +876,14 @@ class BotControl:
                     try:
                         text = f"💬 {name}: per-chat {int(float(cur) * 100)}% banter"
                     except ValueError:
-                        text = f"💬 {name}: default band (30-60%)"
+                        text = f"💬 {name}: global default"
                 else:
-                    text = f"💬 {name}: default band (30-60%)"
+                    text = f"💬 {name}: global default"
                 await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": text[:180], "show_alert": False})
                 return
             if action == "default":
                 self.reply_manager.db.set_state(f"chat_chatty_{cid}", "")
-                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": f"♻️ {name}: reset to default 30-60% band", "show_alert": True})
+                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": f"♻️ {name}: reset to the global setting", "show_alert": True})
                 return
             try:
                 pct = max(0, min(100, int(action)))

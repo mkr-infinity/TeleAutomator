@@ -19,18 +19,22 @@ import hashlib
 import hmac
 import json
 import re
+import secrets
 import threading
 import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Optional
 
 from app import __version__ as APP_VERSION
 from app.ai.provider import normalize_base_url
+from app.ai.reply_generator import create_ai_provider
 from app.bot_control import authorized_user_ids, can_run_command, save_authorized_users
 from app.logger import setup_logger
+from app.settings_transfer import MAX_BACKUP_BYTES, export_preferences, validate_preferences
 
 logger = setup_logger(__name__)
 
@@ -127,6 +131,8 @@ class MiniAppContext:
         self.bot_token = bot_token
         self.loop = loop
         self.bot_control = bot_control
+        self.settings_downloads = {}
+        self.settings_download_lock = threading.Lock()
 
 
 def _seed_user_ids(ctx: MiniAppContext) -> set[int]:
@@ -208,10 +214,11 @@ class MiniAppAPI:
         emergency = ctx.safety.is_emergency_stopped
         in_quiet, _ = ctx.safety.is_in_quiet_hours()
         safe_mode = ctx.db.get_state("safe_mode_active", "0") == "1"
+        configured_chatty = getattr(ctx.reply_manager.config, "chatty_probability", 0.15)
         try:
-            chatty_global = float(ctx.db.get_state("chatty_probability", "0.15") or 0.15)
+            chatty_global = float(ctx.db.get_state("chatty_probability", str(configured_chatty)))
         except (ValueError, TypeError):
-            chatty_global = 0.15
+            chatty_global = configured_chatty
         try:
             tokens_today = int(ctx.db.get_daily_token_usage())
         except Exception:
@@ -253,6 +260,7 @@ class MiniAppAPI:
 
         return {
             "revision": ctx.db.get_state("state_revision", "0"),
+            "history_revision": ctx.db.latest_action_id(),
             "mode": mode,
             "state": "stopped" if emergency else ("paused" if paused > 0 else "active"),
             "paused_remaining_sec": int(paused),
@@ -566,6 +574,18 @@ class MiniAppAPI:
         return f"{cmd_name} {rest.strip()}".strip()
 
     def handle_action(self, user_id: int, action: str, params: dict) -> dict:
+        known = action in self.ACTION_TO_COMMAND or action in {"chat_chatty", "chat_cooldown", "save_available_models", "safemode_reset", "emergencystop", "addauth", "removeauth"}
+        label = action if known else "unknown_action"
+        try:
+            result = self._perform_action(user_id, action, params)
+        except Exception:
+            self.ctx.db.record_action("miniapp", label, "failed", "Action failed; review its inputs", actor_id=user_id)
+            raise
+        self.ctx.db.record_action("miniapp", label, "success" if result.get("ok") else "failed",
+                                  "Action completed" if result.get("ok") else "Action rejected; check permissions, inputs, or safety controls", actor_id=user_id)
+        return result
+
+    def _perform_action(self, user_id: int, action: str, params: dict) -> dict:
         """GUI buttons become real bot commands run through the same engine."""
         ctx = self.ctx
         permission = {
@@ -596,7 +616,7 @@ class MiniAppAPI:
             value = str(params.get("value", "")).strip()
             if value.lower() in ("def", "default", ""):
                 ctx.db.set_state(f"chat_chatty_{cid}", "")
-                return {"ok": True, "response": f"Chatty for chat {cid} reset to the default 30-60% band."}
+                return {"ok": True, "response": f"Chatty for chat {cid} reset to the global default."}
             pct = max(0, min(100, int(float(value))))
             ctx.db.set_state(f"chat_chatty_{cid}", str(pct / 100.0))
             return {"ok": True, "response": f"Chatty for chat {cid} set to {pct}%."}
@@ -693,7 +713,7 @@ class MiniAppAPI:
         command = self.map_action_to_command(action, params)
         if not command:
             return {"ok": False, "response": f"Unknown action: {action}"}
-        return self.run_command(command, user_id)
+        return self.run_command(command, user_id, audit=False)
 
     def _resolve_user_target(self, raw_target: str) -> tuple[Optional[int], Optional[dict], Optional[str]]:
         """Resolve a username or ID string for owners."""
@@ -786,21 +806,23 @@ class MiniAppAPI:
         save_authorized_users(ctx.db, users, _seed_user_ids(ctx))
         return {"ok": True, "response": f"User {target} removed from authorized users."}
 
-    def run_command(self, command: str, user_id: int) -> dict:
+    def run_command(self, command: str, user_id: int, audit: bool = True) -> dict:
         """Run a bot command through the shared engine on the main asyncio loop."""
         ctx = self.ctx
         if not command.startswith("/"):
             command = "/" + command
         denial = self.command_denial(user_id, command)
         if denial:
+            if audit:
+                ctx.db.record_action("miniapp", "command", "blocked", "Command permission denied", actor_id=user_id)
             return denial
         if ctx.loop is None or ctx.loop.is_closed():
             # Headless (tests): run inline
             import asyncio
-            response = asyncio.run(ctx.reply_manager.handle_control_command(command))
+            response = asyncio.run(ctx.reply_manager.handle_control_command(command, audit_source="miniapp" if audit else None, actor_id=user_id))
         else:
             import asyncio
-            future = asyncio.run_coroutine_threadsafe(ctx.reply_manager.handle_control_command(command), ctx.loop)
+            future = asyncio.run_coroutine_threadsafe(ctx.reply_manager.handle_control_command(command, audit_source="miniapp" if audit else None, actor_id=user_id), ctx.loop)
             try:
                 response = future.result(timeout=45.0)
             except Exception as e:
@@ -809,6 +831,79 @@ class MiniAppAPI:
                 return {"ok": False, "response": f"Command failed: {e}"}
         ok = bool(response) and not response.startswith(("❌", "⚠️", "❓", "Usage:"))
         return {"ok": ok, "response": response or "No response."}
+
+    def handle_history(self, status="", before=0, limit=40) -> dict:
+        if status not in ("", "success", "failed", "blocked", "sent", "skipped"):
+            return {"ok": False, "response": "Choose a valid history status"}
+        rows = self.ctx.db.list_actions(status, before, limit)
+        state = self.handle_state()
+        return {"ok": True, "events": rows, "next_before": rows[-1]["id"] if len(rows) == limit else None,
+                "diagnostics": {key: state[key] for key in ("state", "mode", "ai_engine", "ai_model", "safe_mode", "quiet_hours", "pending_count", "chats_allowed", "version")}}
+
+    def _settings_denial(self, user_id):
+        if user_id not in _authorized_user_ids(self.ctx) or not _is_main_user(self.ctx, user_id):
+            return {"ok": False, "response": "Only the main owner can export or import preferences"}
+        return None
+
+    def handle_settings_export(self, user_id) -> dict:
+        denial = self._settings_denial(user_id)
+        if denial:
+            return denial
+        backup = export_preferences(self.ctx)
+        validate_preferences(backup, self.ctx.db)
+        content = json.dumps(backup, ensure_ascii=False, indent=2).encode("utf-8")
+        if len(content) > MAX_BACKUP_BYTES:
+            return {"ok": False, "response": "The preference backup exceeds the 1 MB limit"}
+        token = secrets.token_urlsafe(32)
+        filename = "teleautomator-preferences.json"
+        with self.ctx.settings_download_lock:
+            now = time.monotonic()
+            self.ctx.settings_downloads = {key: value for key, value in self.ctx.settings_downloads.items() if value[0] > now}
+            while len(self.ctx.settings_downloads) >= 5:
+                self.ctx.settings_downloads.pop(next(iter(self.ctx.settings_downloads)))
+            self.ctx.settings_downloads[token] = (now + 300, content, filename)
+        self.ctx.db.record_action("miniapp", "settings_export", "success", "Private preference download prepared", actor_id=user_id)
+        return {"ok": True, "download_url": "/api/settings/download?token=" + token, "file_name": filename}
+
+    def settings_download(self, token):
+        with self.ctx.settings_download_lock:
+            entry = self.ctx.settings_downloads.get(token)
+            if entry and entry[0] > time.monotonic():
+                return entry[1:]
+            self.ctx.settings_downloads.pop(token, None)
+        return None
+
+    def handle_settings_import(self, user_id, backup, *, preview=True) -> dict:
+        denial = self._settings_denial(user_id)
+        if denial:
+            return denial
+        try:
+            plan = validate_preferences(backup, self.ctx.db)
+        except (ValueError, TypeError) as error:
+            self.ctx.db.record_action("miniapp", "settings_import", "failed", "Preference file validation failed", actor_id=user_id)
+            return {"ok": False, "response": str(error)}
+        if preview:
+            return {"ok": True, "summary": plan["summary"], "chat_ids": plan["chat_ids"],
+                    "setting_keys": sorted(backup.get("settings", {})), "rule_keywords": [rule["keyword"] for rule in plan["rules"]]}
+        generator, db, safety = self.ctx.generator, self.ctx.db, self.ctx.safety
+        try:
+            planned_db = SimpleNamespace(get_state=lambda key, default="": plan["states"].get(key, db.get_state(key, default)),
+                                         record_token_usage=db.record_token_usage)
+            provider = create_ai_provider(generator.config, database=planned_db)
+        except Exception:
+            db.record_action("miniapp", "settings_import", "failed", "Provider could not load the proposed preferences", actor_id=user_id)
+            return {"ok": False, "response": "The provider could not load these preferences. Nothing was changed."}
+        db.apply_preferences(plan["states"], plan["contexts"], plan["rules"])
+        generator.set_style(db.get_state("reply_style", generator.style))
+        generator.set_language(db.get_state("chat_language", generator.language))
+        generator.prompt_manager.custom_prompt = db.get_state("custom_system_prompt", generator.prompt_manager.custom_prompt)
+        generator.set_owner_name(db.get_state("owner_name", generator.prompt_manager.owner_name))
+        generator.provider = provider
+        safety._next_chat_cooldown.clear()
+        safety._next_global_cooldown = 0.0
+        safety._minute_cap = safety.max_replies_per_minute
+        self.ctx.db.record_action("miniapp", "settings_import", "success", "Preferences applied; access controls and conversation memory preserved", actor_id=user_id)
+        return {"ok": True, "summary": plan["summary"], "response": "Preferences restored"}
 
     def handle_fetch_models(self, base_url: str = "", api_key: Optional[str] = None) -> dict:
         """Fetch available models from Gemini or OpenAI-compatible endpoint."""
@@ -1215,12 +1310,41 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
         return {"authorized": False, "paywall": PAYWALL, "version": APP_VERSION}
 
     def log_message(self, fmt, *args):  # quiet default access logs
-        logger.debug(f"miniapp http: {self.address_string()} {fmt % args}")
+        logger.debug("miniapp http: %s %s %s", self.address_string(), self.command, self.path.split("?", 1)[0])
+
+    def _serve_settings_download(self, head_only=False):
+        from urllib.parse import parse_qs, urlsplit
+        token = parse_qs(urlsplit(self.path).query).get("token", [""])[0]
+        entry = self.api.settings_download(token)
+        if entry is None:
+            self.send_response(404)
+            self.end_headers()
+            return
+        content, filename = entry
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Access-Control-Allow-Origin", "https://web.telegram.org")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        if not head_only:
+            self.wfile.write(content)
+
+    def do_HEAD(self):
+        if self.path.split("?", 1)[0] == "/api/settings/download":
+            return self._serve_settings_download(head_only=True)
+        self.send_response(404)
+        self.end_headers()
 
     # ---------------------------------------------------------------- routes
 
     def do_GET(self):  # noqa: N802 - stdlib naming
         path = self.path.split("?", 1)[0]
+        if path == "/api/settings/download":
+            return self._serve_settings_download()
         if path == "/api/health":
             hs = getattr(self.api.ctx, "health_status", None)
             if hs and not hs.get("healthy", True):
@@ -1253,6 +1377,7 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
             "/api/events": "/status", "/api/state": "/status", "/api/chats": "/chats",
             "/api/pending": "/pending", "/api/activity": "/chats", "/api/access": "/authlist",
             "/api/models": "/checkmodels", "/api/fetch_models": "/checkmodels",
+            "/api/history": "/status", "/api/settings/export": "/backup",
         }.get(path)
         if permission:
             denial = self.api.command_denial(int(user["id"]), permission)
@@ -1295,6 +1420,20 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
                 self._json(200, self.api.handle_activity())
             elif path == "/api/access":
                 self._json(200, self.api.handle_access())
+            elif path == "/api/history":
+                from urllib.parse import parse_qs, urlsplit
+                query = parse_qs(urlsplit(self.path).query)
+                try:
+                    before = max(0, int(query.get("before", ["0"])[0]))
+                    limit = max(1, min(100, int(query.get("limit", ["40"])[0])))
+                except ValueError:
+                    self._json(400, {"ok": False, "response": "Invalid history page"})
+                    return
+                result = self.api.handle_history(query.get("status", [""])[0], before, limit)
+                self._json(200 if result.get("ok") else 400, result)
+            elif path == "/api/settings/export":
+                denial = self.api._settings_denial(int(user["id"]))
+                self._json(403, denial) if denial else self._json(200, self.api.handle_settings_export(int(user["id"])))
             elif path == "/api/commands":
                 from app.bot_control import BOT_COMMAND_MENU
                 self._json(200, {"commands": BOT_COMMAND_MENU})
@@ -1310,7 +1449,11 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         try:
             length = int(self.headers.get("Content-Length", "0") or 0)
+            if not 0 <= length <= MAX_BACKUP_BYTES + 10000:
+                raise ValueError("Request too large")
             body = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError("Expected a JSON object")
         except Exception:
             self._json(400, {"ok": False, "response": "Invalid JSON body."})
             return
@@ -1332,6 +1475,13 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
                     self._json(400, {"ok": False, "response": "Provide a command."})
                     return
                 self._json(200, self.api.run_command(command, user_id))
+            elif path in ("/api/settings/preview", "/api/settings/import"):
+                denial = self.api._settings_denial(user_id)
+                if denial:
+                    self._json(403, denial)
+                    return
+                result = self.api.handle_settings_import(user_id, body.get("backup"), preview=path.endswith("preview"))
+                self._json(200 if result.get("ok") else 400, result)
             elif path == "/api/action":
                 action = str(body.get("action", "")).strip()
                 params = body.get("params") or {}
@@ -1347,7 +1497,9 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
                         return
                 base_url = str(body.get("base_url") or "").strip()
                 api_key = str(body.get("api_key") or "").strip() or None
-                self._json(200, self.api.handle_fetch_models(base_url, api_key))
+                result = self.api.handle_fetch_models(base_url, api_key)
+                self.api.ctx.db.record_action("miniapp", "fetch_models", "success" if result.get("ok") else "failed", "Model list request completed", actor_id=user_id)
+                self._json(200, result)
             elif path == "/api/test_model":
                 required = ("/checkmodels", "/model", "/baseurl", "/apikey", "/provider")
                 for command in required:
@@ -1360,7 +1512,9 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
                 base_url = str(body.get("base_url") or "").strip() or None
                 api_key = str(body.get("api_key") or "").strip() or None
                 auto_apply = bool(body.get("auto_apply", False))
-                self._json(200, self.api.handle_test_model(message, model, base_url, api_key, auto_apply=auto_apply))
+                result = self.api.handle_test_model(message, model, base_url, api_key, auto_apply=auto_apply)
+                self.api.ctx.db.record_action("miniapp", "model_test", "success" if result.get("ok") else "failed", "Provider and model check completed", actor_id=user_id)
+                self._json(200, result)
             else:
                 self._json(404, {"ok": False, "response": "Unknown endpoint."})
         except Exception as e:

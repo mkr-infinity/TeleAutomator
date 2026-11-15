@@ -11,6 +11,7 @@ import time
 from typing import Any, Optional
 
 from app.ai.reply_generator import ReplyGenerator
+from app.ai.prompt_manager import outgoing_block_reason
 from app.config import AppConfig
 from app.logger import setup_logger
 from app.privacy_manager import PrivacyManager
@@ -121,6 +122,13 @@ class ReplyManager(CommandRouterMixin):
         """Attach the active Telethon client."""
         self._client = client
 
+    def _outgoing_text_reason(self, chat_id: int, text: str, names=()) -> str:
+        participants = [*names, *[row["sender"] for row in self.db.get_recent_chat_messages(chat_id, limit=50) if not row["is_outgoing"]]]
+        if chat_id > 0:
+            metadata = self.db.get_chat_metadata(chat_id) or {}
+            participants.extend([metadata.get("title", ""), metadata.get("username", "")])
+        return outgoing_block_reason(text, participants)
+
     def _outgoing_allowed(self, chat_id: int, approved: bool = False, allow_quiet_hours: bool = False) -> bool:
         return (
             self.privacy.is_chat_allowed(chat_id, chat_id < 0)
@@ -131,6 +139,14 @@ class ReplyManager(CommandRouterMixin):
 
     async def _deliver_message(self, chat_id: int, text: str, reply_to=None, *, approved: bool = False, allow_quiet_hours: bool = False):
         text = capitalize_message(text)
+        # Group messages go to the room without a quoted reply notification.
+        reply_to = reply_to if chat_id > 0 and reply_to and reply_to > 0 else None
+        if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours):
+            return None
+        reason = self._outgoing_text_reason(chat_id, text)
+        if reason:
+            self.db.record_action("automation", "reply", "blocked", reason, chat_id=chat_id)
+            return None
         while True:
             async with self._outgoing_lock:
                 if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours):
@@ -150,6 +166,7 @@ class ReplyManager(CommandRouterMixin):
                         message = await self._client.send_message(chat_id, text)
                     self.safety.mark_reply_sent(chat_id)
                     self.safety.record_burst_send(chat_id)
+                    self.db.record_action("automation", "reply", "sent", "Message delivered", chat_id=chat_id)
                     return message
             # Release the account lock while waiting so another chat can proceed.
             await asyncio.sleep(min(1.0, max(0.01, wait)))
@@ -418,6 +435,10 @@ class ReplyManager(CommandRouterMixin):
         # Sanitize incoming text before passing to generator
         clean_text = self.privacy.sanitize_text(text)
 
+        if re.search(r"\b(?:are|r)\s+(?:you|u)\s+(?:(?:an?|really|actually|just)\s+)*(?:ai|bot|human|real|automated)\b|\b(?:what|which)\s+(?:ai|model|bot)\s+(?:are|r)\s+(?:you|u)\b", text, re.IGNORECASE):
+            self.db.record_action("automation", "reply", "skipped", "Identity question left for the account owner", chat_id=chat_id)
+            return
+
         # Ensure recent chat context is always populated so AI is strictly on-topic in DMs & groups
         if not conversation_history:
             ttl_hours = float(self.db.get_state("context_ttl_hours", "4.0"))
@@ -528,6 +549,7 @@ class ReplyManager(CommandRouterMixin):
                     draft = await _do_generate()
             except Exception as e:
                 logger.error(f"Failed to generate AI reply for chat {chat_id}: {e}")
+                self.db.record_action("automation", "provider", "failed", "Reply generation failed; check provider credentials, endpoint, and model", chat_id=chat_id)
                 # AI provider/model/API-key failure: always alert Saved Messages so the owner can fix it fast.
                 if not is_mention:
                     provider = getattr(self.generator.config, "ai_provider", "")
@@ -552,17 +574,11 @@ class ReplyManager(CommandRouterMixin):
                 return
 
         if not draft or draft.strip().lower() in ("none", "none.", "null", "null.", "undefined", ""):
-            # AI produced empty or null response: NEVER send hardcoded text to peer chats.
-            if not is_mention:
-                logger.warning(f"No valid draft generated for chat {chat_id}.")
-                await self._notify_issue_to_saved_messages(
-                    chat_id=chat_id,
-                    chat_title=chat_title,
-                    sender_name=sender_name,
-                    error_msg="Empty or None response from AI engine; reply was dropped safely.",
-                    incoming_text=clean_text,
-                    message_id=message_id,
-                )
+            self.db.record_action("automation", "reply", "skipped", "No useful reply selected", chat_id=chat_id)
+            return
+        blocked = self._outgoing_text_reason(chat_id, draft, [sender_name])
+        if blocked:
+            self.db.record_action("automation", "reply", "blocked", blocked, chat_id=chat_id)
             return
 
         # Prevent repeating the same word or exact reply consecutively in this chat
@@ -1482,6 +1498,7 @@ class ReplyManager(CommandRouterMixin):
             await self._client(SendReactionRequest(peer=peer, msg_id=message_id, reaction=[ReactionEmoji(emoticon=chosen)]))
             now = time.time()
             self.db.record_reaction(now)
+            self.db.record_action("automation", "reaction", "sent", "Reaction delivered", chat_id=chat_id)
             self._last_reaction_time = now
             self._next_reaction_time_by_chat[chat_id] = now + random.uniform(120.0, 300.0)
             self._next_reaction_cooldown = random.uniform(min_react_cd, max_react_cd)
@@ -1491,6 +1508,7 @@ class ReplyManager(CommandRouterMixin):
             )
             return True
         except Exception as e:
+            self.db.record_action("automation", "reaction", "failed", "Telegram could not deliver the reaction", chat_id=chat_id)
             if (FloodWaitError and isinstance(e, FloodWaitError)) or "floodwait" in e.__class__.__name__.lower():
                 wait_time = getattr(e, "seconds", 30)
                 self.safety.set_timed_pause(wait_time + 2.0)
@@ -1537,8 +1555,8 @@ class ReplyManager(CommandRouterMixin):
         if not clean_text:
             return False
 
-        if self.is_group_broadcast_or_greeting(clean_text):
-            return True
+        if self.is_group_broadcast_or_greeting(clean_text) and not re.search(r"\?|\b(?:anyone|anybody|thoughts|opinions)\b", clean_text):
+            return False
 
         # 1. Check permanent context and pinned info
         ctx = self.db.get_permanent_context(chat_id)
@@ -1557,22 +1575,10 @@ class ReplyManager(CommandRouterMixin):
                 if msg_words.intersection(meaningful_kw):
                     return True
 
-        # 2. Check if the message is a discussion prompt, question, or understandable topic statement
-        discussion_keywords = (
-            "how", "what", "why", "where", "who", "when", "can", "could", "should", "would",
-            "anyone", "anybody", "someone", "think", "thought", "thoughts", "opinion", "idea",
-            "solution", "issue", "error", "problem", "working", "tried", "tested", "project",
-            "guys", "bro", "folks", "team", "people", "suggestion", "opinions", "batao",
-            "kisi ko", "kaise", "kya", "kyun", "lagta", "sahi", "chal raha", "update"
-        )
-        words = clean_text.split()
-        if len(words) >= 2 and any(kw in clean_text for kw in discussion_keywords):
-            return True
-        if len(words) >= 5:
-            # Meaningful multi-word statement or conversation in the group
-            return True
-
-        return False
+        # Open questions can invite the room; message length alone never does.
+        return len(clean_text.split()) >= 4 and bool(re.search(
+            r"[?？]|\b(?:anyone|anybody|thoughts|opinions|suggestions)\b|^(?:how|what|which|why|where|when|can|could|does|has|have)\b", clean_text
+        ))
 
     def check_group_20m_idle(self, chat_id: int) -> bool:
         """Check if 20 minutes (1200s) have passed without any reply or engagement in this group."""
@@ -1677,6 +1683,10 @@ class ReplyManager(CommandRouterMixin):
         if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours):
             return False
         if self.safety.is_sensitive(text):
+            return False
+        blocked = self._outgoing_text_reason(chat_id, text)
+        if blocked:
+            self.db.record_action("automation", "reply", "blocked", blocked, chat_id=chat_id)
             return False
 
         async with self._get_chat_send_lock(chat_id):
@@ -1833,28 +1843,7 @@ class ReplyManager(CommandRouterMixin):
                             await asyncio.sleep(typing_duration)
 
                 # Send first message part
-                # In DMs always swipe-to-reply; in groups swipe-to-reply to message being answered,
-                # except for room broadcasts / greetings for everyone (e.g. "good morning", "gm", "gn")
-                # or rare general stream chime-in.
-                actual_reply_to = None
-                if reply_to_msg_id and reply_to_msg_id > 0:
-                    if chat_id > 0:
-                        actual_reply_to = reply_to_msg_id
-                    else:
-                        # Group chat: check if message is a general greeting or broadcast intended for everyone
-                        clean_lower = msg_parts[0].strip().lower()
-                        is_room_broadcast = bool(re.search(
-                            r"\b(?:good\s*morning|good\s*night|good\s*afternoon|good\s*evening|gm|gn|hello\s+everyone|hey\s+everyone|hi\s+everyone|sup\s+everyone|hello\s+guys|hey\s+guys|hi\s+guys|bye\s+guys|bye\s+all|goodbye\s+all|gg\s+all|gm\s+all|gn\s+all)\b",
-                            clean_lower
-                        )) or ("everyone" in clean_lower or "all" in clean_lower.split())
-
-                        if is_mention:
-                            actual_reply_to = reply_to_msg_id
-                        elif is_room_broadcast:
-                            actual_reply_to = None
-                        else:
-                            actual_reply_to = reply_to_msg_id
-                first_sent = await self._deliver_message(chat_id, first_part, actual_reply_to, approved=approved, allow_quiet_hours=allow_quiet_hours)
+                first_sent = await self._deliver_message(chat_id, first_part, reply_to_msg_id, approved=approved, allow_quiet_hours=allow_quiet_hours)
                 if first_sent is None:
                     return False
                 sent_any = True
@@ -1990,6 +1979,7 @@ class ReplyManager(CommandRouterMixin):
                 return True
             except Exception as e:
                 # Check for Telegram FloodWaitError
+                self.db.record_action("automation", "reply", "failed", "Telegram delivery failed: " + type(e).__name__, chat_id=chat_id)
                 if (FloodWaitError and isinstance(e, FloodWaitError)) or "floodwait" in e.__class__.__name__.lower():
                     wait_time = getattr(e, "seconds", 60)
                     self.safety.set_timed_pause(wait_time + 5.0)

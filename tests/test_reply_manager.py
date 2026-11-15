@@ -948,8 +948,8 @@ def test_pure_laughter_reaction_instead_of_text_message(tmp_path: Path):
     asyncio.run(_run())
 
 
-def test_swipe_to_reply_always_quotes_message(tmp_path: Path, clock):
-    """Verify in groups and DMs, message always swipes to reply (reply_to_msg_id) to the message being answered."""
+def test_group_replies_never_quote_participants_but_dm_threading_remains(tmp_path: Path, clock):
+    """Group replies post plainly; only private chats retain quoted threading."""
     async def _run():
         cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
         db = Database(tmp_path / "test_unthreaded.db")
@@ -973,16 +973,16 @@ def test_swipe_to_reply_always_quotes_message(tmp_path: Path, clock):
         mock_client.send_message = AsyncMock(side_effect=mock_send)
         mgr.set_telegram_client(mock_client)
 
-        # 1. Group reply without direct @mention: swipe-to-reply quotes the message being answered
+        # 1. Casual group contribution goes to the room.
         await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah true that", adaptive_delay=False, is_mention=False)
         assert len(sent_calls) == 1
         assert sent_calls[0][0] == -100222
-        assert sent_calls[0][2] == 77
+        assert sent_calls[0][2] is None
 
-        # 2. Group reply with mention: swipe-to-reply preserves reply_to
+        # 2. Even a direct mention must not create another quoted notification.
         await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah true that", adaptive_delay=False, is_mention=True)
         assert len(sent_calls) == 2
-        assert sent_calls[1][2] == 77
+        assert sent_calls[1][2] is None
 
         # 3. Private DM: reply_to is preserved
         await mgr._send_reply(chat_id=12345, reply_to_msg_id=55, text="sounds good", adaptive_delay=False, is_mention=False)
@@ -999,16 +999,16 @@ def test_swipe_to_reply_always_quotes_message(tmp_path: Path, clock):
         assert len(sent_calls) == 5
         assert sent_calls[4][2] is None
 
-        # 6. Group general greeting when explicitly mentioned: quotes the sender
+        # 6. An explicit mention still posts to the room.
         await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="good morning guys", adaptive_delay=False, is_mention=True)
         assert len(sent_calls) == 6
-        assert sent_calls[5][2] == 77
+        assert sent_calls[5][2] is None
 
     asyncio.run(_run())
 
 
-def test_mandatory_mention_when_mentioned_by_peer(tmp_path: Path):
-    """Verify that when someone mentions us in a group, reply swipes to reply (reply_to_msg_id) and never writes names in text."""
+def test_group_addressed_reply_has_no_quote_or_typed_mention(tmp_path: Path):
+    """An addressed group message can be answered without pinging the sender."""
     async def _run():
         cfg = AppConfig(api_id=123, api_hash="dummy_hash", reply_mode="restricted_auto", auto_authorize=True, data_dir=tmp_path)
         db = Database(tmp_path / "test_peer_mention.db")
@@ -1048,8 +1048,7 @@ def test_mandatory_mention_when_mentioned_by_peer(tmp_path: Path):
         assert "@" not in text
         assert "Alice" not in text
         assert text == "Sounds good to me 👍"
-        # Must swipe-to-reply (quote message ID 404)
-        assert reply_to == 404
+        assert reply_to is None
 
     asyncio.run(_run())
 
@@ -1504,9 +1503,9 @@ def test_prompt_command_displays_full_text(tmp_path: Path):
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
         res = await mgr.handle_control_command("/prompt")
-        assert "CRITICAL TEXTING RULES" in res
-        assert "NEVER USE QUESTION MARKS" in res
-        assert "NO REPETITION / NO SPAM" in res
+        assert "DECIDE WHETHER TO REPLY FIRST" in res
+        assert "WRITE THE USEFUL PART ONLY" in res
+        assert "Silence is an intended result" in res
         assert len(res) > 1200
 
     asyncio.run(_run())
@@ -2374,8 +2373,8 @@ def test_event_handler_group_broadcast_engagement(tmp_path: Path):
         with patch("random.random", return_value=0.1):
             await callback(event)
 
-        # Account engaged in the group with text reply
-        assert mock_client.send_message.call_count >= 1
+        # A generic room greeting does not demand a text reply.
+        mock_client.send_message.assert_not_awaited()
 
     asyncio.run(_run())
 
@@ -2617,11 +2616,11 @@ def test_per_chat_prompt_and_context_passed_to_generator(tmp_path: Path):
         assert call_kwargs["persona_override"] == "Custom prompt: always mention @admin when asked"
         assert "no advertising allowed" in call_kwargs["permanent_context"]
 
-        # Check reply was sent with swipe-to-reply (reply_to=305) even though is_mention=False
+        # A useful group contribution posts without a quote.
         assert len(sent_calls) == 1
         chat_id, text, reply_to = sent_calls[0]
         assert chat_id == -100999
-        assert reply_to == 305
+        assert reply_to is None
         assert "lead" in text
 
     asyncio.run(_run())

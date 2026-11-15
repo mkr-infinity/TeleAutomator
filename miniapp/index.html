@@ -34,7 +34,7 @@
   "operatingSystem": "Cross-platform (Linux, Windows, macOS, Android, iOS)",
   "applicationCategory": "CommunicationApplication",
   "description": "AI-powered Telegram userbot and personal chat automation assistant with Telethon MTProto, Gemini LLM auto-replies, and Material 3 Expressive Mini App control panel.",
-  "softwareVersion": "3.0.5",
+  "softwareVersion": "3.0.6",
   "offers": {
     "@type": "Offer",
     "price": "0",
@@ -48,7 +48,7 @@
 }
 </script>
 
-<link rel="stylesheet" href="style.css?v=3.0.5">
+<link rel="stylesheet" href="style.css?v=3.0.6">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -590,6 +590,38 @@
       </div>
       <div class="owner-capsules-container" id="access-list"></div>
       </div></details>
+
+      <details class="settings-group" name="settings" id="settings-history">
+        <summary>Action history &amp; diagnostics<span>See what ran, failed, or stayed silent</span></summary>
+        <div class="settings-content">
+          <div id="history-diagnostics" class="diagnostics-grid" aria-label="Engine diagnostics"></div>
+          <div class="history-toolbar">
+            <label for="history-status">Show</label>
+            <select id="history-status">
+              <option value="">All actions</option><option value="failed">Failed</option>
+              <option value="blocked">Blocked</option><option value="skipped">Skipped</option>
+              <option value="sent">Sent</option><option value="success">Successful controls</option>
+            </select>
+            <button type="button" class="btn" id="history-refresh">Refresh</button>
+          </div>
+          <p class="helper">Recent action metadata only. Message text, command arguments, and credentials are excluded. Up to 1,100 entries are kept.</p>
+          <p id="history-error" class="helper hidden" role="alert"></p>
+          <div id="history-list" class="history-list" role="log" aria-label="Recent actions"></div>
+          <button type="button" class="btn hidden" id="history-more">Load older actions</button>
+        </div>
+      </details>
+
+      <details class="settings-group" name="settings" id="settings-backup">
+        <summary>Export &amp; import preferences<span>Move settings and individual chat profiles</span></summary>
+        <div class="settings-content">
+          <p class="helper">Includes reply preferences, prompts, keyword rules, and each chat’s notes and cooldowns. Keep the file private: prompts and notes may contain personal information.</p>
+          <p class="helper">Credentials, access permissions, engine start/stop state, and conversation history are excluded. Imports merge the listed preferences after you review them.</p>
+          <button type="button" class="btn primary" id="settings-export">Export preferences</button>
+          <label for="settings-file">Import a TeleAutomator JSON backup (up to 1 MB)</label>
+          <input type="file" id="settings-file" accept="application/json,.json">
+          <p class="helper">Only the main owner can export or import. Review the preview before applying.</p>
+        </div>
+      </details>
     </section>
 
   </main>
@@ -675,6 +707,6 @@
   <button type="button" class="toast-close-btn" id="toast-close" aria-label="Dismiss toast"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
 </div>
 
-<script src="app.js?v=3.0.5"></script>
+<script src="app.js?v=3.0.6"></script>
 </body>
 </html>

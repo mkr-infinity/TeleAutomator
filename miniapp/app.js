@@ -266,7 +266,7 @@
       owner_name: "Kaif", ai_engine: "Gemini", ai_model: "gemini-2.5-flash-lite", ai_base_url: "",
       available_models: ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"],
       models_manually_set: false,
-      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.5",
+      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.6",
       auto_reactions: true, ownreact: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
       thinking: "default", temperature: "0.7", lang: "english", max_tokens: "512",
       quiet_hours_start: "02:00", quiet_hours_end: "08:00", quiet_hours_schedule: "02:00 AM – 08:00 AM IST",
@@ -309,7 +309,7 @@
   };
 
   async function demoApi(path, body) {
-    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.5", user: { id: 555000111, name: "Kaif" } };
+    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.6", user: { id: 555000111, name: "Kaif" } };
     if (path === "/api/state") return DEMO_DATA.state;
     if (path === "/api/chats") return { chats: DEMO_DATA.chats, chatty_global: DEMO_DATA.state.chatty_global };
     if (path === "/api/pending") return { pending: DEMO_DATA.pending };
@@ -1159,7 +1159,7 @@
       ? `<a href="https://t.me/${encodeURIComponent(cleanUser)}" target="_blank" rel="noopener noreferrer" class="pill pill-neutral chat-user chat-user-link" title="Open @${esc(cleanUser)} in Telegram">@${esc(cleanUser)} ${SVGS.externalLink}</a>`
       : "";
 
-    const chattyDisplay = c.chatty !== "" && c.chatty !== null && c.chatty !== undefined ? `${Math.round(parseFloat(c.chatty) * 100)}%` : "Default (30–60%)";
+    const chattyDisplay = c.chatty !== "" && c.chatty !== null && c.chatty !== undefined ? `${Math.round(parseFloat(c.chatty) * 100)}%` : "Global default";
     const cooldownDisplay = c.cooldown_str || "Global Default (5s – 60s)";
 
     const bodyHtml = `
@@ -1362,7 +1362,7 @@
       onClick: () => runAction("chat_chatty", { chat_id: c.id, value: String(p) }),
     }));
     buttons.push({ label: "Default", onClick: () => runAction("chat_chatty", { chat_id: c.id, value: "def" }) });
-    openSheet(`Chatty · ${c.name}`, `<p>Chance the account joins the chat on its own. Default follows the global 30–60% band.</p>`, buttons);
+    openSheet(`Chatty · ${c.name}`, `<p>Chance of occasionally joining a relevant conversation. Default follows the global setting. Messages addressed to other people are ignored.</p>`, buttons);
   }
 
   function promptSheet(c) {
@@ -1707,6 +1707,7 @@
     if (!s || s.authorized === false) return maybePaywall(s);
     if (s.ok === false) throw new Error(s.response);
     renderMoreControls(s);
+    if ($("settings-history").open) await refreshHistory();
     const changed = updateHtml("access-list", data.ok === false ? `<p class="empty">${esc(data.response)}</p>` : (data.users || []).length
       ? data.users.map((u) => {
           const initials = u.initials || (u.name || "U").slice(0, 2).toUpperCase();
@@ -1743,6 +1744,95 @@
       btn.addEventListener("click", () => openSheet("Remove owner", `<p>Revoke panel access for owner <span class="num">${esc(btn.dataset.unauth)}</span>?</p>`,
         [{ label: "Remove", kind: "danger", onClick: () => runAction("removeauth", { user_id: btn.dataset.unauth }) }, { label: "Cancel" }])));
 
+  }
+
+  let historyRows = [];
+  let historyBefore = null;
+  let historyRequest = 0;
+
+  async function refreshHistory(reset = true) {
+    const request = ++historyRequest;
+    const button = $(reset ? "history-refresh" : "history-more");
+    button.disabled = true;
+    $("history-error").classList.add("hidden");
+    try {
+      const query = new URLSearchParams({ status: $("history-status").value, limit: "40" });
+      if (!reset && historyBefore) query.set("before", historyBefore);
+      const result = DEMO ? { ok: true, events: [], diagnostics: DEMO_DATA.state } : await api(`/api/history?${query}`);
+      if (request !== historyRequest) return;
+      if (result.authorized === false) return maybePaywall(result);
+      if (!result.ok) throw new Error(result.response || "Could not load action history.");
+      historyRows = reset ? result.events : [...historyRows, ...result.events];
+      historyBefore = result.next_before;
+      const d = result.diagnostics || {};
+      updateHtml("history-diagnostics", [
+        ["Engine", d.state || "Unknown"], ["Mode", formatMode(d.mode || "")],
+        ["Provider", d.ai_engine || "Unknown"], ["Model", d.ai_model || "Default"],
+        ["Safe mode", d.safe_mode ? "Active" : "Clear"], ["Quiet hours", d.quiet_hours ? "Active" : "Off"],
+      ].map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join(""));
+      updateHtml("history-list", historyRows.length ? historyRows.map(event => `<article class="history-row">
+        <div class="history-heading"><strong>${esc(String(event.action).replaceAll("_", " "))}</strong><span class="pill">${esc(event.status)}</span></div>
+        <p>${esc(event.detail || "")}</p><small>${esc(formatIST(event.created_at))} · ${esc(event.source)}${event.chat_id ? ` · Chat ${esc(event.chat_id)}` : ""}</small>
+      </article>`).join("") : '<p class="empty">No matching actions yet.</p>');
+      $("history-more").classList.toggle("hidden", !historyBefore);
+    } catch (error) {
+      if (request === historyRequest) {
+        $("history-error").textContent = error.message || "Could not load history. Tap Refresh to retry.";
+        $("history-error").classList.remove("hidden");
+      }
+    } finally { button.disabled = false; }
+  }
+
+  async function exportSettings() {
+    const button = $("settings-export");
+    button.disabled = true;
+    try {
+      if (DEMO) throw new Error("Connect to your engine to export preferences.");
+      const result = await api("/api/settings/export");
+      if (result.authorized === false) return maybePaywall(result);
+      if (!result.ok) throw new Error(result.response || "Could not prepare the backup.");
+      const url = new URL(result.download_url, location.origin);
+      if (url.origin !== location.origin) throw new Error("Invalid download address.");
+      if (url.protocol === "https:" && telegramCall("downloadFile", "8.0", { url: url.href, file_name: result.file_name }, accepted => toast(accepted ? "Download requested" : "Download cancelled", "info"))) return;
+      const link = document.createElement("a");
+      link.href = url.href;
+      link.download = result.file_name;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      toast("Download requested", "info");
+    } catch (error) { toast(error.message || "Could not export preferences.", "err"); }
+    finally { button.disabled = false; }
+  }
+
+  async function previewSettingsFile() {
+    const input = $("settings-file");
+    const file = input.files?.[0];
+    if (!file) return;
+    input.disabled = true;
+    try {
+      if (DEMO) throw new Error("Connect to your engine to import preferences.");
+      if (file.size > 1000000) throw new Error("Choose a backup smaller than 1 MB.");
+      let backup;
+      try { backup = JSON.parse(await file.text()); }
+      catch (_) { throw new Error("The file is not valid JSON. Choose a TeleAutomator backup."); }
+      const preview = await api("/api/settings/preview", { backup });
+      if (preview.authorized === false) return maybePaywall(preview);
+      if (!preview.ok) throw new Error(preview.response || "This backup is invalid.");
+      const summary = preview.summary;
+      openSheet("Review preference import", `<p>Merge <strong>${esc(summary.settings)} settings</strong>, <strong>${esc(summary.chats)} chat profiles</strong>, and <strong>${esc(summary.rules)} keyword rules</strong>.</p>
+        <p>Access permissions and conversation memory are preserved. Existing preferences listed in this backup will be replaced.</p>
+        <p class="helper">Settings: ${esc((preview.setting_keys || []).join(", ") || "None")}</p>
+        <p class="helper">Chat IDs: ${esc((preview.chat_ids || []).join(", ") || "None")}</p>`, [
+        { label: "Apply preferences", kind: "primary", onClick: async () => {
+          const result = await api("/api/settings/import", { backup });
+          if (result.authorized === false) { maybePaywall(result); return false; }
+          if (result.ok) { latestState = null; refreshAfterSheet = true; toast("Preferences restored", "ok"); }
+          return result;
+        } }, { label: "Cancel" },
+      ]);
+    } catch (error) { toast(error.message || "Could not read the backup.", "err"); }
+    finally { input.disabled = false; input.value = ""; input.dataset.dirty = "false"; updateClosingConfirmation(); }
   }
 
   function renderMoreControls(s) {
@@ -2098,6 +2188,7 @@
       $("whoami").innerHTML = "";
     }
     $("app-version").textContent = auth.version ? `v${auth.version}` : "";
+    $("settings-backup").classList.toggle("hidden", auth.is_main !== true);
     if (!wired) {
       wired = true;
       wire();
@@ -2139,6 +2230,12 @@
 
   function wire() {
     $("retry-view").addEventListener("click", () => loadView(currentView));
+    $("settings-history").addEventListener("toggle", () => { if ($("settings-history").open) refreshHistory(); });
+    $("history-status").addEventListener("change", () => refreshHistory());
+    $("history-refresh").addEventListener("click", () => refreshHistory());
+    $("history-more").addEventListener("click", () => refreshHistory(false));
+    $("settings-export").addEventListener("click", exportSettings);
+    $("settings-file").addEventListener("change", previewSettingsFile);
     document.addEventListener("input", (event) => {
       const field = event.target;
       if (!field.matches("input, textarea, select")) return;
@@ -3020,6 +3117,7 @@
       const es = new EventSource(`/api/events${q}`);
       eventSource = es;
       let lastRevision;
+      let lastHistoryRevision;
       es.onopen = () => {
         setConnectionStatus("live");
       };
@@ -3030,6 +3128,10 @@
           latestState = s;
           if (s && s.state) renderState(s);
           if (s && currentView === "more" && !$("sheet").open) renderMoreControls(s);
+          if (s && s.history_revision !== lastHistoryRevision) {
+            lastHistoryRevision = s.history_revision;
+            if (currentView === "more" && $("settings-history").open) refreshHistory();
+          }
           if (s && s.revision !== lastRevision) {
             lastRevision = s.revision;
             if (currentView !== "overview") loadView(currentView);

@@ -51,7 +51,21 @@ def _parse_time_str(val: str) -> Optional[str]:
 class CommandRouterMixin:
     """Mixin providing modular control command dispatchers for ReplyManager."""
 
-    async def handle_control_command(self, text: str) -> Optional[str]:
+    async def handle_control_command(self, text: str, *, audit_source="control", actor_id=None) -> Optional[str]:
+        root = text.strip().split()[0].lower().split("@")[0] if text.strip() else ""
+        action = root if root in _BOT_COMMAND_NAMES else "unknown_command"
+        try:
+            response = await self._execute_control_command(text)
+        except Exception:
+            if audit_source and root.startswith("/"):
+                self.db.record_action(audit_source, action, "failed", "Command failed; check its inputs and engine diagnostics", actor_id=actor_id)
+            raise
+        if audit_source and root.startswith("/"):
+            ok = bool(response) and not response.startswith(("❌", "⚠️", "❓", "Usage:"))
+            self.db.record_action(audit_source, action, "success" if ok else "failed", "Command completed" if ok else "Command rejected; check its inputs or current safety controls", actor_id=actor_id)
+        return response
+
+    async def _execute_control_command(self, text: str) -> Optional[str]:
         """Handle control commands sent via the control channel (control bot or Saved Messages)."""
         cmd_parts = text.strip().split()
         if not cmd_parts:
@@ -1114,7 +1128,7 @@ class CommandRouterMixin:
                     "💬 *Group Banter Rate*",
                     "━━━━━━━━━━━━━━━━━━━━",
                     f"🌐 *Global default:* `{int(curr_prob * 100)}%`",
-                    "🎯 *Unset chats:* random 30–60% band (natural human default)",
+                    "🎯 *Unset chats:* follow the global rate, only for relevant conversations",
                     "",
                     "*Per-chat settings:*",
                 ]
@@ -1132,7 +1146,7 @@ class CommandRouterMixin:
                         except ValueError:
                             continue
                 if not overrides_found:
-                    lines.append("• _No per-chat overrides — every group uses the global default / band._")
+                    lines.append("• _No per-chat overrides — every group uses the global default._")
                 lines.append(
                     "\n👇 *Tap a chat below to set its banter %* — or globally: `/chatty off` (mention-only) · `/chatty <0-100>`."
                 )

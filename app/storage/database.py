@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
-from app.logger import setup_logger
+from app.logger import redact_secrets, setup_logger
 from app.session_manager import ensure_secure_dir, ensure_secure_file
 
 logger = setup_logger(__name__)
@@ -47,6 +47,18 @@ class Database:
                 """
                 PRAGMA journal_mode=WAL;
                 PRAGMA synchronous=NORMAL;
+
+                CREATE TABLE IF NOT EXISTS action_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    detail TEXT NOT NULL DEFAULT '',
+                    chat_id INTEGER,
+                    actor_id INTEGER,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_action_history_status ON action_history(status, id DESC);
 
                 CREATE TABLE IF NOT EXISTS pending_approvals (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -225,6 +237,58 @@ class Database:
                 (key,),
             ).fetchone()
             return str(row["value"]) if row else default
+
+    def record_action(self, source: str, action: str, status: str, detail: str = "", *, chat_id=None, actor_id=None) -> None:
+        """Keep bounded metadata, never command arguments or message bodies; auditing cannot interrupt delivery."""
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "INSERT INTO action_history (source, action, status, detail, chat_id, actor_id) VALUES (?, ?, ?, ?, ?, ?)",
+                    (source[:32], redact_secrets(action)[:64], status[:16], redact_secrets(detail)[:300], chat_id, actor_id),
+                )
+                if row.lastrowid % 100 == 0:
+                    conn.execute("DELETE FROM action_history WHERE id <= ?", (row.lastrowid - 1000,))
+        except Exception:
+            logger.warning("Could not record action history")
+
+    def latest_action_id(self) -> int:
+        with self._get_connection() as conn:
+            return int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM action_history").fetchone()[0])
+
+    def list_actions(self, status: str = "", before: int = 0, limit: int = 40) -> List[Dict[str, Any]]:
+        clauses, params = [], []
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if before:
+            clauses.append("id < ?")
+            params.append(before)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT * FROM action_history" + where + " ORDER BY id DESC LIMIT ?",
+                                (*params, max(1, min(100, limit)))).fetchall()
+            return [dict(row) for row in rows]
+
+    def apply_preferences(self, states: Dict[str, str], contexts: List[Dict[str, Any]], rules: List[Dict[str, str]]) -> None:
+        """Apply a validated preference plan atomically, then refresh isolated context files."""
+        with self._context_lock:
+            with self._get_connection() as conn:
+                conn.executemany(
+                    "INSERT INTO runtime_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    [*states.items(), ("state_revision", str(time.time_ns()))],
+                )
+                for context in contexts:
+                    conn.execute(
+                        "INSERT INTO permanent_chat_context (chat_id, notes, pinned_text) VALUES (?, ?, ?) "
+                        "ON CONFLICT(chat_id) DO UPDATE SET notes = excluded.notes, pinned_text = excluded.pinned_text, updated_at = CURRENT_TIMESTAMP",
+                        (context["id"], context["notes"], context["pinned_text"]),
+                    )
+                conn.executemany(
+                    "INSERT INTO keyword_rules (keyword, reply) VALUES (?, ?) ON CONFLICT(keyword) DO UPDATE SET reply = excluded.reply",
+                    [(rule["keyword"], rule["reply"]) for rule in rules],
+                )
+            for context in contexts:
+                self.sync_chat_context_file(context["id"])
 
     def add_keyword_rule(self, keyword: str, reply: str) -> None:
         """Add or update custom trigger keyword and reply."""

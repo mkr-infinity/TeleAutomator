@@ -3751,6 +3751,19 @@ h1.brand-name {
 .settings-content { display: flex; flex-direction: column; gap: 16px; padding: 0 16px 16px; min-width: 0; }
 .settings-content > .card { border: 0; border-radius: 0; box-shadow: none; background: transparent; padding: 0; }
 .settings-content .section-h { margin-top: 0; }
+.history-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.history-toolbar select { flex: 1; min-width: 120px; min-height: 48px; }
+.diagnostics-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.diagnostics-grid span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+.diagnostics-grid strong { font-size: 14px; overflow-wrap: anywhere; }
+.history-list { display: grid; gap: 12px; }
+.history-row { border-top: 1px solid var(--border); padding-top: 12px; overflow-wrap: anywhere; }
+.history-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.history-heading strong { font-size: 14px; }
+.history-row p { margin: 6px 0; font-size: 14px; }
+.history-row small { color: var(--muted); font-size: 12px; }
+#settings-file { width: 100%; min-height: 48px; font-size: 14px; }
+#settings-file::file-selector-button { min-height: 48px; margin-right: 8px; }
 .inline-notice { display: flex; align-items: center; gap: 12px; max-width: 720px; margin: 12px auto; padding: 12px 16px; border: 1px solid var(--warning); border-radius: 12px; background: var(--surface); }
 .inline-notice span { flex: 1; }
 .sheet-error { flex: 0 0 auto; margin-top: 12px; padding: 10px; border: 1px solid var(--negative); border-radius: 8px; color: var(--negative-bright); font-size: 14px; }

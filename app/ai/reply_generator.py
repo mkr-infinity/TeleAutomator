@@ -165,14 +165,13 @@ class ReplyGenerator:
             draft = self._generate_reply(prompt, instructions)
             active_custom = (persona_override or "").strip() or (self.prompt_manager.custom_prompt if not is_group else "")
             custom_limit = self.prompt_manager.get_custom_word_limit(active_custom)
-            allow_mentions = bool(active_custom and re.search(r"\b(?:mention|tag|@\w+)\b", active_custom, re.IGNORECASE))
             return self.prompt_manager.clean_reply(
                 draft,
                 sender_name=sender_name,
                 custom_limit=custom_limit,
-                allow_mentions=allow_mentions,
                 incoming_text=incoming_text,
                 use_global_limit=False,
+                participant_names=[str(row.get("sender", "")) for row in (conversation_history or []) if not row.get("is_outgoing")],
             )
         except Exception as e:
             logger.error(f"Failed to generate draft reply: {e}")

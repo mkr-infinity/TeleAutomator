@@ -48,6 +48,11 @@ function telegramMock({ version }) {
   const requests = [];
   let rejectAction = null;
   let authFailure = false;
+  let historyFailure = false;
+  let importFailure = false;
+  let isMainUser = true;
+  const history = Array.from({ length: 45 }, (_, index) => ({ id: 45 - index, source: "automation", action: "reply", status: (45 - index) % 10 === 0 ? "failed" : "sent", detail: index ? "Message delivered" : "<script>window.historyXSS = true</script>", created_at: "2026-11-15 12:00:00", chat_id: -222 }));
+  const preferences = { format: "teleautomator-preferences", version: 1, settings: { reply_style: "formal", owner_name: "Owner" }, chats: [{ id: -222, notes: "Test notes" }], keyword_rules: [] };
   const server = http.createServer(async (req, res) => {
     const pathname = new URL(req.url, "http://local").pathname;
     if (process.env.BROWSER_TRACE) console.log("server", pathname);
@@ -59,8 +64,25 @@ function telegramMock({ version }) {
       let result = {};
       if (pathname === "/api/auth") {
         if (authFailure) { res.statusCode = 503; result = { ok: false, response: "The engine is starting. Try again." }; }
-        else result = { authorized: true, is_main: true, version: "3.0.5", user: { name: "Test owner" } };
+        else result = { authorized: true, is_main: isMainUser, version: "3.0.6", user: { name: "Test owner" } };
       } else if (pathname === "/api/state") result = data.state;
+      else if (pathname === "/api/history") {
+        if (historyFailure) { historyFailure = false; res.statusCode = 503; result = { ok: false, response: "History unavailable. Retry." }; }
+        else {
+          const query = new URL(req.url, "http://local").searchParams;
+          const rows = history.filter(row => (!query.get("status") || row.status === query.get("status")) && (!query.get("before") || row.id < Number(query.get("before")))).slice(0, 40);
+          result = { ok: true, events: rows, next_before: rows.length === 40 ? rows.at(-1).id : null, diagnostics: data.state };
+        }
+      }
+      else if (pathname === "/api/settings/export") result = { ok: true, download_url: "/api/settings/download?token=local-fixture", file_name: "teleautomator-preferences.json" };
+      else if (pathname === "/api/settings/download") { res.setHeader("Content-Disposition", 'attachment; filename="teleautomator-preferences.json"'); result = preferences; }
+      else if (pathname === "/api/settings/preview") {
+        result = body.backup?.version === 1 ? { ok: true, summary: { settings: 2, chats: 1, rules: 0 }, setting_keys: ["owner_name", "reply_style"], chat_ids: [-222] } : { ok: false, response: "Choose a version 1 backup" };
+      }
+      else if (pathname === "/api/settings/import") {
+        if (importFailure) { importFailure = false; result = { ok: false, response: "Import failed. Please retry." }; }
+        else result = { ok: true, response: "Preferences restored" };
+      }
       else if (pathname === "/api/chats") result = { chats: data.chats };
       else if (pathname === "/api/access") result = { users: data.access };
       else if (pathname === "/api/pending") result = { pending: data.pending };
@@ -229,6 +251,46 @@ function telegramMock({ version }) {
     for (const [selector, title] of [["#btn-backup-db", "Backup"], ["#btn-clear-context", "Memory"], ["#btn-emergency-toggle", "Kill-Switch"], ["[data-unauth]", "Remove owner"]]) {
       await page.locator(selector).first().click(); await checkSheet(page, title); await close(page);
     }
+    await navigate(page, "more", "history");
+    await expect(page.locator(".history-row")).toHaveCount(40);
+    await expect(page.locator("#history-list")).toContainText("<script>");
+    assert(!(await page.evaluate(() => window.historyXSS)), "history text must be escaped");
+    await page.locator("#history-more").click();
+    await expect(page.locator(".history-row")).toHaveCount(45);
+    await page.locator("#history-status").selectOption("failed");
+    await expect(page.locator(".history-row")).toHaveCount(4);
+    await expect(page.locator("#history-more")).not.toBeVisible();
+    historyFailure = true;
+    await page.locator("#history-refresh").click();
+    await expect(page.locator("#history-error")).toContainText("Retry");
+    await page.locator("#history-refresh").click();
+    await expect(page.locator("#history-error")).not.toBeVisible();
+    await page.locator("#history-status").selectOption("skipped");
+    await expect(page.locator(".history-row")).toHaveCount(0);
+    history.unshift({ ...history[0], id: 46, status: "skipped", detail: "Conversation already ended" });
+    await page.evaluate(state => window.sources.at(-1).emit({ ...state, history_revision: 46 }), data.state);
+    await expect(page.locator("#history-list")).toContainText("Conversation already ended");
+    await navigate(page, "more", "backup");
+    const downloadEvent = page.waitForEvent("download");
+    await page.locator("#settings-export").click();
+    const download = await downloadEvent;
+    assert.equal(download.suggestedFilename(), "teleautomator-preferences.json");
+    assert.equal(JSON.parse(await fs.readFile(await download.path(), "utf8")).format, preferences.format);
+    await page.locator("#settings-file").setInputFiles({ name: "bad.json", mimeType: "application/json", buffer: Buffer.from("not json") });
+    await expect(page.locator("#toast-msg")).toContainText("not valid JSON");
+    await page.locator("#settings-file").setInputFiles({ name: "old.json", mimeType: "application/json", buffer: Buffer.from('{"version":0}') });
+    await expect(page.locator("#toast-msg")).toContainText("version 1");
+    const importsBefore = requests.filter(request => request.path === "/api/settings/import").length;
+    await page.locator("#settings-file").setInputFiles({ name: "settings.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(preferences)) });
+    await checkSheet(page, "Review preference import");
+    await expect(page.locator("#sheet-body")).toContainText("2 settings");
+    assert.equal(requests.filter(request => request.path === "/api/settings/import").length, importsBefore, "preview must not apply anything");
+    importFailure = true;
+    await page.locator("#sheet-actions .primary").click();
+    await expect(page.locator("#sheet-error")).toContainText("Import failed");
+    await page.locator("#sheet-actions .primary").click();
+    await expect(page.locator("#sheet")).not.toBeVisible();
+    await expect(page.locator("#toast-msg")).toContainText("Preferences restored");
     await navigate(page, "approvals");
     for (const [selector, title] of [["#btn-approve-all", "Approve"], ["#btn-reject-all", "Reject"]]) {
       await page.locator(selector).click(); await checkSheet(page, title); await close(page);
@@ -252,6 +314,11 @@ function telegramMock({ version }) {
     const old = await makePage("7.6");
     await expect(old.locator("#app")).toBeVisible();
     assert(!(await old.evaluate(() => window.telegramCalls)).includes("requestFullscreen"));
+    isMainUser = false;
+    const limited = await makePage();
+    await navigate(limited, "more");
+    await expect(limited.locator("#settings-backup")).not.toBeVisible();
+    isMainUser = true;
     authFailure = true;
     const retry = await makePage();
     await expect(retry.locator("#connection-error")).toBeVisible();
@@ -260,7 +327,7 @@ function telegramMock({ version }) {
     await retry.locator("#retry-connection").click();
     await expect(retry.locator("#app")).toBeVisible();
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ popupChecks: popups, viewportSizes: 6, fullscreen: "supported and older clients", formRecovery: "passed", duplicateSaves: "blocked", liveUpdates: "preserve drafts and DOM", connectionRetry: "passed", pageErrors: errors.length }));
+    console.log(JSON.stringify({ popupChecks: popups, viewportSizes: 6, fullscreen: "supported and older clients", formRecovery: "passed", duplicateSaves: "blocked", liveUpdates: "preserve drafts and DOM", history: "filter, pages, retry, safe rendering, live updates", preferences: "download, preview, failed import recovery, owner visibility", connectionRetry: "passed", pageErrors: errors.length }));
   } finally {
     await browser?.close();
     server.closeAllConnections();
