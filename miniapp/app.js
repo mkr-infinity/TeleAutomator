@@ -1175,7 +1175,7 @@
       : "";
 
     const chattyDisplay = c.chatty !== "" && c.chatty !== null && c.chatty !== undefined ? `${Math.round(parseFloat(c.chatty) * 100)}%` : "Global default";
-    const cooldownDisplay = c.cooldown_str || "Global Default (5s – 60s)";
+    const cooldownDisplay = c.cooldown_str || `Global Default (${c.cooldown_default_min ?? 5}s – ${c.cooldown_default_max ?? 60}s)`;
 
     const bodyHtml = `
       <div class="chat-detail-wrap">
@@ -1190,7 +1190,7 @@
               ${userDisplay}
               <div class="chat-id-badge-wrap">
                 <span class="pill pill-neutral num">ID: ${esc(String(c.id))}</span>
-                <button type="button" class="copy-id-btn" data-copy="${esc(String(c.id))}" title="Copy Chat ID">${SVGS.copy}</button>
+                <button type="button" class="copy-id-btn" data-copy="${esc(String(c.id))}" aria-label="Copy Chat ID" title="Copy Chat ID">${SVGS.copy}</button>
               </div>
             </div>
           </div>
@@ -1276,7 +1276,7 @@
         e.stopPropagation();
         const copyText = e.currentTarget.dataset.copy;
         if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(copyText).then(() => toast("Chat ID copied!"));
+          navigator.clipboard.writeText(copyText).then(() => toast("Chat ID copied!")).catch(() => toast(`ID: ${copyText}`));
         } else {
           toast(`ID: ${copyText}`);
         }
@@ -2377,19 +2377,6 @@
         return;
       }
 
-      const chatCard = e.target.closest(".chat-capsule-card");
-      if (chatCard && !e.target.closest("button, a, input")) {
-        const cid = chatCard.dataset.cid;
-        if (cid) {
-          const c = chatCache.find((x) => String(x.id) === String(cid));
-          if (c) {
-            haptic("light");
-            openChatDetailSheet(c);
-            return;
-          }
-        }
-      }
-
       const feedRow = e.target.closest(".feed-clickable");
       if (feedRow) {
         const url = feedRow.dataset.msgUrl;
@@ -2445,7 +2432,7 @@
         openSheet("Approve pending batch",
           `<p>Send these <strong>${count} pending drafts</strong> in the background? ${approvalTotal > count ? `${approvalTotal - count} more drafts will remain for review.` : ""}</p>`,
           [
-            { label: `Approve all (${count})`, kind: "primary", onClick: () => runAction("approve_all") },
+            { label: `Approve batch (${count})`, kind: "primary", onClick: () => runAction("approve_all") },
             { label: "Cancel" }
           ]);
       });
@@ -2466,9 +2453,17 @@
     }
 
     $("goto-activity").addEventListener("click", async () => {
-      const acts = await api("/api/activity");
-      const rows = acts.activity || [];
-      openSheet("Recent replies", rows.length ? rows.map(feedRowHtml).join("") : "<p>Nothing yet.</p>", [{ label: "Close" }]);
+      const button = $("goto-activity");
+      if (button.disabled) return;
+      button.disabled = true;
+      try {
+        const acts = await api("/api/activity");
+        if (acts.authorized === false) return maybePaywall(acts);
+        if (acts.ok === false) throw new Error(acts.response);
+        const rows = acts.activity || [];
+        openSheet("Recent replies", rows.length ? rows.map(feedRowHtml).join("") : "<p>Nothing yet.</p>", [{ label: "Close" }]);
+      } catch (error) { toast(error.message || "Could not load recent replies. Try again.", "err"); }
+      finally { button.disabled = false; }
     });
 
     $("allow-btn").addEventListener("click", async () => {
@@ -2618,7 +2613,7 @@
             const isOk = !!r.ok;
             return `<div class="health-model-row ${isOk ? "is-ok" : "is-fail"}">
               <div class="health-model-left">
-                <input type="checkbox" class="health-result-cb" value="${esc(r.model)}" ${isOk ? "checked" : ""}>
+                <input type="checkbox" class="health-result-cb" value="${esc(r.model)}" ${isOk ? "checked" : "disabled"}>
                 <span class="health-model-name num">${esc(r.model)}</span>
               </div>
               <div class="health-model-right">
@@ -2919,10 +2914,6 @@
       qhSave.addEventListener("click", () => {
         const start = ($("qh-start-input").value || "02:00").trim();
         const end = ($("qh-end-input").value || "08:00").trim();
-        if ($("qh-status-pill")) {
-          $("qh-status-pill").textContent = "Active";
-          $("qh-status-pill").className = "pill pill-positive";
-        }
         runAction("quiethours", { value: `on ${start} ${end}` });
       });
     }
@@ -2941,24 +2932,7 @@
       chip.addEventListener("click", () => {
         haptic("light");
         const qh = chip.dataset.qh;
-        if (qh === "off") {
-          if ($("qh-status-pill")) {
-            $("qh-status-pill").textContent = "Inactive";
-            $("qh-status-pill").className = "pill pill-inactive";
-          }
-          runAction("quiethours", { value: "off" });
-        } else {
-          const parts = qh.split(" ");
-          if ($("qh-start-input")) $("qh-start-input").value = parts[0];
-          if ($("qh-end-input")) $("qh-end-input").value = parts[1];
-          if ($("qh-status-pill")) {
-            $("qh-status-pill").textContent = "Active";
-            $("qh-status-pill").className = "pill pill-positive";
-          }
-          runAction("quiethours", { value: `on ${qh}` });
-        }
-        document.querySelectorAll("#qh-preset-carousel button").forEach((c) => c.classList.remove("active"));
-        chip.classList.add("active");
+        runAction("quiethours", { value: qh === "off" ? "off" : `on ${qh}` });
       });
     });
 
@@ -2968,9 +2942,6 @@
         haptic("light");
         const cur = sw.dataset.state || "off";
         const next = cur === "on" ? "off" : "on";
-        sw.dataset.state = next;
-        sw.className = `clay-switch ${next}`;
-        sw.textContent = next.toUpperCase();
         runAction(sw.dataset.action, { value: next });
       });
     });
@@ -2990,8 +2961,6 @@
         haptic("light");
         const param = b.dataset.param;
         const val = b.dataset.val;
-        b.parentElement.querySelectorAll(".seg").forEach((s) => s.classList.remove("active"));
-        b.classList.add("active");
         runAction(param, { value: val });
       });
     });

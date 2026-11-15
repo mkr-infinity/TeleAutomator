@@ -45,6 +45,7 @@ function telegramMock({ version }) {
   data.state.ai_model = "first,second";
   data.state.available_models = ["first", "second"];
   data.state.rules = [{ keyword: "help", reply: "Send a message" }];
+  data.chats.forEach(chat => { chat.cooldown_default_min = 3; chat.cooldown_default_max = 8; });
   data.activity.forEach((row, index) => { row.is_automated = index < 3; });
   const requests = [];
   let rejectAction = null;
@@ -53,6 +54,7 @@ function telegramMock({ version }) {
   let importFailure = false;
   let isMainUser = true;
   let feedbackFailure = false;
+  let activityFailure = false;
   const history = Array.from({ length: 45 }, (_, index) => ({ id: 45 - index, source: "automation", action: "reply", status: (45 - index) % 10 === 0 ? "failed" : "sent", detail: index ? "Message delivered" : "<script>window.historyXSS = true</script>", created_at: "2026-11-15 12:00:00", chat_id: -222 }));
   const preferences = { format: "teleautomator-preferences", version: 1, settings: { reply_style: "formal", owner_name: "Owner" }, chats: [{ id: -222, notes: "Test notes" }], keyword_rules: [] };
   const server = http.createServer(async (req, res) => {
@@ -88,7 +90,10 @@ function telegramMock({ version }) {
       else if (pathname === "/api/chats") result = { chats: data.chats };
       else if (pathname === "/api/access") result = { users: data.access };
       else if (pathname === "/api/pending") result = { pending: data.pending };
-      else if (pathname === "/api/activity") result = { activity: data.activity };
+      else if (pathname === "/api/activity") {
+        if (activityFailure) { activityFailure = false; res.statusCode = 503; result = { ok: false, response: "Activity unavailable. Retry." }; }
+        else result = { activity: data.activity };
+      }
       else if (pathname === "/api/feedback") {
         if (feedbackFailure) { feedbackFailure = false; res.statusCode = 503; result = { ok: false, response: "Feedback unavailable. Retry." }; }
         else {
@@ -99,13 +104,20 @@ function telegramMock({ version }) {
       }
       else if (pathname === "/api/commands") result = { commands: data.commands };
       else if (pathname === "/api/fetch_models") result = { ok: true, models: ["first", "second", "third"] };
-      else if (pathname === "/api/test_model") result = { ok: true, reply: "hello", active_model: "first,second", model_used: "first", working_models: ["first", "second"], failed_models: [], results: [{ model: "first", ok: true, detail: "Working" }, { model: "second", ok: true, detail: "Working" }] };
+      else if (pathname === "/api/test_model") result = { ok: true, reply: "hello", active_model: "first,second", model_used: "first", working_models: ["first", "second"], failed_models: ["third"], results: [{ model: "first", ok: true, detail: "Working" }, { model: "second", ok: true, detail: "Working" }, { model: "third", ok: false, detail: "Unavailable" }] };
       else if (pathname === "/api/cmd") result = { ok: true, response: "Status: active\nMode: restricted_auto" };
       else if (pathname === "/api/action") {
         await new Promise(resolve => setTimeout(resolve, 40));
         if (rejectAction === body.action) { rejectAction = null; result = { ok: false, response: "Save failed. Please retry." }; }
         else {
           result = { ok: true, response: "Saved" };
+          if (body.action === "reaction") data.state.auto_reactions = body.params.value === "on";
+          if (body.action === "temp") data.state.temperature = body.params.value;
+          if (body.action === "quiethours") {
+            const [enabled, start, end] = body.params.value.split(" ");
+            data.state.quiet_hours_enabled = enabled !== "off";
+            if (start && end) { data.state.quiet_hours_start = start; data.state.quiet_hours_end = end; }
+          }
           if (body.action === "feedback") {
             const row = data.activity.find(row => String(row.chat_id) === String(body.params.chat_id) && String(row.message_id) === String(body.params.id));
             assert(row, "feedback must reference a displayed reply");
@@ -154,10 +166,35 @@ function telegramMock({ version }) {
   async function navigate(page, view, group) {
     await page.locator(`.tab[data-view="${view}"]`).click();
     if (group) await page.locator(`#settings-${group}`).evaluate(element => { element.open = true; });
+    await checkControls(page);
+  }
+  async function checkControls(page) {
+    const problems = await page.evaluate(() => {
+      const problems = [], ids = new Set();
+      for (const element of document.querySelectorAll("[id]")) {
+        if (ids.has(element.id)) problems.push(`Duplicate ID: ${element.id}`);
+        ids.add(element.id);
+      }
+      for (const label of document.querySelectorAll("label[for]")) {
+        if (!document.getElementById(label.htmlFor)) problems.push(`Missing label target: ${label.htmlFor}`);
+      }
+      const parents = new Map();
+      for (const button of document.querySelectorAll("button")) {
+        if (!button.getClientRects().length) continue;
+        const label = button.getAttribute("aria-label") || button.textContent.trim() || button.title;
+        if (!label) problems.push("Unnamed visible button");
+        const labels = parents.get(button.parentElement) || new Set();
+        if (labels.has(label)) problems.push(`Duplicate sibling button: ${label}`);
+        labels.add(label); parents.set(button.parentElement, labels);
+      }
+      return problems;
+    });
+    assert.deepEqual(problems, []);
   }
   async function checkSheet(page, title) {
     const sheet = page.locator("#sheet");
     await expect(sheet).toBeVisible();
+    await checkControls(page);
     if (title) await expect(page.locator("#sheet-title")).toContainText(new RegExp(title, "i"));
     assert(await sheet.evaluate(element => element.open && element.matches(":modal")));
     const bounds = await sheet.boundingBox();
@@ -183,6 +220,12 @@ function telegramMock({ version }) {
     }
     const page = await makePage();
     await expect(page.locator("#app")).toBeVisible();
+    await checkControls(page);
+    activityFailure = true;
+    await page.locator("#goto-activity").click();
+    await expect(page.locator("#toast-msg")).toContainText("Activity unavailable");
+    await expect(page.locator("#sheet")).not.toBeVisible();
+    await expect(page.locator("#goto-activity")).toBeEnabled();
     const calls = await page.evaluate(() => window.telegramCalls);
     assert(calls.includes("requestFullscreen") && calls.includes("disableVerticalSwipes"), JSON.stringify({ calls, sdk: await page.evaluate(() => ({ version: window.Telegram?.WebApp?.version, supported: window.Telegram?.WebApp?.isVersionAtLeast?.("8.0") })) }));
     for (const [selector, title] of [["#act-mode", "mode"], ["#act-stop", "Stop"], ["#goto-activity", "Recent"]]) {
@@ -238,7 +281,14 @@ function telegramMock({ version }) {
     await expect(page.locator("#feedback-list .history-row")).toHaveCount(0);
     for (const [action, title] of [[null, "Rohan"], ["prompt", "Prompt"], ["context", "Context"], ["chatty", "Chatty"], ["cooldown", "Cooldown"], ["remove", "Remove"]]) {
       await navigate(page, "chats");
+      await page.evaluate(() => {
+        window.sheetChanges = 0;
+        window.sheetObserver?.disconnect();
+        window.sheetObserver = new MutationObserver(records => { window.sheetChanges += records.filter(record => record.type === "childList").length; });
+        window.sheetObserver.observe(document.getElementById("sheet-body"), { childList: true });
+      });
       await page.locator(".chat-capsule-card").first().click();
+      assert.equal(await page.evaluate(() => window.sheetChanges), 1, "one chat-card tap must open the popup once");
       if (action) await page.locator(`.clay-action-btn[data-action="${action}"]`).click();
       await checkSheet(page, title);
       if (!action) {
@@ -247,10 +297,24 @@ function telegramMock({ version }) {
         await expect(page.locator("#toast-msg")).toContainText("copied");
         assert(await page.locator("#toast").evaluate(element => element.matches(":popover-open")));
         await page.locator("#toast-close").click();
+        await page.evaluate(() => {
+          window.originalClipboardWrite = navigator.clipboard.writeText;
+          navigator.clipboard.writeText = () => Promise.reject(new Error("Clipboard denied"));
+        });
+        await page.locator(".copy-id-btn").click();
+        await expect(page.locator("#toast-msg")).toContainText("ID:");
+        await page.evaluate(() => { navigator.clipboard.writeText = window.originalClipboardWrite; });
+        await page.locator("#toast-close").click();
         assert(await page.locator("#sheet").evaluate(element => element.open));
       }
       await close(page);
     }
+    await page.evaluate(() => { window.sheetChanges = 0; });
+    await page.locator(".chat-capsule-card").nth(2).press("Enter");
+    await checkSheet(page, "Delhi Tech");
+    assert.equal(await page.evaluate(() => window.sheetChanges), 1, "keyboard activation must open the popup once");
+    await expect(page.locator("#sheet-body")).toContainText("Global Default (3s – 8s)");
+    await close(page);
     await page.locator(".chat-capsule-card").first().click();
     await page.locator('.clay-action-btn[data-action="cooldown"]').click();
     await page.locator("#cd-min-input").fill("8");
@@ -288,10 +352,47 @@ function telegramMock({ version }) {
     await expect(page.locator("#ai-baseurl")).toHaveValue("https://unsaved.test/v1");
     assert(await page.evaluate(() => window.savedChip.isConnected), "unchanged live model chips should keep their DOM nodes");
     await page.locator("#ai-fetch-models").click();
-    await checkSheet(page, "Available Models"); await close(page);
+    await checkSheet(page, "Available Models");
+    await page.locator("#popup-deselect-all").click();
+    await expect(page.locator(".model-popup-cb:checked")).toHaveCount(0);
+    await page.locator("#sheet-actions .primary").click();
+    await expect(page.locator("#sheet-error")).toBeVisible();
+    await page.locator("#popup-select-all").click();
+    await expect(page.locator(".model-popup-cb:checked")).toHaveCount(3);
+    const selectionsBefore = requests.filter(request => request.body.action === "save_available_models").length;
+    await page.locator("#sheet-actions .primary").click();
+    await expect(page.locator("#sheet")).not.toBeVisible();
+    assert.equal(requests.filter(request => request.body.action === "save_available_models").length, selectionsBefore + 1);
     await page.locator("#ai-check").click();
-    await checkSheet(page, "Health Check Results"); await close(page);
+    await checkSheet(page, "Health Check Results");
+    await expect(page.locator('.health-result-cb[value="third"]')).toBeDisabled();
+    await close(page);
     await navigate(page, "more", "behavior");
+    await page.context().setOffline(true);
+    await page.locator("#sw-reaction").click();
+    await expect(page.locator("#toast-msg")).toContainText("not queued");
+    await expect(page.locator("#sw-reaction")).toHaveAttribute("aria-checked", "true");
+    await page.locator('[data-qh="off"]').click();
+    await expect(page.locator('[data-qh="02:00 08:00"]')).toHaveClass(/active/);
+    await expect(page.locator("#qh-status-pill")).toHaveText("Active");
+    await page.context().setOffline(false);
+    const reactionBefore = requests.filter(request => request.body.action === "reaction").length;
+    await page.locator("#sw-reaction").click();
+    await expect(page.locator("#sw-reaction")).toHaveAttribute("aria-checked", "false");
+    await navigate(page, "more", "preferences");
+    await page.context().setOffline(true);
+    await page.locator('#seg-temp [data-val="0.2"]').click();
+    await expect(page.locator("#toast-msg")).toContainText("queued");
+    await expect(page.locator('#seg-temp [data-val="0.7"]')).toHaveClass(/active/);
+    await expect(page.locator('#seg-temp [data-val="0.2"]')).not.toHaveClass(/active/);
+    await page.context().setOffline(false);
+    await expect(page.locator('#seg-temp [data-val="0.2"]')).toHaveClass(/active/);
+    await navigate(page, "more", "behavior");
+    assert.equal(requests.filter(request => request.body.action === "reaction").length, reactionBefore + 1);
+    rejectAction = "reaction";
+    await page.locator("#sw-reaction").click();
+    await expect(page.locator("#toast-msg")).toContainText("Save failed");
+    await expect(page.locator("#sw-reaction")).toHaveAttribute("aria-checked", "false");
     for (const help of ["reaction", "ownreact", "multibubble", "typo", "debounce", "followup", "mentiononly"]) {
       await page.locator(`[data-help="${help}"]`).click(); await checkSheet(page, ""); await close(page);
     }
@@ -360,8 +461,14 @@ function telegramMock({ version }) {
     }
     for (const [width, height] of [[320, 568], [412, 915], [800, 360], [840, 900], [1280, 800]]) {
       await page.setViewportSize({ width, height });
-      await navigate(page, "more", "feedback");
-      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `layout must fit ${width}px`);
+      for (const view of ["overview", "chats", "persona", "approvals", "more"]) {
+        await navigate(page, view);
+        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${view} layout must fit ${width}px`);
+      }
+      for (const group of ["ai", "test", "behavior", "preferences", "rules", "safety", "feedback", "history", "backup"]) {
+        await navigate(page, "more", group);
+        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${group} layout must fit ${width}px`);
+      }
       await navigate(page, "chats");
       await page.locator(".chat-capsule-card").first().click(); await checkSheet(page, "Rohan"); await close(page);
     }
@@ -392,7 +499,7 @@ function telegramMock({ version }) {
     await retry.locator("#retry-connection").click();
     await expect(retry.locator("#app")).toBeVisible();
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ popupChecks: popups, viewportSizes: 6, fullscreen: "supported and older clients", formRecovery: "passed", duplicateSaves: "blocked", liveUpdates: "preserve drafts and DOM", history: "filter, pages, retry, safe rendering, live updates", preferences: "download, preview, failed import recovery, owner visibility", replyFeedback: "rate, failed save recovery, filter, edit, clear, permissions, local stages", connectionRetry: "passed", pageErrors: errors.length }));
+    console.log(JSON.stringify({ popupChecks: popups, viewportSizes: 6, tabs: 5, settingsGroups: 9, duplicateControls: "IDs, labels, sibling buttons, single popup per tap", fullscreen: "supported and older clients", formRecovery: "passed", duplicateSaves: "blocked", offlineControls: "confirmed state preserved until server saves", liveUpdates: "preserve drafts and DOM", history: "filter, pages, retry, safe rendering, live updates", preferences: "download, preview, failed import recovery, owner visibility", replyFeedback: "rate, failed save recovery, filter, edit, clear, permissions, local stages", connectionRetry: "passed", pageErrors: errors.length }));
   } finally {
     await browser?.close();
     server.closeAllConnections();
