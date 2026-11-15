@@ -38,6 +38,7 @@ function telegramMock({ version }) {
 }
 
 (async () => {
+  const projectVersion = (await fs.readFile(path.join(root, "../app/__init__.py"), "utf8")).match(/__version__\s*=\s*"([^"]+)"/)[1];
   const source = await fs.readFile(path.join(root, "app.js"), "utf8");
   const fixture = source.match(/const DEMO_DATA = (\{[\s\S]*?\n  \});/);
   assert(fixture, "dashboard fixtures must be available");
@@ -68,7 +69,7 @@ function telegramMock({ version }) {
       let result = {};
       if (pathname === "/api/auth") {
         if (authFailure) { res.statusCode = 503; result = { ok: false, response: "The engine is starting. Try again." }; }
-        else result = { authorized: true, is_main: isMainUser, can_feedback: isMainUser, version: "3.0.8", user: { id: 555000111, name: "Test owner" } };
+        else result = { authorized: true, is_main: isMainUser, can_feedback: isMainUser, version: projectVersion, user: { id: 555000111, name: "Test owner" } };
       } else if (pathname === "/api/state") result = data.state;
       else if (pathname === "/api/history") {
         if (historyFailure) { historyFailure = false; res.statusCode = 503; result = { ok: false, response: "History unavailable. Retry." }; }

@@ -429,7 +429,7 @@ class CommandRouterMixin:
                     "Fix: /addrule <keyword> => <reply> (e.g. /addrule hello => Hey there!)"
                 )
             self.db.add_keyword_rule(kw, reply)
-            return f"✅ Keyword rule added!\n• When message contains: *'{kw}'*\n• Client will reply: \"{reply}\""
+            return f"✅ Keyword rule added!\n• When message contains: *'{kw}'*\n• Model rewrites this reply intent using the chat's prompt and context: \"{reply}\"\n• Normal cooldowns and safety checks still apply."
 
         if cmd == "/delrule":
             if len(cmd_parts) < 2:
@@ -541,7 +541,7 @@ class CommandRouterMixin:
             finally:
                 self.db.record_action("control", "approval_batch", status, f"{sent} sent; {len(pending) - sent} not sent; review pending drafts and history", actor_id=actor_id)
 
-        self._approval_batch_task = asyncio.create_task(deliver())
+        self._approval_batch_task = self.start_background(deliver())
         return f"✅ Approval batch started for {len(pending)} visible drafts. It runs in the background and follows live safety controls."
 
     async def _approve_draft(self, approval_id: int, *, actor_id=None) -> tuple[bool, str]:
@@ -704,9 +704,9 @@ class CommandRouterMixin:
             result = f"✅ {target}{info_str} [ID: `{cid}`] has been added to the allowlist!"
             # Immediately initialize isolated context file, pins, and history for this chat/group
             if hasattr(self, "init_chat_context"):
-                asyncio.create_task(self.init_chat_context(cid))
+                self.start_background(self.init_chat_context(cid))
             elif cid < 0 and self._client:
-                asyncio.create_task(self.generate_chat_voice_profile(cid))
+                self.start_background(self.generate_chat_voice_profile(cid))
 
             if cid < 0:
                 result += "\n\n🧠 _AI is initializing context, reading pinned announcements, and learning how this group talks. Isolated context saved to disk._"

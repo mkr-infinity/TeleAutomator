@@ -22,7 +22,7 @@ def create_ai_provider(config: AppConfig, database: Optional[Any] = None) -> AIP
         active_enabled = database.get_state("ai_enabled") == "1"
 
     if not active_enabled or active_provider == "local":
-        logger.info("Using LocalRuleProvider (offline, privacy-preserving draft mode).")
+        logger.info("No AI model enabled; chat replies remain silent.")
         return LocalRuleProvider()
 
     usage_callback = database.record_token_usage if database else None

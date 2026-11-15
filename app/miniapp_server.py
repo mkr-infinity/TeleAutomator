@@ -362,7 +362,7 @@ class MiniAppAPI:
                     if not (math.isfinite(cooldown_min) and math.isfinite(cooldown_max) and 0 <= cooldown_min <= cooldown_max):
                         raise ValueError("Invalid saved cooldown")
                     if cooldown_min == 0.0 and cooldown_max == 0.0:
-                        cooldown_str = "0s (Instant - No Wait)"
+                        cooldown_str = "0s (No chat wait; global cooldown applies)"
                     else:
                         cooldown_str = f"{int(cooldown_min)}s - {int(cooldown_max)}s"
                 except (ValueError, TypeError, OverflowError):
@@ -1124,6 +1124,9 @@ class MiniAppAPI:
         auto_apply: bool = False,
     ) -> dict:
         """Test chat message live in the GUI, test candidates, auto-prune dead models, and auto-save working rotation."""
+        expected_settings = {key: self.ctx.db.get_state(key) for key in
+                             ("ai_model", "ai_base_url", "ai_api_key", "ai_provider", "ai_enabled", "models_manually_set",
+                              "ai_temperature", "ai_max_tokens", "ai_reasoning_effort")}
         prompt = (message or "hello").strip()
         provider = (
             self.ctx.db.get_state("ai_provider")
@@ -1160,7 +1163,7 @@ class MiniAppAPI:
             or (getattr(getattr(self.ctx, "reply_manager", None), "config", None) and getattr(self.ctx.reply_manager.config, "ai_model", ""))
             or default_model
         )
-        candidates = [m.strip().removeprefix("models/") for m in model_param.replace(";", ",").split(",") if m.strip()]
+        candidates = list(dict.fromkeys(m.strip().removeprefix("models/") for m in model_param.replace(";", ",").split(",") if m.strip()))
         if not candidates:
             candidates = ["gemini-2.5-flash-lite"] if is_gemini else ["gpt-4o-mini"]
 
@@ -1168,10 +1171,15 @@ class MiniAppAPI:
         working_models: list[str] = []
         reply_text = ""
         first_working_model = ""
+        deadline = time.monotonic() + 30.0
 
         if is_gemini:
             for m in candidates:
                 clean_m = m.removeprefix("models/").strip()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    results.append({"model": clean_m, "ok": False, "detail": "Not tested: request time budget exhausted. Retry a smaller selection."})
+                    continue
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_m}:generateContent?key={key}"
                 payload = {
                     "contents": [{"parts": [{"text": prompt}]}],
@@ -1185,7 +1193,7 @@ class MiniAppAPI:
                     method="POST",
                 )
                 try:
-                    with urllib.request.urlopen(req, timeout=12.0) as resp:
+                    with urllib.request.urlopen(req, timeout=min(12.0, remaining)) as resp:
                         body = json.loads(resp.read().decode("utf-8"))
                         choices = body.get("candidates", [])
                         if choices:
@@ -1229,6 +1237,10 @@ class MiniAppAPI:
                 endpoint = raw_endpoint
 
             for m in candidates:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    results.append({"model": m, "ok": False, "detail": "Not tested: request time budget exhausted. Retry a smaller selection."})
+                    continue
                 payload = {
                     "model": m,
                     "messages": [{"role": "user", "content": prompt}],
@@ -1243,7 +1255,7 @@ class MiniAppAPI:
                     method="POST",
                 )
                 try:
-                    with urllib.request.urlopen(req, timeout=12.0) as resp:
+                    with urllib.request.urlopen(req, timeout=min(12.0, remaining)) as resp:
                         body = json.loads(resp.read().decode("utf-8"))
                         choices = body.get("choices", [])
                         if choices:
@@ -1289,18 +1301,25 @@ class MiniAppAPI:
         if working_models:
             updated_chain = ",".join(working_models)
             if should_auto_apply:
-                self.ctx.db.set_state("ai_model", updated_chain)
+                states = {"ai_model": updated_chain, "ai_enabled": "1"}
                 if base_url:
-                    self.ctx.db.set_state("ai_base_url", effective_base)
+                    states["ai_base_url"] = effective_base
                 if api_key:
-                    self.ctx.db.set_state("ai_api_key", api_key)
+                    states["ai_api_key"] = api_key
                 active_provider = "gemini" if is_gemini else (provider if provider not in ("local", "gemini") else "custom")
-                self.ctx.db.set_state("ai_provider", active_provider)
-                self.ctx.db.set_state("ai_enabled", "1")
-                if hasattr(self.ctx.generator, "reload_provider"):
-                    self.ctx.generator.reload_provider()
-                elif hasattr(self.ctx.generator, "provider") and self.ctx.generator.provider:
-                    self.ctx.generator.provider.model = updated_chain
+                states["ai_provider"] = active_provider
+                from app.ai.reply_generator import create_ai_provider
+                planned_db = SimpleNamespace(get_state=lambda key, default="": states.get(key, self.ctx.db.get_state(key, default)),
+                                             record_token_usage=self.ctx.db.record_token_usage)
+                try:
+                    new_provider = create_ai_provider(self.ctx.reply_manager.config, database=planned_db)
+                except Exception:
+                    return {"ok": False, "error": "The provider could not load this rotation. Saved settings were preserved.",
+                            "auto_applied": False, "working_models": working_models, "results": results}
+                if self.ctx.db.apply_preferences(states, [], [], expected_states=expected_settings):
+                    self.ctx.generator.provider = new_provider
+                else:
+                    should_auto_apply = False
 
         primary_err = results[0]["detail"] if results else "All candidate models failed."
         return {
@@ -1311,7 +1330,7 @@ class MiniAppAPI:
             "working_models": working_models,
             "failed_models": [r["model"] for r in results if not r["ok"]],
             "results": results,
-            "active_model": (updated_chain if should_auto_apply else model_param) or model_param,
+            "active_model": (updated_chain if should_auto_apply else self.ctx.db.get_state("ai_model")) or model_param,
             "auto_applied": should_auto_apply and len(working_models) > 0,
         }
 

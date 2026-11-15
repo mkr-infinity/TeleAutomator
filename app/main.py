@@ -206,7 +206,6 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
         done, _ = await asyncio.wait([run_task, wait_stop], return_when=asyncio.FIRST_COMPLETED)
 
         if wait_stop in done:
-            await service.stop()
             run_task.cancel()
         elif run_task in done:
             # Service completed or failed
@@ -226,18 +225,19 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
                         pass
                 raise exc
     finally:
+        tasks = [run_task, wait_stop]
+        if bot_task is not None:
+            tasks.append(bot_task)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         if miniapp_server:
             miniapp_server.stop()
         if http_server:
             http_server.close()
             await http_server.wait_closed()
         await service.stop()
-        if bot_task is not None and not bot_task.done():
-            bot_task.cancel()
-            try:
-                await bot_task
-            except (asyncio.CancelledError, Exception):
-                pass
 
 
 def main() -> None:

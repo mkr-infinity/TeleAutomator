@@ -101,7 +101,7 @@
       title: "Per-Chat Cooldown",
       desc: "Controls the minimum and maximum seconds the bot waits before replying in a specific chat.",
       onText: "Replies are delayed naturally between Min and Max seconds to simulate realistic reading and typing time.",
-      offText: "When Min and Max are set to 0, replies are sent without waiting (instant reply, strictly within anti-spam rate limits).",
+      offText: "When this chat's Min and Max are 0, its own cooldown is disabled. The account-wide cooldown and anti-spam limits still apply.",
     },
   };
 
@@ -269,7 +269,7 @@
       owner_name: "Kaif", ai_engine: "Gemini", ai_model: "gemini-2.5-flash-lite", ai_base_url: "",
       available_models: ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"],
       models_manually_set: false,
-      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.8",
+      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.9",
       auto_reactions: true, ownreact: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
       thinking: "default", temperature: "0.7", lang: "english", max_tokens: "512",
       quiet_hours_start: "02:00", quiet_hours_end: "08:00", quiet_hours_schedule: "02:00 AM – 08:00 AM IST",
@@ -312,7 +312,7 @@
   };
 
   async function demoApi(path, body) {
-    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.8", user: { id: 555000111, name: "Kaif" } };
+    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.9", user: { id: 555000111, name: "Kaif" } };
     if (path === "/api/state") return DEMO_DATA.state;
     if (path === "/api/chats") return { chats: DEMO_DATA.chats, chatty_global: DEMO_DATA.state.chatty_global };
     if (path === "/api/pending") return { pending: DEMO_DATA.pending };
@@ -2970,11 +2970,11 @@
     if (addRuleBtn) {
       addRuleBtn.addEventListener("click", () => {
         openSheet("New Keyword Auto-Reply", `
-          <p class="field-hint" style="margin-top:0">When incoming message contains this keyword, reply instantly:</p>
+          <p class="field-hint" style="margin-top:0">When a message contains this keyword, the model rewrites your reply intent using this chat's prompt and context. Cooldowns still apply.</p>
           <label for="rule-kw-input" style="font-weight:600;font-size:13px;display:block;margin-top:8px">Keyword trigger</label>
           <input id="rule-kw-input" placeholder="e.g. pricing, help, contact">
-          <label for="rule-reply-input" style="font-weight:600;font-size:13px;display:block;margin-top:12px">Auto-reply message</label>
-          <textarea id="rule-reply-input" rows="3" placeholder="e.g. We are updating packages! DM @admin for urgent queries."></textarea>
+          <label for="rule-reply-input" style="font-weight:600;font-size:13px;display:block;margin-top:12px">Reply intent (rewritten by the model)</label>
+          <textarea id="rule-reply-input" rows="3" placeholder="e.g. Explain that the package information is being updated."></textarea>
         `, [
           {
             label: "Add Rule",

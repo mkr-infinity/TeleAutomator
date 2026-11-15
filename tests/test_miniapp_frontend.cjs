@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const assert = require("node:assert/strict");
 const path = require("node:path");
+const projectVersion = fs.readFileSync(path.join(__dirname, "../app/__init__.py"), "utf8").match(/__version__\s*=\s*"([^"]+)"/)[1];
 
 const elements = new Map();
 function element(id) {
@@ -106,7 +107,7 @@ vm.runInContext(source, context, { filename: file });
   const swContext = vm.createContext({
     URL, Response, setTimeout(callback) { callback(); },
     self: { location: { origin }, addEventListener(event, handler) { handlers[event] = handler; }, skipWaiting() {}, clients: { async claim() {} } },
-    caches: { async open() { return cache; }, async keys() { return ["teleautomator-v3.0.4", "teleautomator-v3.0.8", "another-app"]; }, async delete(name) { deleted.push(name); } },
+    caches: { async open() { return cache; }, async keys() { return ["teleautomator-v3.0.4", `teleautomator-v${projectVersion}`, "another-app"]; }, async delete(name) { deleted.push(name); } },
     async fetch() { networkReads++; return new Response("temporarily unavailable", { status: 503 }); },
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../miniapp/sw.js"), "utf8"), swContext);
@@ -121,7 +122,7 @@ vm.runInContext(source, context, { filename: file });
     handlers.fetch({ request: { method: "GET", url }, respondWith() { assert.fail("private APIs and external requests must bypass this cache"); } });
   }
   let asset;
-  handlers.fetch({ request: { method: "GET", mode: "cors", url: origin + "/app.js?v=3.0.8" }, respondWith(promise) { asset = promise; } });
+  handlers.fetch({ request: { method: "GET", mode: "cors", url: origin + `/app.js?v=${projectVersion}` }, respondWith(promise) { asset = promise; } });
   assert.equal(await (await asset).text(), "cached asset");
   assert.equal(networkReads, 0, "versioned assets should load immediately from cache");
   let navigation;

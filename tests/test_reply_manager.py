@@ -42,7 +42,7 @@ def test_draft_only_mode(tmp_path: Path):
         db = Database(tmp_path / "app.db")
         safety = SafetyManager(cfg, db)
         privacy = PrivacyManager(cfg, database=db)
-        generator = ReplyGenerator(cfg)
+        generator = ReplyGenerator(cfg, provider=MagicMock(generate_reply=MagicMock(return_value="The release looks ready")))
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
         mock_client = AsyncMock()
@@ -83,7 +83,7 @@ def test_approval_mode_and_commands(tmp_path: Path):
         db = Database(tmp_path / "app.db")
         safety = SafetyManager(cfg, db)
         privacy = PrivacyManager(cfg, database=db)
-        generator = ReplyGenerator(cfg)
+        generator = ReplyGenerator(cfg, provider=MagicMock(generate_reply=MagicMock(return_value="The release looks ready")))
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
         mock_client = AsyncMock()
@@ -491,7 +491,7 @@ def test_mention_queue_never_skipped(tmp_path: Path, clock):
         safety = SafetyManager(cfg, db)
         safety.set_auto_authorization(True)
         privacy = PrivacyManager(cfg, database=db)
-        generator = ReplyGenerator(cfg)
+        generator = ReplyGenerator(cfg, provider=MagicMock(generate_reply=MagicMock(return_value="The release looks ready")))
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
         mock_client = AsyncMock()
@@ -981,7 +981,7 @@ def test_group_replies_never_quote_participants_but_dm_threading_remains(tmp_pat
         assert sent_calls[0][2] is None
 
         # 2. Even a direct mention must not create another quoted notification.
-        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah true that", adaptive_delay=False, is_mention=True)
+        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah makes sense", adaptive_delay=False, is_mention=True)
         assert len(sent_calls) == 2
         assert sent_calls[1][2] is None
 
@@ -1001,7 +1001,7 @@ def test_group_replies_never_quote_participants_but_dm_threading_remains(tmp_pat
         assert sent_calls[4][2] is None
 
         # 6. An explicit mention still posts to the room.
-        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="good morning guys", adaptive_delay=False, is_mention=True)
+        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="morning everyone", adaptive_delay=False, is_mention=True)
         assert len(sent_calls) == 6
         assert sent_calls[5][2] is None
 
@@ -1677,14 +1677,14 @@ def test_allowchat_details_with_name_and_username(tmp_path: Path):
     asyncio.run(_run())
 
 
-def test_typing_indicator_while_ai_generates(tmp_path: Path):
-    """Verify typing indicator action is triggered while AI generates response in restricted_auto mode."""
+def test_typing_indicator_before_model_generated_reply(tmp_path: Path, clock):
+    """Verify the typing indicator before actual delivery, after a model generated a reply."""
     async def _run():
         cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
         db = Database(tmp_path / "typing_ind.db")
         safety = SafetyManager(cfg, db)
         privacy = PrivacyManager(cfg, database=db)
-        generator = ReplyGenerator(cfg, database=db)
+        generator = ReplyGenerator(cfg, provider=MagicMock(generate_reply=MagicMock(return_value="Release ready today")), database=db)
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
         mgr.set_mode("restricted_auto")
 
@@ -1701,7 +1701,7 @@ def test_typing_indicator_while_ai_generates(tmp_path: Path):
         mock_client.send_message = AsyncMock(return_value=MagicMock(id=999))
         mgr.set_telegram_client(mock_client)
 
-        privacy.allow_chat(12345)
+        enable_auto_replies(mgr, 12345)
         # Handle message in restricted_auto mode
         await mgr.handle_incoming_eligible_message(
             chat_id=12345,
@@ -2048,7 +2048,7 @@ def test_spontaneous_followup_command_and_execution(tmp_path: Path, clock):
         db = Database(tmp_path / "followup.db")
         safety = SafetyManager(cfg, db)
         privacy = PrivacyManager(cfg, database=db)
-        generator = ReplyGenerator(cfg, database=db)
+        generator = ReplyGenerator(cfg, provider=MagicMock(generate_reply=MagicMock(return_value="The release looks ready")), database=db)
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
         # 1. /followup command tests
@@ -2116,7 +2116,7 @@ def test_incoming_burst_debouncer(tmp_path: Path):
         db = Database(tmp_path / "debounce.db")
         safety = SafetyManager(cfg, db)
         privacy = PrivacyManager(cfg, database=db)
-        generator = ReplyGenerator(cfg, database=db)
+        generator = ReplyGenerator(cfg, provider=MagicMock(generate_reply=MagicMock(return_value="The release looks ready")), database=db)
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
         # 1. /debounce command checks
@@ -2275,7 +2275,7 @@ def test_group_broadcast_and_human_engagement(tmp_path: Path):
         db = Database(tmp_path / "group_engage.db")
         safety = SafetyManager(cfg, db)
         privacy = PrivacyManager(cfg, database=db)
-        generator = ReplyGenerator(cfg, database=db)
+        generator = ReplyGenerator(cfg, provider=MagicMock(generate_reply=MagicMock(return_value="The release looks ready")), database=db)
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
         safety.set_auto_authorization(True)
 

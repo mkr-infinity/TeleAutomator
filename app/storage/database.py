@@ -332,10 +332,16 @@ class Database:
                                 (*params, max(1, min(100, limit)))).fetchall()
             return [dict(row) for row in rows]
 
-    def apply_preferences(self, states: Dict[str, str], contexts: List[Dict[str, Any]], rules: List[Dict[str, str]]) -> None:
+    def apply_preferences(self, states: Dict[str, str], contexts: List[Dict[str, Any]], rules: List[Dict[str, str]], *, expected_states=None) -> bool:
         """Apply a validated preference plan atomically, then refresh isolated context files."""
         with self._context_lock:
             with self._get_connection() as conn:
+                if expected_states is not None:
+                    conn.execute("BEGIN IMMEDIATE")
+                    for key, expected in expected_states.items():
+                        row = conn.execute("SELECT value FROM runtime_state WHERE key=?", (key,)).fetchone()
+                        if (row["value"] if row else "") != expected:
+                            return False
                 conn.executemany(
                     "INSERT INTO runtime_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                     [*states.items(), ("state_revision", str(time.time_ns()))],
@@ -352,6 +358,7 @@ class Database:
                 )
             for context in contexts:
                 self.sync_chat_context_file(context["id"])
+            return True
 
     def add_keyword_rule(self, keyword: str, reply: str) -> None:
         """Add or update custom trigger keyword and reply."""

@@ -8,8 +8,12 @@ import json
 import time
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+
+from app.config import AppConfig
+from app import __version__
 
 from app.miniapp_server import (
     PAYWALL,
@@ -66,7 +70,7 @@ class FakeReplyManager:
     config = type("C", (), {"reply_mode": "restricted_auto"})()
 
     def __init__(self):
-        self.config = type("C", (), {"reply_mode": "restricted_auto"})()
+        self.config = SimpleNamespace(**vars(AppConfig(api_id=123, api_hash="fixture-hash", reply_mode="restricted_auto", ai_model="gemini-2.5-flash-lite")))
         self.commands = []
 
     async def handle_control_command(self, command, **_audit):
@@ -623,7 +627,7 @@ def test_service_worker_asset_and_registration():
     sw_file = miniapp_dir / "sw.js"
     assert sw_file.is_file()
     sw_content = sw_file.read_text(encoding="utf-8")
-    assert "teleautomator-v3.0.8" in sw_content
+    assert f"teleautomator-v{__version__}" in sw_content
     assert "caches.open" in sw_content
     assert "self.skipWaiting" in sw_content
     assert "self.clients.claim" in sw_content
@@ -741,7 +745,7 @@ def test_chat_cooldown_action_and_chats_payload(tmp_path):
     c_zero = next(x for x in api.handle_chats()["chats"] if x["id"] == 111)
     assert c_zero["cooldown_min"] == 0.0
     assert c_zero["cooldown_max"] == 0.0
-    assert c_zero["cooldown_str"] == "0s (Instant - No Wait)"
+    assert c_zero["cooldown_str"] == "0s (No chat wait; global cooldown applies)"
 
     # Reset cooldown to global default
     res_reset = api.handle_action(555000111, "chat_cooldown", {"chat_id": 111, "reset": True})

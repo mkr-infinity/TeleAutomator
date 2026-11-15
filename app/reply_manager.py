@@ -56,6 +56,9 @@ class ReplyManager(CommandRouterMixin):
         self.generator = reply_generator
         self.context_agent = ContextAgent(database, privacy_manager, reply_generator)
         self._approval_batch_task = None
+        self._background_tasks = set()
+        self._context_initializing = set()
+        self._closed = False
         self._client: Any = None
         # Optional Bot API control channel (set by main.py when BOT_API_KEY is configured).
         # When set: all alerts route to the bot's main user, Saved Messages stays as delivery fallback only.
@@ -125,6 +128,38 @@ class ReplyManager(CommandRouterMixin):
         """Attach the active Telethon client."""
         self._client = client
 
+    def start_background(self, coroutine):
+        task = asyncio.create_task(coroutine)
+        self._background_tasks.add(task)
+        if self._closed:
+            task.cancel()
+
+        def finished(completed):
+            self._background_tasks.discard(completed)
+            if not completed.cancelled() and completed.exception():
+                logger.error("Background reply task failed: %s", type(completed.exception()).__name__)
+
+        task.add_done_callback(finished)
+        return task
+
+    async def close(self):
+        self._closed = True
+        tasks = self._background_tasks | set(self._debounce_tasks.values()) | set(self._pending_deferred_replies.values())
+        if self._approval_batch_task:
+            tasks.add(self._approval_batch_task)
+        tasks.discard(asyncio.current_task())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._background_tasks.clear()
+        self._debounce_tasks.clear()
+        self._debounce_buffers.clear()
+        self._debounce_first_time.clear()
+        self._debounce_last_time.clear()
+        self._pending_deferred_replies.clear()
+        await self.context_agent.close()
+
     def _outgoing_text_reason(self, chat_id: int, text: str, names=()) -> str:
         normalized = " ".join(text.strip()[:300].casefold().split()).rstrip(".!?")
         if any(row["rating"] != "helpful" and " ".join(row["reply_text"].casefold().split()).rstrip(".!?") == normalized
@@ -138,7 +173,7 @@ class ReplyManager(CommandRouterMixin):
 
     def _outgoing_allowed(self, chat_id: int, approved: bool = False, allow_quiet_hours: bool = False) -> bool:
         return (
-            self.privacy.is_chat_allowed(chat_id, chat_id < 0)
+            not self._closed and self.privacy.is_chat_allowed(chat_id, chat_id < 0)
             and not self.safety.action_block_reason(allow_quiet_hours)
             and (approved or (self.current_mode == "restricted_auto" and self.safety.is_auto_authorized
                               and self.db.get_state("safe_mode_active", "0") != "1"))
@@ -151,8 +186,34 @@ class ReplyManager(CommandRouterMixin):
         main_id = int(self.db.get_state("main_owner_id", "0") or 0) or min(self.config.bot_authorized_users or {0})
         return operator_id in authorized_user_ids(self.db, self.config.bot_authorized_users) and can_run_command(self.db, operator_id, "/approve", main_id)
 
-    async def _deliver_message(self, chat_id: int, text: str, reply_to=None, *, approved: bool = False, allow_quiet_hours: bool = False, context=None, operator_id=None):
+    async def _typing_burst(self, chat_id, duration):
+        if duration <= 0:
+            return
+        try:
+            action = self._client.action(chat_id, "typing")
+            if hasattr(action, "__aenter__"):
+                async with action:
+                    await asyncio.sleep(duration)
+                return
+            if asyncio.iscoroutine(action):
+                await action
+        except Exception:
+            logger.debug("Typing indicator unavailable for chat %s", chat_id)
+        await asyncio.sleep(duration)
+
+    async def _type_before_send(self, chat_id, duration):
+        if duration < 3.5:
+            await self._typing_burst(chat_id, duration)
+            return
+        first = round(duration / 2, 1)
+        await self._typing_burst(chat_id, first)
+        await asyncio.sleep(random.uniform(0.8, 1.4))
+        await self._typing_burst(chat_id, duration - first)
+
+    async def _deliver_message(self, chat_id: int, text: str, reply_to=None, *, approved: bool = False, allow_quiet_hours: bool = False, context=None, operator_id=None, typing_seconds=None):
         text = capitalize_message(text)
+        if typing_seconds is None:
+            typing_seconds = random.uniform(3.0, 7.0) if self.typing_delay > 0 else 0.0
         # Group messages go to the room without a quoted reply notification.
         reply_to = reply_to if chat_id > 0 and reply_to and reply_to > 0 else None
         if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours):
@@ -165,6 +226,8 @@ class ReplyManager(CommandRouterMixin):
             async with self._outgoing_lock:
                 if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours) or not self.context_agent.is_current(context) or not self._operator_allowed(operator_id):
                     return None
+                if not self._prevent_duplicate_reply(chat_id, text):
+                    return None
                 can_send, reason = self.safety.can_reply(chat_id, text, allow_quiet_hours=allow_quiet_hours)
                 wait = self.safety.burst_wait_needed(chat_id)
                 if not can_send:
@@ -172,6 +235,12 @@ class ReplyManager(CommandRouterMixin):
                         return None
                     wait = max(wait, self.safety.cooldown_remaining(chat_id)[0])
                 if can_send and wait <= 0:
+                    await self._type_before_send(chat_id, typing_seconds)
+                    if (not self._outgoing_allowed(chat_id, approved, allow_quiet_hours)
+                            or not self.context_agent.is_current(context) or not self._operator_allowed(operator_id)):
+                        return None
+                    if not self.safety.can_reply(chat_id, text, allow_quiet_hours=allow_quiet_hours)[0] or self.safety.burst_wait_needed(chat_id) > 0:
+                        continue
                     reason = self._outgoing_text_reason(chat_id, text)
                     if reason:
                         self.db.record_action("automation", "reply", "blocked", reason, chat_id=chat_id)
@@ -184,6 +253,10 @@ class ReplyManager(CommandRouterMixin):
                         message = await self._client.send_message(chat_id, text)
                     self.safety.mark_reply_sent(chat_id)
                     self.safety.record_burst_send(chat_id)
+                    recent = self._recent_replies_history.setdefault(chat_id, [])
+                    recent.append(text)
+                    del recent[:-12]
+                    self._save_recent_replies_history()
                     self.db.record_action("automation", "reply", "sent", "Message delivered", chat_id=chat_id)
                     return message
             # Release the account lock while waiting so another chat can proceed.
@@ -242,7 +315,7 @@ class ReplyManager(CommandRouterMixin):
 
     async def sync_pinned_context_from_telegram(self, chat_id: int) -> Optional[str]:
         """Fetch pinned messages from Telegram for chat_id, distill with AI, and store permanently."""
-        if not self._client or not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
+        if not self._client or self._closed or not self.context_agent.allowed(chat_id):
             return None
         try:
             from telethon.tl.types import InputMessagesFilterPinned
@@ -253,15 +326,22 @@ class ReplyManager(CommandRouterMixin):
             except Exception:
                 pass
 
+            if self._closed or not self.context_agent.allowed(chat_id):
+                return None
             pinned_msgs = await self._client.get_messages(chat_id, filter=InputMessagesFilterPinned, limit=5)
+            if self._closed or not self.context_agent.allowed(chat_id):
+                return None
             if pinned_msgs:
-                texts = [m.text.strip() for m in pinned_msgs if getattr(m, "text", None) and m.text.strip()]
+                texts = [self.privacy.sanitize_text(m.text.strip()) for m in pinned_msgs
+                         if getattr(m, "text", None) and m.text.strip() and not self.safety.is_sensitive(m.text)]
                 if texts:
                     raw_combined = "\n---\n".join(texts)
                     loop = asyncio.get_running_loop()
                     distilled = await loop.run_in_executor(
                         None, self.generator.distill_group_context, chat_title, raw_combined
                     )
+                    if self._closed or not self.context_agent.allowed(chat_id):
+                        return None
                     pinned_content = distilled if distilled else raw_combined[:1500]
                     self.db.set_permanent_context(chat_id, pinned_text=pinned_content)
                     logger.info(f"AI-distilled permanent pinned context for '{chat_title}' ({chat_id}): {len(pinned_content)} chars")
@@ -272,12 +352,14 @@ class ReplyManager(CommandRouterMixin):
 
     async def generate_chat_voice_profile(self, chat_id: int, min_messages: int = 45) -> Optional[str]:
         """Fetch 40+ recent messages of a group, AI learns how its people talk, store permanently."""
-        if not self._client or chat_id >= 0 or not self.privacy.is_chat_allowed(chat_id, True):
+        if not self._client or chat_id >= 0 or self._closed or not self.context_agent.allowed(chat_id):
             logger.debug(f"Voice profile skipped for chat {chat_id}: client attached={bool(self._client)}, is_group={chat_id < 0}")
             return None
         try:
             entity = await self._client.get_entity(chat_id)
             chat_title = getattr(entity, "title", "") or str(chat_id)
+            if self._closed or not self.context_agent.allowed(chat_id):
+                return None
             msgs = await self._client.get_messages(chat_id, limit=min_messages)
             lines: list[str] = []
             for m in msgs:
@@ -296,9 +378,13 @@ class ReplyManager(CommandRouterMixin):
                 logger.info(f"[VOICE PROFILE] Chat {chat_id}: only {len(lines)} text messages available (need 10+); skipping for now.")
                 return None
             loop = asyncio.get_running_loop()
+            if self._closed or not self.context_agent.allowed(chat_id):
+                return None
             profile = await loop.run_in_executor(
                 None, self.generator.generate_voice_profile, chat_title, "\n".join(lines)
             )
+            if self._closed or not self.context_agent.allowed(chat_id):
+                return None
             if profile:
                 self.db.set_state(f"chat_voice_profile_{chat_id}", profile)
                 logger.info(f"[VOICE PROFILE] Saved AI voice profile for '{chat_title}' ({chat_id}): {len(profile)} chars")
@@ -319,6 +405,8 @@ class ReplyManager(CommandRouterMixin):
         is_mention: bool = False,
     ) -> None:
         """Process an incoming message that has passed initial message filters."""
+        if self._closed:
+            return
         # Suggestion 1: Incoming message burst debouncer (message stitching)
         debounce_enabled = self.db.get_state("debounce_enabled", "1") == "1"
         raw_db_sec = self.db.get_state("debounce_seconds", "3.0")
@@ -364,7 +452,7 @@ class ReplyManager(CommandRouterMixin):
         self._debounce_last_time[chat_id] = now
 
         if chat_id not in self._debounce_tasks or self._debounce_tasks[chat_id].done():
-            self._debounce_tasks[chat_id] = asyncio.create_task(
+            self._debounce_tasks[chat_id] = self.start_background(
                 self._debounce_worker(chat_id, debounce_sec)
             )
 
@@ -446,7 +534,7 @@ class ReplyManager(CommandRouterMixin):
         is_mention: bool = False,
     ) -> None:
         """Process a single or stitched incoming message."""
-        if not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
+        if self._closed or not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
             return
         if self.current_mode == "restricted_auto" and self.safety.action_block_reason():
             return
@@ -484,100 +572,78 @@ class ReplyManager(CommandRouterMixin):
             return
         conversation_history = context.history
 
-        # Check for custom keyword trigger rule before calling AI
         matched_rule = self.db.match_keyword_rule(clean_text)
-        if matched_rule:
-            logger.info(f"[KEYWORD TRIGGER] Matched custom trigger rule for chat {chat_id}.")
-            draft = matched_rule
-        else:
-            try:
-                # Permanent chat context (pinned messages + important notes)
-                perm_ctx = self.db.get_permanent_context(chat_id)
-                pinned_text = perm_ctx.get("pinned_text", "")
+        try:
+            # Permanent chat context (pinned messages + important notes)
+            perm_ctx = self.db.get_permanent_context(chat_id)
+            pinned_text = perm_ctx.get("pinned_text", "")
 
-                # If this is a group and no pinned messages have been cached yet, auto-fetch
-                if chat_id < 0 and not pinned_text:
-                    fetched_pin = await self.sync_pinned_context_from_telegram(chat_id)
-                    if fetched_pin:
-                        pinned_text = fetched_pin
+            # If this is a group and no pinned messages have been cached yet, auto-fetch
+            if chat_id < 0 and not pinned_text:
+                fetched_pin = await self.sync_pinned_context_from_telegram(chat_id)
+                if fetched_pin:
+                    pinned_text = fetched_pin
 
-                # Rebuild after fetching pins; each stage receives the same chat snapshot.
-                if not self.context_agent.is_current(context):
-                    return
-                context = self.context_agent.snapshot(chat_id, conversation_history, is_mention=is_mention)
-                if context is None:
-                    return
-                permanent_context_str = context.background or None
-                chat_style, chat_persona = context.style, context.persona
-                conversation_history = context.history
-
-                async def _do_generate():
-                    if not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
-                        return ""
-                    return await asyncio.to_thread(
-                        self.generator.generate,
-                        sender_name=sender_name,
-                        incoming_text=clean_text,
-                        conversation_history=conversation_history,
-                        style_override=chat_style or None,
-                        persona_override=chat_persona or None,
-                        permanent_context=permanent_context_str,
-                        is_group=(chat_id < 0),
-                        is_mention=is_mention,
-                    )
-
-                # Suggestion 1: Natural Read-Receipt Delay Simulation (2–4s hesitation before marking read)
-                if self._client and self.current_mode == "restricted_auto" and (self.min_delay > 0 or self.max_delay > 0):
-                    read_hesitation = random.uniform(2.0, 4.0)
-                    await asyncio.sleep(read_hesitation)
-                    try:
-                        if hasattr(self._client, "send_read_acknowledge"):
-                            ack_res = self._client.send_read_acknowledge(chat_id, max_id=message_id)
-                            if asyncio.iscoroutine(ack_res):
-                                await ack_res
-                            logger.debug(f"[READ RECEIPT] Marked message {message_id} as read in chat {chat_id}.")
-                    except Exception as e:
-                        logger.debug(f"[READ RECEIPT] Could not send read acknowledgement: {e}")
-                    # Brief pause before starting to type
-                    await asyncio.sleep(random.uniform(0.8, 1.5))
-
-                # Show typing indicator in chat or group while AI thinks/generates reply
-                if self._client and self.current_mode == "restricted_auto":
-                    try:
-                        if hasattr(self._client, "action") and callable(self._client.action):
-                            act = self._client.action(chat_id, "typing")
-                            if hasattr(act, "__aenter__"):
-                                async with act:
-                                    draft = await _do_generate()
-                            else:
-                                if asyncio.iscoroutine(act):
-                                    try:
-                                        await act
-                                    except Exception:
-                                        pass
-                                draft = await _do_generate()
-                        else:
-                            draft = await _do_generate()
-                    except Exception:
-                        draft = await _do_generate()
-                else:
-                    draft = await _do_generate()
-            except Exception as e:
-                logger.error(f"Failed to generate AI reply for chat {chat_id}: {e}")
-                self.db.record_action("automation", "provider", "failed", "Reply generation failed; check provider credentials, endpoint, and model", chat_id=chat_id)
-                # AI provider/model/API-key failure: always alert Saved Messages so the owner can fix it fast.
-                if not is_mention:
-                    provider = getattr(self.generator.config, "ai_provider", "")
-                    await self._notify_issue_to_saved_messages(
-                        chat_id=chat_id,
-                        chat_title=chat_title,
-                        sender_name=sender_name,
-                        error_msg=f"AI provider/model failed (provider='{provider}', all fallbacks exhausted): {e}",
-                        incoming_text=clean_text,
-                        force=True,
-                        message_id=message_id,
-                    )
+            # Rebuild after fetching pins; each stage receives the same chat snapshot.
+            if not self.context_agent.is_current(context):
                 return
+            context = self.context_agent.snapshot(chat_id, conversation_history, is_mention=is_mention)
+            if context is None:
+                return
+            permanent_context_str = context.background or None
+            if matched_rule:
+                permanent_context_str = (context.background + "\n\nOwner keyword reply intent (rewrite naturally for this conversation, never copy verbatim):\n" + matched_rule)
+            chat_style, chat_persona = context.style, context.persona
+            conversation_history = context.history
+
+            async def _do_generate():
+                if not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
+                    return ""
+                return await asyncio.to_thread(
+                    self.generator.generate,
+                    sender_name=sender_name,
+                    incoming_text=clean_text,
+                    conversation_history=conversation_history,
+                    style_override=chat_style or None,
+                    persona_override=chat_persona or None,
+                    permanent_context=permanent_context_str,
+                    is_group=(chat_id < 0),
+                    is_mention=is_mention,
+                )
+
+            # Suggestion 1: Natural Read-Receipt Delay Simulation (2–4s hesitation before marking read)
+            if self._client and self.current_mode == "restricted_auto" and (self.min_delay > 0 or self.max_delay > 0):
+                read_hesitation = random.uniform(2.0, 4.0)
+                await asyncio.sleep(read_hesitation)
+                try:
+                    if hasattr(self._client, "send_read_acknowledge"):
+                        ack_res = self._client.send_read_acknowledge(chat_id, max_id=message_id)
+                        if asyncio.iscoroutine(ack_res):
+                            await ack_res
+                        logger.debug(f"[READ RECEIPT] Marked message {message_id} as read in chat {chat_id}.")
+                except Exception as e:
+                    logger.debug(f"[READ RECEIPT] Could not send read acknowledgement: {e}")
+                # Brief pause before starting to type
+                await asyncio.sleep(random.uniform(0.8, 1.5))
+
+            draft = await _do_generate()
+
+        except Exception as e:
+            logger.error(f"Failed to generate AI reply for chat {chat_id}: {e}")
+            self.db.record_action("automation", "provider", "failed", "Reply generation failed; check provider credentials, endpoint, and model", chat_id=chat_id)
+            # AI provider/model/API-key failure: always alert Saved Messages so the owner can fix it fast.
+            if not is_mention:
+                provider = getattr(self.generator.config, "ai_provider", "")
+                await self._notify_issue_to_saved_messages(
+                    chat_id=chat_id,
+                    chat_title=chat_title,
+                    sender_name=sender_name,
+                    error_msg=f"AI provider/model failed (provider='{provider}', all fallbacks exhausted): {e}",
+                    incoming_text=clean_text,
+                    force=True,
+                    message_id=message_id,
+                )
+            return
 
         if not self.context_agent.is_current(context):
             self.db.record_action("humanizer", "reply", "skipped", "Conversation changed while the reply was being written", chat_id=chat_id)
@@ -602,6 +668,8 @@ class ReplyManager(CommandRouterMixin):
 
         # Prevent repeating the same word or exact reply consecutively in this chat
         draft = self._prevent_duplicate_reply(chat_id, capitalize_message(draft))
+        if not draft:
+            return
 
         mode = self.current_mode
 
@@ -694,7 +762,7 @@ class ReplyManager(CommandRouterMixin):
                         f"[REPLY QUEUED] Cooldown/rate-limit active for chat {chat_id}. "
                         f"Waiting for the current limits before sending."
                     )
-                    task = asyncio.create_task(
+                    task = self.start_background(
                         self._schedule_deferred_reply(chat_id, message_id, draft, is_mention=is_mention, context=context)
                     )
                     self._pending_deferred_replies[chat_id] = task
@@ -719,7 +787,7 @@ class ReplyManager(CommandRouterMixin):
             if sent:
                 self.context_agent.observe(chat_id)
 
-    async def refresh_single_chat_summary(self, chat_id: int, min_new_messages: int = 8, force: bool = False, max_payload: int = 40) -> None:
+    async def refresh_single_chat_summary(self, chat_id: int, min_new_messages: int = 8, force: bool = False, max_payload: int = 50) -> None:
         """Delegate batched memory updates to the context stage."""
         await self.context_agent.refresh(chat_id, min_new_messages, force, max_payload)
 
@@ -727,8 +795,9 @@ class ReplyManager(CommandRouterMixin):
         """Immediately initialize, fetch, and build the isolated context file for a newly added chat or group.
         Ensures AI has full context (pins, recent messages, voice profile, recap) before sending any message.
         """
-        if not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
+        if self._closed or chat_id in self._context_initializing or not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
             return
+        self._context_initializing.add(chat_id)
         try:
             title = ""
             username = ""
@@ -753,8 +822,8 @@ class ReplyManager(CommandRouterMixin):
             if self.db:
                 self.db.record_chat_metadata(chat_id, title=title, username=username, chat_type=chat_type)
 
-            # For groups: fetch pinned announcements from Telegram and distill into permanent context
-            if chat_id < 0 and self._client:
+            # Fetch and summarize pins for private chats as well as groups.
+            if self._client:
                 try:
                     await self.sync_pinned_context_from_telegram(chat_id)
                 except Exception as e:
@@ -802,6 +871,8 @@ class ReplyManager(CommandRouterMixin):
             logger.info(f"[INIT CONTEXT] Successfully initialized permanent context for chat {chat_id} ({title}).")
         except Exception as e:
             logger.warning(f"[INIT CONTEXT] Error initializing context for chat {chat_id}: {e}")
+        finally:
+            self._context_initializing.discard(chat_id)
 
     async def check_daily_quota_warning(self) -> None:
         """Daily quota threshold alerts have been disabled and removed."""
@@ -833,7 +904,7 @@ class ReplyManager(CommandRouterMixin):
                 self._pending_deferred_replies.pop(chat_id, None)
             sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True, is_mention=is_mention, context=context)
             if sent:
-                asyncio.create_task(self.refresh_single_chat_summary(chat_id))
+                self.start_background(self.refresh_single_chat_summary(chat_id))
                 logger.info(f"[DEFERRED REPLY SENT] Successfully replied to chat {chat_id} after cooldown.")
         except asyncio.CancelledError:
             logger.debug(f"[DEFERRED REPLY CANCELLED] Deferred reply task for chat {chat_id} was cancelled.")
@@ -1598,7 +1669,7 @@ class ReplyManager(CommandRouterMixin):
         """Update last activity timestamp for group."""
         self._last_group_activity[chat_id] = time.time()
 
-    async def refresh_group_summaries(self, min_new_messages: int = 15, max_payload: int = 40) -> None:
+    async def refresh_group_summaries(self, min_new_messages: int = 15, max_payload: int = 50) -> None:
         """AI-generated rolling context recap per busy allowlisted group (saved for prompts).
         Busy chats (>=5 msgs/2min) summarize from ~8 new messages; quiet chats keep the 15-msg bar."""
         groups: set = set()
@@ -1796,71 +1867,13 @@ class ReplyManager(CommandRouterMixin):
                         logger.warning(f"Reply to chat {chat_id} aborted: emergency stop triggered during delay.")
                         return False
 
-                    # Phase 2: Active typing indicator before sending (3-10s)
-                    if typing_duration > 0:
-                        try:
-                            if hasattr(self._client, "action") and callable(self._client.action):
-                                if typing_duration >= 3.5:
-                                    burst1 = round(typing_duration * 0.5, 1)
-                                    pause = round(random.uniform(0.8, 1.4), 1)
-                                    burst2 = max(0.8, round(typing_duration - burst1, 1))
-
-                                    act1 = self._client.action(chat_id, "typing")
-                                    if hasattr(act1, "__aenter__"):
-                                        async with act1:
-                                            await asyncio.sleep(burst1)
-                                    else:
-                                        if asyncio.iscoroutine(act1):
-                                            try:
-                                                await act1
-                                            except Exception:
-                                                pass
-                                        await asyncio.sleep(burst1)
-
-                                    # Brief hesitation/pause
-                                    await asyncio.sleep(pause)
-
-                                    act2 = self._client.action(chat_id, "typing")
-                                    if hasattr(act2, "__aenter__"):
-                                        async with act2:
-                                            await asyncio.sleep(burst2)
-                                    else:
-                                        if asyncio.iscoroutine(act2):
-                                            try:
-                                                await act2
-                                            except Exception:
-                                                pass
-                                        await asyncio.sleep(burst2)
-                                else:
-                                    act = self._client.action(chat_id, "typing")
-                                    if hasattr(act, "__aenter__"):
-                                        async with act:
-                                            await asyncio.sleep(typing_duration)
-                                    else:
-                                        if asyncio.iscoroutine(act):
-                                            try:
-                                                await act
-                                            except Exception:
-                                                pass
-                                        await asyncio.sleep(typing_duration)
-                            else:
-                                await asyncio.sleep(typing_duration)
-                        except Exception as e:
-                            logger.debug(f"[TYPING ACTION] Error: {e}")
-                            await asyncio.sleep(typing_duration)
 
                 # Send first message part
-                first_sent = await self._deliver_message(chat_id, first_part, reply_to_msg_id, approved=approved, allow_quiet_hours=allow_quiet_hours, context=context, operator_id=operator_id)
+                first_sent = await self._deliver_message(chat_id, first_part, reply_to_msg_id, approved=approved, allow_quiet_hours=allow_quiet_hours, context=context, operator_id=operator_id, typing_seconds=typing_duration)
                 if first_sent is None:
                     return False
                 sent_any = True
                 self._last_sent_reply_by_chat[chat_id] = first_part
-                if chat_id not in self._recent_replies_history:
-                    self._recent_replies_history[chat_id] = []
-                self._recent_replies_history[chat_id].append(first_part)
-                while len(self._recent_replies_history[chat_id]) > 12:
-                    self._recent_replies_history[chat_id].pop(0)
-                self._save_recent_replies_history()
                 if chat_id < 0:
                     self.mark_group_activity(chat_id)
                 first_msg_id = getattr(first_sent, "id", 0)
@@ -1891,14 +1904,17 @@ class ReplyManager(CommandRouterMixin):
 
                 # Quick-fire typo self-edit: seamlessly edit the sent message clean ~1.5-3s later (human in-place edit)
                 if edit_fix_original is not None and first_msg_id and not self.safety.is_emergency_stopped:
-                    self._last_sent_reply_by_chat[chat_id] = edit_fix_original
-                    if self._recent_replies_history.get(chat_id):
-                        self._recent_replies_history[chat_id][-1] = edit_fix_original
                     await asyncio.sleep(random.uniform(1.5, 3.0))
-                    if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours):
+                    if (not self._outgoing_allowed(chat_id, approved, allow_quiet_hours)
+                            or not self._operator_allowed(operator_id) or not self.context_agent.is_current(context)
+                            or self._outgoing_text_reason(chat_id, edit_fix_original)):
                         return True
                     try:
                         await self._client.edit_message(chat_id, first_msg_id, edit_fix_original)
+                        self._last_sent_reply_by_chat[chat_id] = edit_fix_original
+                        self._recent_replies_history[chat_id] = [edit_fix_original if text == first_part else text
+                                                                for text in self._recent_replies_history.get(chat_id, [])]
+                        self._save_recent_replies_history()
                         logger.info(f"[SELF EDIT] Edited own message {first_msg_id} in chat {chat_id} to fix the typo.")
                         self.db.record_chat_message(
                             chat_id=chat_id,
@@ -1926,7 +1942,7 @@ class ReplyManager(CommandRouterMixin):
                     and self.current_mode == "restricted_auto"
                 ):
                     if random.random() < 0.18:
-                        asyncio.create_task(
+                        self.start_background(
                             self._schedule_spontaneous_followup(
                                 chat_id=chat_id,
                                 sent_text=first_part,
@@ -1952,25 +1968,8 @@ class ReplyManager(CommandRouterMixin):
                     if followup_pause > 0:
                         await asyncio.sleep(followup_pause)
 
-                    try:
-                        if hasattr(self._client, "action") and callable(self._client.action):
-                            act = self._client.action(chat_id, "typing")
-                            if hasattr(act, "__aenter__"):
-                                async with act:
-                                    await asyncio.sleep(followup_typing)
-                            else:
-                                if asyncio.iscoroutine(act):
-                                    try:
-                                        await act
-                                    except Exception:
-                                        pass
-                                await asyncio.sleep(followup_typing)
-                        else:
-                            await asyncio.sleep(followup_typing)
-                    except Exception:
-                        await asyncio.sleep(followup_typing)
 
-                    sub_sent = await self._deliver_message(chat_id, part, approved=approved, allow_quiet_hours=allow_quiet_hours, context=context, operator_id=operator_id)
+                    sub_sent = await self._deliver_message(chat_id, part, approved=approved, allow_quiet_hours=allow_quiet_hours, context=context, operator_id=operator_id, typing_seconds=followup_typing)
                     if sub_sent is None:
                         break
                     sub_msg_id = getattr(sub_sent, "id", 0)

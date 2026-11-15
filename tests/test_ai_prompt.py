@@ -85,7 +85,8 @@ def test_reply_generator_with_history(tmp_path: Path):
         data_dir=tmp_path,
         ai_enabled=False,  # Uses LocalRuleProvider
     )
-    generator = ReplyGenerator(cfg, provider=LocalRuleProvider())
+    from unittest.mock import MagicMock
+    generator = ReplyGenerator(cfg, provider=MagicMock(generate_reply=MagicMock(return_value="The release looks ready")))
     assert generator.style == "casual"
     generator.set_style("concise")
     assert generator.style == "concise"
@@ -552,7 +553,7 @@ def test_reply_generator_end_to_end_with_custom_prompt():
     """Verify ReplyGenerator.generate_reply works end-to-end without NameError on 're'."""
     from unittest.mock import MagicMock
     cfg = MagicMock()
-    provider = LocalRuleProvider()
+    provider = MagicMock(generate_reply=MagicMock(return_value="The release looks ready"))
     generator = ReplyGenerator(config=cfg, provider=provider)
 
     reply = generator.generate(

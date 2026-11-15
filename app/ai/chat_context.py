@@ -30,6 +30,7 @@ class ContextAgent:
     def __init__(self, database, privacy, generator):
         self.db, self.privacy, self.generator = database, privacy, generator
         self.pending = {}
+        self.dirty = set()
         self.summary_tasks = set()
         self.busy = set()
         self.last_attempt = {}
@@ -39,7 +40,10 @@ class ContextAgent:
         return not self.closed and self.privacy.is_chat_allowed(chat_id, chat_id < 0)
 
     def observe(self, chat_id):
-        if not self.allowed(chat_id) or chat_id in self.pending:
+        if not self.allowed(chat_id):
+            return
+        if chat_id in self.pending:
+            self.dirty.add(chat_id)
             return
         try:
             loop = asyncio.get_running_loop()
@@ -55,9 +59,13 @@ class ContextAgent:
     async def _flush(self, chat_id, epoch):
         try:
             await asyncio.sleep(0.25)
-            if not self.allowed(chat_id) or self.db.get_state(f"chat_memory_epoch_{chat_id}") != epoch:
-                return
-            await asyncio.to_thread(self._sync_file, chat_id)
+            while True:
+                if not self.allowed(chat_id) or self.db.get_state(f"chat_memory_epoch_{chat_id}") != epoch:
+                    return
+                self.dirty.discard(chat_id)
+                await asyncio.to_thread(self._sync_file, chat_id)
+                if chat_id not in self.dirty:
+                    break
             task = asyncio.create_task(self.refresh(chat_id))
             self.summary_tasks.add(task)
             task.add_done_callback(self.summary_tasks.discard)
@@ -68,8 +76,9 @@ class ContextAgent:
             self.db.record_action("context", "file_sync", "failed", "Context worker failed; recent messages remain in the database", chat_id=chat_id)
         finally:
             self.pending.pop(chat_id, None)
+            self.dirty.discard(chat_id)
 
-    async def refresh(self, chat_id, min_new_messages=8, force=False, max_payload=40):
+    async def refresh(self, chat_id, min_new_messages=8, force=False, max_payload=50):
         if not self.allowed(chat_id) or chat_id in self.busy or len(self.busy) >= 2:
             return
         if not force and time.monotonic() - self.last_attempt.get(chat_id, float("-inf")) < 60:
@@ -101,7 +110,7 @@ class ContextAgent:
         epoch = self.db.get_state(f"chat_memory_epoch_{chat_id}")
         marker = self.db.latest_incoming_row_id(chat_id)
         ttl = float(self.db.get_state("context_ttl_hours", "4.0"))
-        fresh = self.db.get_recent_chat_messages(chat_id, limit=40 if chat_id < 0 else 15,
+        fresh = self.db.get_recent_chat_messages(chat_id, limit=50 if chat_id < 0 else 15,
                                                 max_age_seconds=int(ttl * 3600) if ttl > 0 else None)
         quotes = [row for row in (history or []) if "(in reply to)" in row.get("sender", "")]
         history = list(fresh or history or [])
@@ -131,4 +140,5 @@ class ContextAgent:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self.pending.clear()
+        self.dirty.clear()
         self.summary_tasks.clear()

@@ -404,7 +404,7 @@ class SafetyManager:
         chat_wait = max(0.0, target - (now - last_chat)) if last_chat > 0 else 0.0
         if not self.min_global_cooldown <= self._next_global_cooldown <= self.max_global_cooldown:
             self._next_global_cooldown = self._pick_random_global_cooldown()
-        global_wait = max(0.0, self._next_global_cooldown - (now - self._last_global_reply_time)) if self._last_global_reply_time > 0 and (lo > 0 or hi > 0) else 0.0
+        global_wait = max(0.0, self._next_global_cooldown - (now - self._last_global_reply_time)) if self._last_global_reply_time > 0 else 0.0
         return (chat_wait, f"Per-chat cooldown active for chat {chat_id}") if chat_wait >= global_wait else (global_wait, "Global cooldown active")
 
     def can_reply(self, chat_id: int, text: str, *, allow_quiet_hours: bool = False) -> tuple[bool, str]:

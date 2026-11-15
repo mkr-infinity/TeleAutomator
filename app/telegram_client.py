@@ -232,11 +232,7 @@ class TelegramService:
         logger.info("Stopping Telegram service...")
         self._running = False
 
-        batch = self.reply_manager._approval_batch_task
-        if batch and not batch.done():
-            batch.cancel()
-            await asyncio.gather(batch, return_exceptions=True)
-        await self.reply_manager.context_agent.close()
+        await self.reply_manager.close()
 
         if self._heartbeat_task:
             self._heartbeat_task.cancel()

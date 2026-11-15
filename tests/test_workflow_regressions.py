@@ -277,7 +277,7 @@ def test_history_initialization_works_and_does_not_reload_cleared_messages(tmp_p
     s.db.clear_chat_context(123)
     s.client.get_messages.reset_mock()
     asyncio.run(s.manager.init_chat_context(123))
-    s.client.get_messages.assert_not_called()
+    assert all("filter" in call.kwargs for call in s.client.get_messages.await_args_list)
     assert s.db.count_chat_messages(123) == 0
 
 

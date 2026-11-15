@@ -6,7 +6,7 @@ import time
 import urllib.error
 import urllib.request
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -91,6 +91,7 @@ def test_transport_guard_also_covers_approved_and_keyword_replies(tmp_path):
     for text in ("Thanks Alice", "Hi @alice", "Go to example.test", "I'm an AI"):
         assert not asyncio.run(s.manager._send_reply(123, 1, text, adaptive_delay=False, approved=True))
     s.db.add_keyword_rule("pricing", "Ask Alice")
+    s.generator.generate = MagicMock(return_value="Ask Alice")
     asyncio.run(s.manager._process_incoming_message(123, "Alice", 2, 222, "Alice", "pricing"))
     s.client.send_message.assert_not_awaited()
     assert len(s.db.list_actions("blocked")) == 5
