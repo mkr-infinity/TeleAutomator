@@ -100,6 +100,7 @@ def record_own_outgoing_message(reply_manager: ReplyManager, event: Any, my_user
             text=text,
             is_outgoing=True,
         )
+        reply_manager.context_agent.observe(chat_id)
     except Exception:
         pass
 
@@ -136,7 +137,7 @@ def register_handlers(
             record_own_outgoing_message(reply_manager, event, my_user_id)
 
         # Regular incoming message handling
-        is_eligible, reason = message_filter.evaluate(event)
+        is_eligible, reason = message_filter.evaluate_context(event)
         if not is_eligible:
             logger.debug(f"Message ignored: {reason}")
             return
@@ -238,6 +239,7 @@ def register_handlers(
             text=reply_manager.privacy.sanitize_text(text),
             is_outgoing=False,
         )
+        reply_manager.context_agent.observe(chat_id)
 
         # Group smart engagement decision
         if is_group and reply_manager.db:

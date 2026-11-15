@@ -163,20 +163,20 @@ class ReplyGenerator:
         )
         try:
             draft = self._generate_reply(prompt, instructions)
-            active_custom = (persona_override or "").strip() or (self.prompt_manager.custom_prompt if not is_group else "")
-            custom_limit = self.prompt_manager.get_custom_word_limit(active_custom)
-            return self.prompt_manager.clean_reply(
-                draft,
-                sender_name=sender_name,
-                custom_limit=custom_limit,
-                incoming_text=incoming_text,
-                use_global_limit=False,
-                participant_names=[str(row.get("sender", "")) for row in (conversation_history or []) if not row.get("is_outgoing")],
-            )
+            return self.humanize_reply(draft, sender_name, incoming_text, conversation_history, persona_override, is_group)
         except Exception as e:
             logger.error(f"Failed to generate draft reply: {e}")
             # Never return fallbacks to groups or peer chats; raise so caller alerts Saved Messages exclusively
             raise RuntimeError(f"AI generation failed: {e}") from e
+
+    def humanize_reply(self, draft, sender_name="Contact", incoming_text="", conversation_history=None, persona_override=None, is_group=False):
+        """Local final stage: enforce the chat's length and text rules without another model call."""
+        custom = (persona_override or "").strip() or (self.prompt_manager.custom_prompt if not is_group else "")
+        return self.prompt_manager.clean_reply(
+            draft, sender_name=sender_name, custom_limit=self.prompt_manager.get_custom_word_limit(custom),
+            incoming_text=incoming_text, use_global_limit=False,
+            participant_names=[str(row.get("sender", "")) for row in (conversation_history or []) if not row.get("is_outgoing")],
+        )
 
     def summarize_chat_history(self, chat_title: str, existing_summary: str, raw_text: str, is_group: bool = True) -> str:
         """Condense recent chat messages into a short rolling recap using AI (no hardcoded text)."""

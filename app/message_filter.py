@@ -40,6 +40,13 @@ class MessageFilter:
         self.db = database
 
     def evaluate(self, event: Any) -> Tuple[bool, str]:
+        return self._evaluate(event, context_only=False)
+
+    def evaluate_context(self, event: Any) -> Tuple[bool, str]:
+        """Observe safe allowlisted messages even when reply participation is disabled."""
+        return self._evaluate(event, context_only=True)
+
+    def _evaluate(self, event: Any, *, context_only: bool) -> Tuple[bool, str]:
         """Evaluate an incoming message event. Returns (is_eligible, reason)."""
         # 1. Ignore outgoing messages sent by our own account
         if getattr(event, "out", False):
@@ -88,7 +95,7 @@ class MessageFilter:
             return False, f"Chat {chat_id} is not allowlisted"
 
         # 7. Group smart filtering: Strict mention-only mode check
-        if is_group and self.db:
+        if is_group and self.db and not context_only:
             strict_mention_only = self.db.get_state("group_mention_only", "0") == "1"
             if strict_mention_only:
                 is_mentioned = is_account_addressed(raw_text, self.my_username, self.db.get_state("owner_name"),

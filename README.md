@@ -58,6 +58,7 @@ TeleAutomator includes a built-in Telegram Mini App running concurrently on the 
 - **AI Engine & Testing Playground**: Custom base URL configuration, live model fetch from `/models` endpoints, multi-model selection with automatic fallback rotation, and an interactive test playground.
 - **Draft Approvals**: Approve or reject drafts with in-place card updates (zero message deletions on Telegram).
 - **Action History & Diagnostics**: More → Action history shows sent, skipped, blocked, and failed actions with filters and live engine details. It keeps at most 1,100 metadata entries, excluding message bodies and command arguments.
+- **Reply Feedback & Stages**: Rate automated messages from Overview → Recent replies as helpful, unneeded, off-topic, or a style mismatch. More → Reply feedback & stages shows the ratings, filters, and context/writer/local-check stages. Ratings guide only their own chat, and rejected replies are checked before sending again.
 - **Preference Export & Import**: The main owner can download a JSON backup and preview a merge before applying it. Reply settings, keyword rules, and separate chat profiles are included; credentials, access permissions, and conversation history are excluded. Keep exported prompts and notes private.
 - **Access Control & Paywall**: Multi-user permissions with an automated authorization note (100 Stars or 1 TON to `@mkr_infinity`).
 
@@ -104,6 +105,7 @@ Manage your automation straight from your phone by texting your **Control Bot**:
 | **`/removechat <id>`** | Removes a chat from allowlist | `/removechat 123456789` |
 | **`/mentiononly <on\|off>`** | Reply in groups only when tagged or replied to | `/mentiononly on` |
 | **`/miniapp`** | Launches the TeleAutomator Mini App control panel | `/miniapp` |
+| **`/feedback [chat_id message_id rating]`** | Review ratings or rate an automated reply; `helpful`, `unnecessary`, `off_topic`, `style`, `clear` | `/feedback -100123 42 off_topic` |
 
 ### AI Models, Quota & Cooldowns
 | Command | Action | Example |
@@ -129,6 +131,8 @@ Custom chat cooldowns override the default range; resetting a chat restores the 
 Only allowed chats are processed or cached. `/clearcontext` clears that chat's rolling history and recap while keeping its permanent notes, pins, persona, and voice profile. In-flight summaries and history fetches cannot restore cleared memory. The Mini App enforces the same command grants as the control bot.
 
 Group participation samples relevant conversations using the per-chat rate or global default (15% unless configured). Other people's reply threads and routine closers are ignored. Group messages post without quoted replies. The master prompt permits `NONE` for intentional silence; custom personas inherit the same rules. Outgoing checks block @tags, links, and known participant names, including keyword replies and approvals. Unfamiliar names still rely on the prompt. Identity and automation questions stay silent for the account owner to answer.
+
+Reply preparation has three stages. A background context worker observes safe messages from allowed chats even in mention-only mode, coalesces updates to `data/contexts/{chat_id}.json`, and batches model recaps after new messages. Automatic recap attempts are at least 60 seconds apart per chat, with at most two recap jobs running together. The writer uses current messages, that chat’s notes/persona/voice, and recent owner feedback. A local final stage enforces text rules without another model call; stale unsolicited group drafts and drafts made before a memory reset are discarded. Feedback also applies to approved and keyword replies at delivery. Up to 500 ratings are retained, separately from the rolling message cache; clearing chat memory clears its ratings too. Model relevance still requires real-chat review.
 
 ---
 

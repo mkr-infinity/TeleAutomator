@@ -19,6 +19,7 @@ from tests.test_miniapp import http_server, forge_init_data, _get, _post
 from tests.test_workflow_regressions import make_stack
 
 
+# Negative test inputs: each string must be blocked; none is an outgoing reply template.
 @pytest.mark.parametrize("text", ["Hello @alice", "Thanks ＠alice", "Visit https://example.test", "t.me/alice",
                                   "[Open](tg://user?id=12)", "Email a@example.test", "I’m an AI", "I'm not a bot", "Thanks Alice",
                                   "I'm a large language model", "I am a virtual assistant", "I am human"])
@@ -38,7 +39,7 @@ def test_group_participation_requires_relevance_and_respects_zero(tmp_path):
     s = make_stack(tmp_path)
     handlers = []
     s.client.on = lambda _: lambda handler: handlers.append(handler) or handler
-    register_handlers(s.client, 111, SimpleNamespace(my_username="owner", evaluate=lambda _: (True, "Eligible")), s.manager)
+    register_handlers(s.client, 111, SimpleNamespace(my_username="owner", evaluate_context=lambda _: (True, "Eligible")), s.manager)
     s.manager.handle_incoming_eligible_message = AsyncMock()
     s.manager.maybe_send_reaction = AsyncMock(return_value=False)
     s.client.get_messages.return_value = []

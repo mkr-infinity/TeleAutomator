@@ -199,6 +199,7 @@ class MiniAppAPI:
             "authorized": authorized,
             "user": {"id": user_id, "name": user.get("first_name") or user.get("username") or str(user_id)},
             "is_main": _is_main_user(self.ctx, user_id),
+            "can_feedback": authorized and can_run_command(self.ctx.db, user_id, "/feedback", _main_user_id(self.ctx)),
         }
         if not authorized:
             payload["paywall"] = PAYWALL
@@ -261,6 +262,8 @@ class MiniAppAPI:
         return {
             "revision": ctx.db.get_state("state_revision", "0"),
             "history_revision": ctx.db.latest_action_id(),
+            "pipeline": {"context": "Per-chat files and batched summaries", "writer": "Selected model", "humanizer": "Local checks; no extra model call",
+                         "context_jobs": len(getattr(getattr(ctx.reply_manager, "context_agent", None), "busy", ()))},
             "mode": mode,
             "state": "stopped" if emergency else ("paused" if paused > 0 else "active"),
             "paused_remaining_sec": int(paused),
@@ -416,11 +419,13 @@ class MiniAppAPI:
         with self.ctx.db._get_connection() as conn:
             rows = conn.execute(
                 """
-                SELECT m.chat_id, m.message_id, m.sender_name, m.text, m.created_at,
+                SELECT m.chat_id, m.message_id, m.sender_name, m.text, m.created_at, m.is_automated,
+                       COALESCE(f.rating,'') AS feedback,
                        COALESCE(k.title, '') AS title,
                        COALESCE(k.username, '') AS username
                 FROM chat_messages m
                 LEFT JOIN known_chats k ON k.chat_id = m.chat_id
+                LEFT JOIN reply_feedback f ON f.chat_id=m.chat_id AND f.message_id=m.message_id
                 WHERE m.is_outgoing = 1
                 ORDER BY m.id DESC
                 LIMIT 25
@@ -449,12 +454,22 @@ class MiniAppAPI:
                 "chat": r["title"] or f"Chat {cid}",
                 "chat_id": cid,
                 "message_id": mid,
+                "is_automated": bool(r["is_automated"]),
+                "feedback": r["feedback"],
                 "msg_url": msg_url,
                 "text": r["text"] or "",
                 "sender": r["sender_name"] or "",
                 "ts": r["created_at"] or "",
             })
         return {"activity": items}
+
+    def handle_feedback(self, rating="") -> dict:
+        if rating not in ("", "helpful", "unnecessary", "off_topic", "style"):
+            return {"ok": False, "response": "Choose a valid feedback filter"}
+        private, groups = self.ctx.privacy.get_all_allowed_chats()
+        rows = self.ctx.db.list_reply_feedback(private | groups, limit=500)
+        counts = {key: sum(row["rating"] == key for row in rows) for key in ("helpful", "unnecessary", "off_topic", "style")}
+        return {"ok": True, "feedback": [row for row in rows if not rating or row["rating"] == rating][:40], "counts": counts}
 
     def handle_access(self) -> dict:
         ids = sorted(_authorized_user_ids(self.ctx))
@@ -504,6 +519,7 @@ class MiniAppAPI:
     # ------------------------------------------------------------- actions
 
     ACTION_TO_COMMAND = {
+        "feedback": "/feedback {chat_id} {id} {value}",
         "pause": "/pause {minutes}",
         "resume": "/resume",
         "stop": "/stop",
@@ -838,7 +854,7 @@ class MiniAppAPI:
         rows = self.ctx.db.list_actions(status, before, limit)
         state = self.handle_state()
         return {"ok": True, "events": rows, "next_before": rows[-1]["id"] if len(rows) == limit else None,
-                "diagnostics": {key: state[key] for key in ("state", "mode", "ai_engine", "ai_model", "safe_mode", "quiet_hours", "pending_count", "chats_allowed", "version")}}
+                "diagnostics": {key: state[key] for key in ("state", "mode", "ai_engine", "ai_model", "safe_mode", "quiet_hours", "pending_count", "chats_allowed", "version", "pipeline")}}
 
     def _settings_denial(self, user_id):
         if user_id not in _authorized_user_ids(self.ctx) or not _is_main_user(self.ctx, user_id):
@@ -1378,6 +1394,7 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
             "/api/pending": "/pending", "/api/activity": "/chats", "/api/access": "/authlist",
             "/api/models": "/checkmodels", "/api/fetch_models": "/checkmodels",
             "/api/history": "/status", "/api/settings/export": "/backup",
+            "/api/feedback": "/feedback",
         }.get(path)
         if permission:
             denial = self.api.command_denial(int(user["id"]), permission)
@@ -1418,6 +1435,11 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
                 self._json(200, self.api.handle_pending())
             elif path == "/api/activity":
                 self._json(200, self.api.handle_activity())
+            elif path == "/api/feedback":
+                from urllib.parse import parse_qs, urlsplit
+                rating = parse_qs(urlsplit(self.path).query).get("rating", [""])[0]
+                result = self.api.handle_feedback(rating)
+                self._json(200 if result.get("ok") else 400, result)
             elif path == "/api/access":
                 self._json(200, self.api.handle_access())
             elif path == "/api/history":

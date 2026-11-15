@@ -184,7 +184,7 @@ def test_custom_frequency_cannot_interrupt_another_group_member(tmp_path):
     s.db.set_state("chat_prompt_-100111", "reply 6 times in 10 sends")
     handlers = []
     s.client.on = lambda _: lambda handler: handlers.append(handler) or handler
-    message_filter = SimpleNamespace(my_username="", evaluate=lambda _: (True, "Eligible"))
+    message_filter = SimpleNamespace(my_username="", evaluate_context=lambda _: (True, "Eligible"))
     register_handlers(s.client, 111, message_filter, s.manager)
     s.manager.handle_incoming_eligible_message = AsyncMock()
     s.manager.maybe_send_reaction = AsyncMock(return_value=False)

@@ -45,12 +45,14 @@ function telegramMock({ version }) {
   data.state.ai_model = "first,second";
   data.state.available_models = ["first", "second"];
   data.state.rules = [{ keyword: "help", reply: "Send a message" }];
+  data.activity.forEach((row, index) => { row.is_automated = index < 3; });
   const requests = [];
   let rejectAction = null;
   let authFailure = false;
   let historyFailure = false;
   let importFailure = false;
   let isMainUser = true;
+  let feedbackFailure = false;
   const history = Array.from({ length: 45 }, (_, index) => ({ id: 45 - index, source: "automation", action: "reply", status: (45 - index) % 10 === 0 ? "failed" : "sent", detail: index ? "Message delivered" : "<script>window.historyXSS = true</script>", created_at: "2026-11-15 12:00:00", chat_id: -222 }));
   const preferences = { format: "teleautomator-preferences", version: 1, settings: { reply_style: "formal", owner_name: "Owner" }, chats: [{ id: -222, notes: "Test notes" }], keyword_rules: [] };
   const server = http.createServer(async (req, res) => {
@@ -64,7 +66,7 @@ function telegramMock({ version }) {
       let result = {};
       if (pathname === "/api/auth") {
         if (authFailure) { res.statusCode = 503; result = { ok: false, response: "The engine is starting. Try again." }; }
-        else result = { authorized: true, is_main: isMainUser, version: "3.0.6", user: { name: "Test owner" } };
+        else result = { authorized: true, is_main: isMainUser, can_feedback: isMainUser, version: "3.0.7", user: { name: "Test owner" } };
       } else if (pathname === "/api/state") result = data.state;
       else if (pathname === "/api/history") {
         if (historyFailure) { historyFailure = false; res.statusCode = 503; result = { ok: false, response: "History unavailable. Retry." }; }
@@ -87,6 +89,14 @@ function telegramMock({ version }) {
       else if (pathname === "/api/access") result = { users: data.access };
       else if (pathname === "/api/pending") result = { pending: data.pending };
       else if (pathname === "/api/activity") result = { activity: data.activity };
+      else if (pathname === "/api/feedback") {
+        if (feedbackFailure) { feedbackFailure = false; res.statusCode = 503; result = { ok: false, response: "Feedback unavailable. Retry." }; }
+        else {
+          const rows = data.activity.filter(row => row.feedback).map(row => ({ ...row, rating: row.feedback, reply_text: row.text, chat_title: row.chat, updated_at: row.ts }));
+          const rating = new URL(req.url, "http://local").searchParams.get("rating");
+          result = { ok: true, feedback: rows.filter(row => !rating || row.rating === rating), counts: Object.fromEntries(["helpful", "unnecessary", "off_topic", "style"].map(key => [key, rows.filter(row => row.rating === key).length])) };
+        }
+      }
       else if (pathname === "/api/commands") result = { commands: data.commands };
       else if (pathname === "/api/fetch_models") result = { ok: true, models: ["first", "second", "third"] };
       else if (pathname === "/api/test_model") result = { ok: true, reply: "hello", active_model: "first,second", model_used: "first", working_models: ["first", "second"], failed_models: [], results: [{ model: "first", ok: true, detail: "Working" }, { model: "second", ok: true, detail: "Working" }] };
@@ -96,6 +106,11 @@ function telegramMock({ version }) {
         if (rejectAction === body.action) { rejectAction = null; result = { ok: false, response: "Save failed. Please retry." }; }
         else {
           result = { ok: true, response: "Saved" };
+          if (body.action === "feedback") {
+            const row = data.activity.find(row => String(row.chat_id) === String(body.params.chat_id) && String(row.message_id) === String(body.params.id));
+            assert(row, "feedback must reference a displayed reply");
+            row.feedback = body.params.value === "clear" ? "" : body.params.value;
+          }
           if (body.action === "chat_cooldown") {
             const chat = data.chats.find(chat => String(chat.id) === String(body.params.chat_id));
             chat.cooldown_min = body.params.reset ? null : body.params.min;
@@ -173,6 +188,45 @@ function telegramMock({ version }) {
     for (const [selector, title] of [["#act-mode", "mode"], ["#act-stop", "Stop"], ["#goto-activity", "Recent"]]) {
       await page.locator(selector).click(); await checkSheet(page, title); await close(page);
     }
+    await page.locator("#goto-activity").click();
+    await expect(page.locator("#sheet .feedback-button")).toHaveCount(3);
+    await page.locator("#sheet .feedback-button").first().click();
+    await checkSheet(page, "Rate this reply");
+    rejectAction = "feedback";
+    await page.locator("#sheet-actions button", { hasText: "Off-topic" }).click();
+    await expect(page.locator("#sheet-error")).toContainText("Save failed");
+    await page.locator("#sheet-actions button", { hasText: "Off-topic" }).click();
+    await expect(page.locator("#sheet")).not.toBeVisible();
+    await expect(page.locator("#ov-activity .feedback-button").first()).toHaveText("Off-topic");
+    await navigate(page, "more", "feedback");
+    await expect(page.locator("#pipeline-status")).toContainText("no extra model call");
+    await expect(page.locator("#feedback-list .history-row")).toHaveCount(1);
+    assert((await page.locator("#feedback-list .feedback-button").boundingBox()).height >= 48, "feedback buttons need mobile touch targets");
+    await expect(page.locator("#feedback-counts")).toContainText("Off-topic: 1");
+    await page.locator("#feedback-filter").selectOption("helpful");
+    await expect(page.locator("#feedback-list .history-row")).toHaveCount(0);
+    await page.locator("#feedback-filter").selectOption("off_topic");
+    await expect(page.locator("#feedback-list .history-row")).toHaveCount(1);
+    feedbackFailure = true;
+    await page.locator("#feedback-refresh").click();
+    await expect(page.locator("#feedback-error")).toContainText("Retry");
+    await page.locator("#feedback-refresh").click();
+    await expect(page.locator("#feedback-error")).not.toBeVisible();
+    if (process.env.TELEAUTOMATOR_UI_ARTIFACTS) {
+      await fs.mkdir(process.env.TELEAUTOMATOR_UI_ARTIFACTS, { recursive: true });
+      await page.screenshot({ path: path.join(process.env.TELEAUTOMATOR_UI_ARTIFACTS, "reply-feedback.png") });
+    }
+    await page.locator("#feedback-list .feedback-button").click();
+    await checkSheet(page, "Rate this reply");
+    await page.locator("#sheet-actions button", { hasText: "Helpful" }).click();
+    await expect(page.locator("#sheet")).not.toBeVisible();
+    await page.locator("#feedback-filter").selectOption("helpful");
+    await expect(page.locator("#feedback-list .history-row")).toHaveCount(1);
+    await page.locator("#feedback-list .feedback-button").click();
+    await checkSheet(page, "Rate this reply");
+    await page.locator("#sheet-actions button", { hasText: "Clear rating" }).click();
+    await expect(page.locator("#sheet")).not.toBeVisible();
+    await expect(page.locator("#feedback-list .history-row")).toHaveCount(0);
     for (const [action, title] of [[null, "Rohan"], ["prompt", "Prompt"], ["context", "Context"], ["chatty", "Chatty"], ["cooldown", "Cooldown"], ["remove", "Remove"]]) {
       await navigate(page, "chats");
       await page.locator(".chat-capsule-card").first().click();
@@ -297,7 +351,7 @@ function telegramMock({ version }) {
     }
     for (const [width, height] of [[320, 568], [412, 915], [800, 360], [840, 900], [1280, 800]]) {
       await page.setViewportSize({ width, height });
-      await navigate(page, "more");
+      await navigate(page, "more", "feedback");
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `layout must fit ${width}px`);
       await navigate(page, "chats");
       await page.locator(".chat-capsule-card").first().click(); await checkSheet(page, "Rohan"); await close(page);
@@ -306,6 +360,7 @@ function telegramMock({ version }) {
       await fs.mkdir(process.env.TELEAUTOMATOR_UI_ARTIFACTS, { recursive: true });
       await page.setViewportSize({ width: 390, height: 844 });
       await navigate(page, "more");
+      await page.evaluate(() => { document.querySelectorAll(".settings-group").forEach(group => { group.open = false; }); window.scrollTo(0, 0); });
       await page.screenshot({ path: path.join(process.env.TELEAUTOMATOR_UI_ARTIFACTS, "settings.png") });
       await navigate(page, "chats");
       await page.locator(".chat-capsule-card").first().click();
@@ -318,6 +373,7 @@ function telegramMock({ version }) {
     const limited = await makePage();
     await navigate(limited, "more");
     await expect(limited.locator("#settings-backup")).not.toBeVisible();
+    await expect(limited.locator("#settings-feedback")).not.toBeVisible();
     isMainUser = true;
     authFailure = true;
     const retry = await makePage();
@@ -327,7 +383,7 @@ function telegramMock({ version }) {
     await retry.locator("#retry-connection").click();
     await expect(retry.locator("#app")).toBeVisible();
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ popupChecks: popups, viewportSizes: 6, fullscreen: "supported and older clients", formRecovery: "passed", duplicateSaves: "blocked", liveUpdates: "preserve drafts and DOM", history: "filter, pages, retry, safe rendering, live updates", preferences: "download, preview, failed import recovery, owner visibility", connectionRetry: "passed", pageErrors: errors.length }));
+    console.log(JSON.stringify({ popupChecks: popups, viewportSizes: 6, fullscreen: "supported and older clients", formRecovery: "passed", duplicateSaves: "blocked", liveUpdates: "preserve drafts and DOM", history: "filter, pages, retry, safe rendering, live updates", preferences: "download, preview, failed import recovery, owner visibility", replyFeedback: "rate, failed save recovery, filter, edit, clear, permissions, local stages", connectionRetry: "passed", pageErrors: errors.length }));
   } finally {
     await browser?.close();
     server.closeAllConnections();

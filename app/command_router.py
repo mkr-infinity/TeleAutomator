@@ -33,7 +33,7 @@ _BOT_COMMAND_NAMES = (
     "/addrule", "/delrule", "/rules", "/chats", "/allowchat", "/removechat",
     "/blockchat", "/mentiononly", "/contextttl", "/clearcontext", "/syncpins", "/setcontext", "/showcontext",
     "/delcontext", "/backup", "/pending", "/approve", "/reject", "/name", "/prompt", "/setprompt", "/chatty",
-    "/chatprompt", "/gencontext", "/safemode", "/miniapp",
+    "/chatprompt", "/gencontext", "/safemode", "/miniapp", "/feedback",
 )
 
 
@@ -55,7 +55,7 @@ class CommandRouterMixin:
         root = text.strip().split()[0].lower().split("@")[0] if text.strip() else ""
         action = root if root in _BOT_COMMAND_NAMES else "unknown_command"
         try:
-            response = await self._execute_control_command(text)
+            response = await self._execute_control_command(text, actor_id=actor_id)
         except Exception:
             if audit_source and root.startswith("/"):
                 self.db.record_action(audit_source, action, "failed", "Command failed; check its inputs and engine diagnostics", actor_id=actor_id)
@@ -65,13 +65,16 @@ class CommandRouterMixin:
             self.db.record_action(audit_source, action, "success" if ok else "failed", "Command completed" if ok else "Command rejected; check its inputs or current safety controls", actor_id=actor_id)
         return response
 
-    async def _execute_control_command(self, text: str) -> Optional[str]:
+    async def _execute_control_command(self, text: str, *, actor_id=None) -> Optional[str]:
         """Handle control commands sent via the control channel (control bot or Saved Messages)."""
         cmd_parts = text.strip().split()
         if not cmd_parts:
             return None
 
         cmd = cmd_parts[0].lower().split("@")[0]
+
+        if cmd == "/feedback":
+            return self._reply_feedback_command(cmd_parts, actor_id)
 
         routers = (
             self._route_core_control,
@@ -98,6 +101,24 @@ class CommandRouterMixin:
             f"Common ones: {known}{hint}\n"
             f"Send */help* for the full guide."
         )
+
+    def _reply_feedback_command(self, parts, actor_id=None):
+        usage = "Usage: /feedback <chat_id> <message_id> helpful|unnecessary|off_topic|style|clear"
+        if len(parts) == 1:
+            private, groups = self.privacy.get_all_allowed_chats()
+            rows = self.db.list_reply_feedback(private | groups, limit=10)
+            return "Reply feedback\n" + ("\n".join(f"{r['chat_id']} / {r['message_id']}: {r['rating']}" for r in rows) or "No ratings yet. Rate an automated reply from Recent replies in the Mini App.") + "\n" + usage
+        try:
+            if len(parts) != 4:
+                raise ValueError(usage)
+            chat_id, message_id = int(parts[1]), int(parts[2])
+            if not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
+                raise ValueError("Feedback is only available for allowed chats")
+            self.db.set_reply_feedback(chat_id, message_id, parts[3].lower(), actor_id)
+            self.context_agent.observe(chat_id)
+            return "✅ Reply feedback cleared." if parts[3].lower() == "clear" else "✅ Reply feedback saved for this chat."
+        except (ValueError, OverflowError) as error:
+            return f"❌ {error}" if not str(error).startswith("invalid literal") else usage
 
     async def _route_core_control(self, cmd: str, cmd_parts: list[str], text: str) -> Optional[str]:
         if cmd in ("/help", "/start"):
@@ -146,6 +167,7 @@ class CommandRouterMixin:
                 "• `/addrule <word> => <reply>` - Auto-reply when a word is detected\n"
                 "• `/delrule <word>` - Delete keyword trigger\n"
                 "• `/rules` - List all active custom keyword triggers\n\n"
+                "• `/feedback [chat_id message_id rating]` - Review or rate automated replies (helpful, unnecessary, off_topic, style, clear)\n\n"
                 "*Chat & Group Management:*\n"
                 "• `/chats` - View all allowlisted private contacts & groups\n"
                 "• `/allowchat <id>` - Allow a contact or group directly from Telegram\n"

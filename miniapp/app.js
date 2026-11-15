@@ -8,6 +8,8 @@
   const $ = (id) => document.getElementById(id);
   const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
   const DEMO = new URLSearchParams(location.search).has("demo");
+  let canGiveFeedback = false;
+  const FEEDBACK_LABELS = { helpful: "Helpful", unnecessary: "Unneeded", off_topic: "Off-topic", style: "Style mismatch" };
 
   const SVGS = {
     check: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>',
@@ -266,7 +268,7 @@
       owner_name: "Kaif", ai_engine: "Gemini", ai_model: "gemini-2.5-flash-lite", ai_base_url: "",
       available_models: ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"],
       models_manually_set: false,
-      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.6",
+      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.7",
       auto_reactions: true, ownreact: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
       thinking: "default", temperature: "0.7", lang: "english", max_tokens: "512",
       quiet_hours_start: "02:00", quiet_hours_end: "08:00", quiet_hours_schedule: "02:00 AM – 08:00 AM IST",
@@ -309,11 +311,16 @@
   };
 
   async function demoApi(path, body) {
-    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.6", user: { id: 555000111, name: "Kaif" } };
+    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.7", user: { id: 555000111, name: "Kaif" } };
     if (path === "/api/state") return DEMO_DATA.state;
     if (path === "/api/chats") return { chats: DEMO_DATA.chats, chatty_global: DEMO_DATA.state.chatty_global };
     if (path === "/api/pending") return { pending: DEMO_DATA.pending };
     if (path === "/api/activity") return { activity: DEMO_DATA.activity };
+    if (path.startsWith("/api/feedback")) {
+      const rows = DEMO_DATA.activity.filter(row => row.feedback).map(row => ({ ...row, reply_text: row.text, chat_title: row.chat, rating: row.feedback, updated_at: row.ts }));
+      const rating = new URLSearchParams(path.split("?")[1]).get("rating");
+      return { ok: true, feedback: rows.filter(row => !rating || row.rating === rating), counts: Object.fromEntries(Object.keys(FEEDBACK_LABELS).map(key => [key, rows.filter(row => row.rating === key).length])) };
+    }
     if (path === "/api/access") return { users: DEMO_DATA.access };
     if (path === "/api/commands") return { commands: DEMO_DATA.commands };
     if (path === "/api/models" || path === "/api/fetch_models") {
@@ -355,6 +362,13 @@
     }
     if (path === "/api/action") {
       const a = body && body.action;
+      if (a === "feedback") {
+        const params = body.params || {};
+        const row = DEMO_DATA.activity.find(row => String(row.chat_id) === String(params.chat_id) && String(row.message_id) === String(params.id));
+        if (!row) return { ok: false, response: "Choose a recent automated reply." };
+        row.feedback = params.value === "clear" ? "" : params.value;
+        return { ok: true, response: "Reply feedback saved for this chat." };
+      }
       const p = (body && body.params) || {};
       if (a === "approve" || a === "reject") {
         const i = DEMO_DATA.pending.findIndex((item) => String(item.id) === String(p.id));
@@ -1081,7 +1095,7 @@
       ? `<span class="feed-link-icon" title="Jump to message in Telegram">${SVGS.externalLink}</span>`
       : "";
 
-    return `<div class="feed-row ${hasLink ? "feed-clickable" : ""}" ${hasLink ? `data-msg-url="${esc(a.msg_url)}"` : ""} role="${hasLink ? "button" : "article"}" tabindex="${hasLink ? "0" : "-1"}">
+    return `<article class="rated-reply"><div class="feed-row ${hasLink ? "feed-clickable" : ""}" ${hasLink ? `data-msg-url="${esc(a.msg_url)}"` : ""} role="${hasLink ? "button" : "article"}" tabindex="${hasLink ? "0" : "-1"}">
       <div class="feed-top">
         <span class="feed-chat">${esc(a.chat)}</span>
         <div class="feed-meta">
@@ -1091,7 +1105,7 @@
       </div>
       ${voiceBadge}${mediaBadge}
       <span class="feed-text">${esc(a.text)}</span>
-    </div>`;
+    </div>${(a.is_automated || DEMO) && canGiveFeedback && a.message_id > 0 ? `<button type="button" class="btn small feedback-button" data-feedback-chat="${esc(a.chat_id)}" data-feedback-message="${esc(a.message_id)}" data-feedback-rating="${esc(a.feedback || "")}">${esc(FEEDBACK_LABELS[a.feedback] || "Rate reply")}</button>` : ""}</article>`;
   }
 
   // --------------------------------------------------------------- chats
@@ -1708,6 +1722,7 @@
     if (s.ok === false) throw new Error(s.response);
     renderMoreControls(s);
     if ($("settings-history").open) await refreshHistory();
+    if ($("settings-feedback").open) await refreshFeedback();
     const changed = updateHtml("access-list", data.ok === false ? `<p class="empty">${esc(data.response)}</p>` : (data.users || []).length
       ? data.users.map((u) => {
           const initials = u.initials || (u.name || "U").slice(0, 2).toUpperCase();
@@ -1744,6 +1759,35 @@
       btn.addEventListener("click", () => openSheet("Remove owner", `<p>Revoke panel access for owner <span class="num">${esc(btn.dataset.unauth)}</span>?</p>`,
         [{ label: "Remove", kind: "danger", onClick: () => runAction("removeauth", { user_id: btn.dataset.unauth }) }, { label: "Cancel" }])));
 
+  }
+
+  function openFeedbackSheet(chatId, messageId, current) {
+    const buttons = Object.entries(FEEDBACK_LABELS).map(([rating, label]) => ({ label, kind: rating === current ? "primary" : "",
+      onClick: () => runAction("feedback", { chat_id: chatId, id: messageId, value: rating }) }));
+    if (current) buttons.push({ label: "Clear rating", onClick: () => runAction("feedback", { chat_id: chatId, id: messageId, value: "clear" }) });
+    buttons.push({ label: "Cancel" });
+    openSheet("Rate this reply", `<p>Your rating guides future replies in this chat.</p><p class="helper">Chat ${esc(chatId)} · Message ${esc(messageId)}</p>`, buttons);
+  }
+
+  let feedbackRequest = 0;
+  async function refreshFeedback() {
+    const request = ++feedbackRequest;
+    $("feedback-refresh").disabled = true;
+    $("feedback-error").classList.add("hidden");
+    try {
+      const result = await api(`/api/feedback?rating=${encodeURIComponent($("feedback-filter").value)}`);
+      if (request !== feedbackRequest) return;
+      if (result.authorized === false) return maybePaywall(result);
+      if (!result.ok) throw new Error(result.response || "Could not load feedback.");
+      $("feedback-counts").textContent = Object.entries(FEEDBACK_LABELS).map(([key, label]) => `${label}: ${result.counts?.[key] || 0}`).join(" · ");
+      updateHtml("feedback-list", result.feedback.length ? result.feedback.map(row => `<article class="history-row">
+        <div class="history-heading"><strong>${esc(row.chat_title || `Chat ${row.chat_id}`)}</strong><span class="pill">${esc(FEEDBACK_LABELS[row.rating] || row.rating)}</span></div>
+        <p>${esc(row.reply_text)}</p><small>${esc(formatIST(row.updated_at))}</small>
+        <button type="button" class="btn small feedback-button" data-feedback-chat="${esc(row.chat_id)}" data-feedback-message="${esc(row.message_id)}" data-feedback-rating="${esc(row.rating)}">Change rating</button>
+      </article>`).join("") : '<p class="empty">No matching ratings. Start from Recent replies on Overview.</p>');
+    } catch (error) {
+      if (request === feedbackRequest) { $("feedback-error").textContent = error.message || "Could not load feedback. Try Refresh."; $("feedback-error").classList.remove("hidden"); }
+    } finally { if (request === feedbackRequest) $("feedback-refresh").disabled = false; }
   }
 
   let historyRows = [];
@@ -1837,6 +1881,8 @@
 
   function renderMoreControls(s) {
     if (!s) return;
+    const pipeline = s.pipeline || { context: "Per-chat files and batched summaries", writer: "Selected model", humanizer: "Local checks; no extra model call" };
+    updateHtml("pipeline-status", [["Context stage", pipeline.context], ["Writer stage", pipeline.writer], ["Final style check", pipeline.humanizer]].map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join(""));
     if (s.ai_model !== undefined) syncField("ai-model", s.ai_model);
     if (s.ai_base_url !== undefined) syncField("ai-baseurl", s.ai_base_url);
     if (Array.isArray(s.available_models)) {
@@ -2058,7 +2104,7 @@
 
   async function performAction(action, params) {
     haptic();
-    const card = params.id ? document.querySelector(`.approval-card-wrap[data-id="${params.id}"]`) : null;
+    const card = ["approve", "reject"].includes(action) && params.id ? document.querySelector(`.approval-card-wrap[data-id="${params.id}"]`) : null;
     const buttons = card ? [...card.querySelectorAll("button")] : [...document.querySelectorAll(`[data-action="${action}"]`)];
     buttons.forEach((button) => { button.disabled = true; });
     card?.setAttribute("aria-busy", "true");
@@ -2189,6 +2235,8 @@
     }
     $("app-version").textContent = auth.version ? `v${auth.version}` : "";
     $("settings-backup").classList.toggle("hidden", auth.is_main !== true);
+    canGiveFeedback = auth.can_feedback ?? auth.is_main === true;
+    $("settings-feedback").classList.toggle("hidden", !canGiveFeedback);
     if (!wired) {
       wired = true;
       wire();
@@ -2231,6 +2279,9 @@
   function wire() {
     $("retry-view").addEventListener("click", () => loadView(currentView));
     $("settings-history").addEventListener("toggle", () => { if ($("settings-history").open) refreshHistory(); });
+    $("settings-feedback").addEventListener("toggle", () => { if ($("settings-feedback").open) refreshFeedback(); });
+    $("feedback-filter").addEventListener("change", refreshFeedback);
+    $("feedback-refresh").addEventListener("click", refreshFeedback);
     $("history-status").addEventListener("change", () => refreshHistory());
     $("history-refresh").addEventListener("click", () => refreshHistory());
     $("history-more").addEventListener("click", () => refreshHistory(false));
@@ -2289,6 +2340,13 @@
 
     // Global click delegation for links, cards, help buttons & feeds
     document.addEventListener("click", (e) => {
+      const ratingButton = e.target.closest("[data-feedback-message]");
+      if (ratingButton) {
+        e.preventDefault();
+        e.stopPropagation();
+        openFeedbackSheet(ratingButton.dataset.feedbackChat, ratingButton.dataset.feedbackMessage, ratingButton.dataset.feedbackRating);
+        return;
+      }
       const guideBtn = e.target.closest("#btn-all-behavior-help");
       if (guideBtn) {
         e.preventDefault();

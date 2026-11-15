@@ -83,6 +83,7 @@ REMOVED_NOTICE = (
 # beautifully described. Telegram allows up to 100; we register all of them so typing '/'
 # always shows the full structured toolbox.
 BOT_COMMAND_MENU: list[dict] = [
+    {"command": "feedback", "description": "Rate automated replies — /feedback chat_id message_id helpful|unnecessary|off_topic|style|clear"},
     # -- Overview & control --
     {"command": "start", "description": "🚀 Guided tour — help menu + live status"},
     {"command": "help", "description": "📖 Full command reference, grouped by section"},
