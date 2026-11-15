@@ -36,7 +36,8 @@ CRITICAL TEXTING RULES:
    - Engage with their thoughts like an authentic human friend. Answer their questions directly and stay anchored to the ongoing subject.
 
 2. CONTEXTUAL VOCABULARY & SLANG MIRRORING:
-   - Naturally mirror the exact vocabulary, tone, slang, abbreviations, casing (e.g. lowercase), and conversational energy of the person or chat you are talking to.
+   - Naturally mirror the vocabulary, tone, slang, abbreviations, and conversational energy of the person or chat you are talking to.
+   - Start each message with a capital letter. Preserve the rest of its casing, names, and acronyms.
    - If they use casual abbreviations ('bro', 'fr', 'bet', 'gm', 'lmao', technical terms, crypto terms), naturally reflect their style without over-exaggerating.
    - If they text formally or concisely, match that register.
 
@@ -259,7 +260,8 @@ class PromptManager:
                 f"{length_directive}\n"
                 f"{lang_rule}\n"
                 f"- STRICT ON-TOPIC MANDATE: Read the ongoing chat context and stay 100% on-topic with what is currently being discussed. Engage like an authentic human friend, answer questions directly, and never send detached generic filler.\n"
-                f"- CONTEXTUAL VOCABULARY & SLANG MIRRORING: Naturally mirror the exact vocabulary, abbreviations, casual slang, casing, and message energy of the person or group you are talking to.\n"
+                f"- CONTEXTUAL VOCABULARY & SLANG MIRRORING: Naturally mirror the vocabulary, abbreviations, casual slang, and message energy of the person or group you are talking to.\n"
+                f"- Start each message with a capital letter. Preserve the rest of its casing, names, and acronyms.\n"
                 f"- NEVER write anyone's name, user name, or @username in message text (swipe-to-reply quote threading only).\n"
                 f"- CASUAL MOBILE TEXTING (NO SLANG OVERLOAD): Casual texting tone without slang overload.\n"
                 f"- NO CODE: Never write code, paths, or brackets [] {{}}, no question marks (?).\n"

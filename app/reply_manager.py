@@ -28,6 +28,14 @@ except Exception:
     PeerFloodError = None  # type: ignore
 
 
+def capitalize_message(text: str) -> str:
+    """Capitalize the first letter without lowercasing names, acronyms, or the rest of the message."""
+    for index, character in enumerate(text):
+        if character.isalpha():
+            return text[:index] + character.upper() + text[index + 1:]
+    return text
+
+
 class ReplyManager(CommandRouterMixin):
     """Manages reply lifecycle across Draft, Approval Required, and Restricted Auto modes."""
 
@@ -122,6 +130,7 @@ class ReplyManager(CommandRouterMixin):
         )
 
     async def _deliver_message(self, chat_id: int, text: str, reply_to=None, *, approved: bool = False, allow_quiet_hours: bool = False):
+        text = capitalize_message(text)
         while True:
             async with self._outgoing_lock:
                 if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours):
@@ -557,7 +566,7 @@ class ReplyManager(CommandRouterMixin):
             return
 
         # Prevent repeating the same word or exact reply consecutively in this chat
-        draft = self._prevent_duplicate_reply(chat_id, draft)
+        draft = self._prevent_duplicate_reply(chat_id, capitalize_message(draft))
 
         mode = self.current_mode
 
@@ -864,7 +873,7 @@ class ReplyManager(CommandRouterMixin):
                 is_mention=False,
             )
 
-            followup_clean = self.generator.prompt_manager.clean_reply(followup_raw)
+            followup_clean = capitalize_message(self.generator.prompt_manager.clean_reply(followup_raw))
             if not followup_clean or len(followup_clean.split()) > 8:
                 return
 
@@ -1681,7 +1690,7 @@ class ReplyManager(CommandRouterMixin):
             # Anti-Flooding: In group chats (chat_id < 0), NEVER send multiple message bubbles simultaneously.
             # Multi-bubble splitting is strictly restricted to private 1-on-1 DMs (chat_id > 0).
             multibubble_enabled = (self.db.get_state("multibubble_enabled", "1") == "1") and (chat_id > 0)
-            msg_parts = self.split_reply_messages(text, enabled=multibubble_enabled)
+            msg_parts = [capitalize_message(part) for part in self.split_reply_messages(text, enabled=multibubble_enabled)]
             if not msg_parts:
                 return False
 
@@ -1697,7 +1706,7 @@ class ReplyManager(CommandRouterMixin):
                 typo_variant, _ = self.maybe_inject_typo_correction(first_part, probability=0.05)
                 if typo_variant != first_part:
                     edit_fix_original = first_part
-                    first_part = typo_variant
+                    first_part = capitalize_message(typo_variant)
 
             sent_any = False
             try:

@@ -208,14 +208,51 @@
     } catch { return ""; }
   }
 
+  const readsInFlight = new Map();
+
   async function api(path, body) {
     if (DEMO) return demoApi(path, body);
+    if (!body && readsInFlight.has(path)) return readsInFlight.get(path);
     const opts = { method: body ? "POST" : "GET", headers: { "X-Telegram-Init-Data": initDataHeader() } };
     if (body) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
-    const res = await fetch(path, opts);
-    const data = await res.json().catch(() => ({}));
-    if (res.status === 401) return { authorized: false, paywall: data.paywall, version: data.version };
-    return data;
+    const controller = new AbortController();
+    opts.signal = controller.signal;
+    const timeout = setTimeout(() => controller.abort(), body ? 120000 : 20000);
+    const request = (async () => {
+      const res = await fetch(path, opts);
+      const data = await res.json();
+      if (res.status === 401) return { authorized: false, paywall: data.paywall, version: data.version };
+      if (res.status >= 400) return { ...data, ok: false, response: data.response || data.error || `Server returned ${res.status}. Try again.` };
+      return data;
+    })();
+    if (!body) readsInFlight.set(path, request);
+    try { return await request; }
+    catch (error) {
+      if (error.name === "AbortError") throw new Error("The request timed out. Refresh to check the result before trying again.");
+      if (error.name === "SyntaxError") throw new Error("The server sent an invalid response. Try again.");
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      if (!body) readsInFlight.delete(path);
+    }
+  }
+
+  const renderedHtml = new WeakMap();
+  function updateHtml(id, html) {
+    const element = $(id);
+    if (renderedHtml.get(element) === html) return false;
+    element.innerHTML = html;
+    renderedHtml.set(element, html);
+    return true;
+  }
+
+  function syncField(id, value) {
+    const field = $(id);
+    if (!field) return;
+    const next = String(value ?? "");
+    if ((field.dataset.syncedValue === undefined && field.dataset.dirty !== "true") || field.value === field.dataset.syncedValue) field.value = next;
+    field.dataset.syncedValue = next;
+    field.dataset.dirty = String(field.value !== next);
   }
 
   // ------------------------------------------------------------ demo data
@@ -229,7 +266,7 @@
       owner_name: "Kaif", ai_engine: "Gemini", ai_model: "gemini-2.5-flash-lite", ai_base_url: "",
       available_models: ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"],
       models_manually_set: false,
-      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.4",
+      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.5",
       auto_reactions: true, ownreact: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
       thinking: "default", temperature: "0.7", lang: "english", max_tokens: "512",
       quiet_hours_start: "02:00", quiet_hours_end: "08:00", quiet_hours_schedule: "02:00 AM – 08:00 AM IST",
@@ -272,7 +309,7 @@
   };
 
   async function demoApi(path, body) {
-    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.4", user: { id: 555000111, name: "Kaif" } };
+    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.5", user: { id: 555000111, name: "Kaif" } };
     if (path === "/api/state") return DEMO_DATA.state;
     if (path === "/api/chats") return { chats: DEMO_DATA.chats, chatty_global: DEMO_DATA.state.chatty_global };
     if (path === "/api/pending") return { pending: DEMO_DATA.pending };
@@ -658,7 +695,8 @@
     else el.textContent = plainText;
 
     el.classList.remove("hidden");
-    const dismiss = () => { el.classList.add("hidden"); clearTimeout(toastTimer); };
+    if (el.showPopover && !el.matches(":popover-open")) el.showPopover();
+    const dismiss = hideToast;
     el.onclick = dismiss;
     if (closeBtn) closeBtn.onclick = (e) => { e.stopPropagation(); dismiss(); };
     haptic(statusKind === "err" ? "err" : (statusKind === "ok" ? "ok" : "light"));
@@ -666,7 +704,13 @@
     const duration = statusKind === "err"
       ? Math.min(9000, 4500 + plainText.length * 40)
       : Math.min(7000, 3600 + plainText.length * 30);
-    toastTimer = setTimeout(() => el.classList.add("hidden"), duration);
+    toastTimer = setTimeout(hideToast, duration);
+  }
+
+  function hideToast() {
+    if ($("toast").hidePopover && $("toast").matches(":popover-open")) $("toast").hidePopover();
+    $("toast").classList.add("hidden");
+    clearTimeout(toastTimer);
   }
 
   function haptic(kind) {
@@ -686,26 +730,18 @@
     haptic("light");
   }
 
-  function expandSheet() {
-    const sheet = $("sheet");
-    if (!sheet || sheet.classList.contains("is-expanded")) return;
-    sheet.classList.add("is-expanded");
-    const expBtn = $("sheet-expand");
-    if (expBtn) expBtn.setAttribute("aria-expanded", "true");
-    haptic("light");
-  }
-
-  function collapseSheet() {
-    const sheet = $("sheet");
-    if (!sheet || !sheet.classList.contains("is-expanded")) return;
-    sheet.classList.remove("is-expanded");
-    const expBtn = $("sheet-expand");
-    if (expBtn) expBtn.setAttribute("aria-expanded", "false");
-    haptic("light");
-  }
+  let sheetVersion = 0;
+  let sheetBusy = false;
 
   function openSheet(title, bodyHtml, buttons) {
     const sheet = $("sheet");
+    hideToast();
+    sheet.appendChild($("toast"));
+    const version = ++sheetVersion;
+    sheetBusy = false;
+    $("sheet-close").disabled = false;
+    sheet.removeAttribute("aria-busy");
+    $("sheet-error").classList.add("hidden");
     if (sheet) sheet.classList.remove("is-expanded");
     const expBtn = $("sheet-expand");
     if (expBtn) expBtn.setAttribute("aria-expanded", "false");
@@ -719,54 +755,83 @@
     actions.innerHTML = "";
     (buttons || []).forEach((b) => {
       const btn = document.createElement("button");
+      btn.type = "button";
       btn.className = `btn ${b.kind || ""}`.trim();
       btn.textContent = b.label;
-      btn.addEventListener("click", () => { closeSheet(); b.onClick && b.onClick(); });
+      btn.addEventListener("click", async () => {
+        if (sheetBusy) return;
+        if (!b.onClick) return closeSheet();
+        const fields = [...bodyEl.querySelectorAll("input, textarea, select")];
+        if (b.kind === "primary" && fields.some((field) => !field.reportValidity())) return;
+        sheetBusy = true;
+        $("sheet-close").disabled = true;
+        sheet.setAttribute("aria-busy", "true");
+        btn.textContent = "Working…";
+        actions.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+        try {
+          const result = await b.onClick();
+          if (version !== sheetVersion) return;
+          if (result === false || (result && (result.ok === false || result.queued))) {
+            $("sheet-error").textContent = result.response || "Your changes have not been saved. Review the values and try again.";
+            $("sheet-error").classList.remove("hidden");
+          } else closeSheet(true);
+        } catch (error) {
+          if (version === sheetVersion) {
+            $("sheet-error").textContent = error.message || "Could not save. Try again.";
+            $("sheet-error").classList.remove("hidden");
+          }
+        } finally {
+          if (version === sheetVersion) {
+            sheetBusy = false;
+            $("sheet-close").disabled = false;
+            sheet.removeAttribute("aria-busy");
+            actions.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+            btn.textContent = b.label;
+          }
+        }
+      });
       actions.appendChild(btn);
     });
-    const inp = $("sheet-body").querySelector("input");
-    if (inp) {
-      inp.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          const primaryBtn = actions.querySelector(".btn.primary") || actions.querySelector(".btn");
-          if (primaryBtn) primaryBtn.click();
-        }
+    const inputs = [...bodyEl.querySelectorAll('input:not([type="checkbox"]), textarea, select')];
+    inputs.forEach((field, index) => {
+      field.enterKeyHint = index < inputs.length - 1 ? "next" : "done";
+      field.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || (field.tagName === "TEXTAREA" && !event.ctrlKey && !event.metaKey)) return;
+        event.preventDefault();
+        if (index < inputs.length - 1) inputs[index + 1].focus();
+        else (actions.querySelector(".btn.primary") || actions.querySelector(".btn"))?.click();
       });
-      setTimeout(() => inp.focus(), 60);
-    }
-    const ta = $("sheet-body").querySelector("textarea");
-    if (ta) {
-      ta.addEventListener("keydown", (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-          e.preventDefault();
-          const primaryBtn = actions.querySelector(".btn.primary") || actions.querySelector(".btn");
-          if (primaryBtn) primaryBtn.click();
-        }
-      });
-      setTimeout(() => ta.focus(), 60);
-    }
-    $("sheet-backdrop").classList.remove("hidden");
-    if (sheet) sheet.classList.remove("hidden");
+    });
+    sheet.classList.remove("hidden");
+    if (!sheet.open) sheet.showModal();
+    document.body.classList.add("sheet-open");
+    $("sheet-title").focus({ preventScroll: true });
     updateTmaBackButton();
     haptic("light");
   }
 
-  function closeSheet() {
+  function closeSheet(saved = false) {
     const sheet = $("sheet");
+    if (sheetBusy && saved !== true) return;
+    if (saved !== true && sheet.querySelector('[data-dirty="true"]') && !window.confirm("Discard the unsaved changes in this popup?")) return;
     if (sheet) sheet.classList.remove("is-expanded");
     const expBtn = $("sheet-expand");
     if (expBtn) expBtn.setAttribute("aria-expanded", "false");
-    $("sheet-backdrop").classList.add("hidden");
-    if (sheet) sheet.classList.add("hidden");
+    sheet.close();
+    document.body.appendChild($("toast"));
+    if (!$("toast").classList.contains("hidden") && $("toast").showPopover && !$("toast").matches(":popover-open")) $("toast").showPopover();
+    sheet.classList.add("hidden");
+    document.body.classList.remove("sheet-open");
     updateTmaBackButton();
+    updateClosingConfirmation();
+    if (refreshAfterSheet) { refreshAfterSheet = false; loadView(currentView); }
     haptic("light");
   }
 
   function updateTmaBackButton() {
     try {
       if (!tg || !tg.BackButton) return;
-      const sheetOpen = $("sheet") && !$("sheet").classList.contains("hidden");
+      const sheetOpen = $("sheet") && $("sheet").open;
       if (sheetOpen) {
         tg.BackButton.show();
         tg.BackButton.offClick(backToOverview);
@@ -792,37 +857,59 @@
   // -------------------------------------------------------------- views
 
   let currentView = "overview";
+  let latestState = null;
+  const viewLoads = new Map();
+  const viewScroll = new Map();
+  let refreshAfterSheet = false;
 
   function showView(name) {
+    if (!$(`view-${name}`)) return;
+    viewScroll.set(currentView, window.scrollY);
     currentView = name;
     document.querySelectorAll(".view").forEach((v) => v.classList.add("hidden"));
     $(`view-${name}`).classList.remove("hidden");
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === name));
+    document.querySelectorAll(".tab").forEach((t) => {
+      if (t.dataset.view === name) t.setAttribute("aria-current", "page");
+      else t.removeAttribute("aria-current");
+    });
+    window.scrollTo({ top: viewScroll.get(name) || 0, behavior: "instant" });
     updateTmaBackButton();
     haptic();
     loadView(name);
   }
 
   function loadView(name) {
-    if (name === "overview") refreshOverview();
-    else if (name === "chats") refreshChats();
-    else if (name === "persona") refreshPersona();
-    else if (name === "approvals") refreshApprovals();
-    else if (name === "more") refreshMore();
+    if ($("sheet").open) { refreshAfterSheet = true; return Promise.resolve(); }
+    if (viewLoads.has(name)) return viewLoads.get(name);
+    const refresh = { overview: refreshOverview, chats: refreshChats, persona: refreshPersona, approvals: refreshApprovals, more: refreshMore }[name];
+    if (!refresh) return Promise.resolve();
+    const view = $(`view-${name}`);
+    view.setAttribute("aria-busy", "true");
+    $("view-error").classList.add("hidden");
+    const request = refresh().catch((error) => {
+      if (currentView === name) {
+        $("view-error-message").textContent = error.message || "Could not refresh. Your current view is still available.";
+        $("view-error").classList.remove("hidden");
+      }
+    }).finally(() => { view.removeAttribute("aria-busy"); viewLoads.delete(name); });
+    viewLoads.set(name, request);
+    return request;
   }
 
   // ------------------------------------------------------------ overview
 
   async function refreshOverview() {
-    const s = await api("/api/state");
+    const [s, acts] = await Promise.all([latestState || api("/api/state"), api("/api/activity")]);
     if (!s || s.authorized === false) return maybePaywall(s);
+    if (s.ok === false) throw new Error(s.response);
     renderState(s);
-    const acts = await api("/api/activity");
+    if (acts.authorized === false) return maybePaywall(acts);
     renderSparkline(acts && acts.activity ? acts.activity : [], s.replies_24h || 0);
     const rows = (acts.activity || []).slice(0, 4);
-    $("ov-activity").innerHTML = rows.length
+    updateHtml("ov-activity", rows.length
       ? rows.map(feedRowHtml).join("")
-      : `<div class="empty">No replies yet, the account stays quiet until a chat talks.</div>`;
+      : `<div class="empty">No replies yet, the account stays quiet until a chat talks.</div>`);
     $("tab-approvals").textContent = String(s.pending_count || 0);
     $("tab-approvals").classList.toggle("hidden", !s.pending_count);
   }
@@ -1014,11 +1101,12 @@
   async function refreshChats() {
     const data = await api("/api/chats");
     if (!data || data.authorized === false) return maybePaywall(data);
+    if (data.ok === false) throw new Error(data.response);
     chatCache = data.chats || [];
-    $("chat-list").innerHTML = chatCache.length
+    const changed = updateHtml("chat-list", chatCache.length
       ? chatCache.map(chatRowHtml).join("")
-      : `<div class="empty">No chats allowed yet. Add a chat ID above.</div>`;
-    wireChatRows();
+      : `<div class="empty">No chats allowed yet. Add a chat ID above.</div>`);
+    if (changed) wireChatRows();
   }
 
   function chatRowHtml(c) {
@@ -1165,7 +1253,7 @@
 
     openSheet(c.name, bodyHtml, [{ label: "Close", kind: "" }]);
 
-    setTimeout(() => {
+    {
       const sheetBody = $("sheet-body");
       if (!sheetBody) return;
 
@@ -1181,7 +1269,6 @@
 
       sheetBody.querySelectorAll(".clay-action-btn").forEach((btn) => {
         btn.addEventListener("click", () => {
-          closeSheet();
           const act = btn.dataset.action;
           if (act === "prompt") promptSheet(c);
           else if (act === "context") contextSheet(c);
@@ -1190,12 +1277,12 @@
           else if (act === "remove") removeSheet(c, "remove");
         });
       });
-    }, 50);
+    }
   }
 
   function chatCooldownSheet(c) {
-    const curMin = c.cooldown_min != null ? c.cooldown_min : 5;
-    const curMax = c.cooldown_max != null ? c.cooldown_max : 60;
+    const curMin = c.cooldown_min ?? c.cooldown_default_min ?? 5;
+    const curMax = c.cooldown_max ?? c.cooldown_default_max ?? 60;
     const isCustom = c.cooldown_min != null && c.cooldown_max != null;
 
     const bodyHtml = `
@@ -1206,11 +1293,11 @@
         <div class="cooldown-inputs-grid">
           <div class="field-group">
             <label for="cd-min-input" class="field-label">Min Cooldown (sec)</label>
-            <input type="number" id="cd-min-input" class="clay-input" min="0" max="600" value="${curMin}" step="1">
+            <input type="number" id="cd-min-input" class="clay-input" min="0" value="${curMin}" step="0.1" required>
           </div>
           <div class="field-group">
             <label for="cd-max-input" class="field-label">Max Cooldown (sec)</label>
-            <input type="number" id="cd-max-input" class="clay-input" min="0" max="1200" value="${curMax}" step="1">
+            <input type="number" id="cd-max-input" class="clay-input" min="0" value="${curMax}" step="0.1" required>
           </div>
         </div>
         <div class="cooldown-presets-section">
@@ -1223,7 +1310,7 @@
           </div>
         </div>
         <div class="current-cd-status" style="margin-top:12px;font-size:12px;color:var(--faint);">
-          Status: ${isCustom ? `<span style="color:var(--accent-bright);font-weight:600">Custom (${curMin}s - ${curMax}s)</span>` : `<span>Global default (5s - 60s)</span>`}
+          Status: ${isCustom ? `<span style="color:var(--accent-bright);font-weight:600">Custom (${curMin}s - ${curMax}s)</span>` : `<span>Default (${curMin}s - ${curMax}s)</span>`}
         </div>
       </div>
     `;
@@ -1238,29 +1325,32 @@
           onClick: () => {
             const minVal = parseFloat($("cd-min-input")?.value || "5");
             const maxVal = parseFloat($("cd-max-input")?.value || "60");
-            runAction("chat_cooldown", { chat_id: c.id, min: minVal, max: maxVal });
+            if (maxVal < minVal) return { ok: false, response: "Maximum cooldown must be at least the minimum." };
+            return runAction("chat_cooldown", { chat_id: c.id, min: minVal, max: maxVal });
           },
         },
         {
           label: "Reset to Global",
           onClick: () => {
-            runAction("chat_cooldown", { chat_id: c.id, reset: true });
+            return runAction("chat_cooldown", { chat_id: c.id, reset: true });
           },
         },
       ]
     );
 
-    setTimeout(() => {
+    {
       document.querySelectorAll(".cooldown-preset-chips .preset-chip").forEach((btn) => {
         btn.addEventListener("click", () => {
           const minInp = $("cd-min-input");
           const maxInp = $("cd-max-input");
           if (minInp) minInp.value = btn.dataset.min;
           if (maxInp) maxInp.value = btn.dataset.max;
+          minInp?.dispatchEvent(new Event("input", { bubbles: true }));
+          maxInp?.dispatchEvent(new Event("input", { bubbles: true }));
           haptic("light");
         });
       });
-    }, 50);
+    }
   }
 
   function chattySheet(c) {
@@ -1283,8 +1373,6 @@
         { label: "Save", kind: "primary", onClick: () => runAction("chatprompt", { chat_id: c.id, value: $("sheet-input").value.trim() }) },
         { label: "Clear", onClick: () => runAction("chatprompt", { chat_id: c.id, value: "default" }) },
       ]);
-    const ta = $("sheet-input");
-    if (ta) ta.focus();
   }
 
   function contextSheet(c) {
@@ -1296,8 +1384,6 @@
         { label: "Clear notes", onClick: () => runAction("delcontext", { chat_id: c.id }) },
         { label: "Sync pins", onClick: () => runAction("syncpins", { chat_id: c.id }) },
       ]);
-    const ta = $("sheet-input");
-    if (ta) ta.focus();
   }
 
   function removeSheet(c, op) {
@@ -1355,20 +1441,21 @@
     if (!el) return;
     const currentPrompt = ($("pf-prompt").value || "").trim();
 
-    el.innerHTML = PROMPT_PRESETS.map((p) => {
+    const changed = updateHtml("preset-carousel", PROMPT_PRESETS.map((p) => {
       const isActive = p.prompt ? currentPrompt === p.prompt : !currentPrompt;
       return `<button type="button" class="preset-chip ${isActive ? "active" : ""}" data-preset="${p.id}">
         <span class="preset-icon">${p.icon}</span>
         <span>${esc(p.name)}</span>
       </button>`;
-    }).join("");
-
+    }).join(""));
+    if (!changed) return;
     el.querySelectorAll(".preset-chip").forEach((chip) => {
       chip.addEventListener("click", () => {
         haptic("light");
         const found = PROMPT_PRESETS.find((x) => x.id === chip.dataset.preset);
         if (!found) return;
         $("pf-prompt").value = found.prompt;
+        $("pf-prompt").dispatchEvent(new Event("input", { bubbles: true }));
         el.querySelectorAll(".preset-chip").forEach((c) => c.classList.remove("active"));
         chip.classList.add("active");
         toast(found.prompt ? `Loaded "${found.name}". Tap Save prompt to apply.` : "Reset to built-in persona. Tap Save prompt to apply.", "info");
@@ -1377,19 +1464,21 @@
   }
 
   async function refreshPersona() {
-    const s = await api("/api/state");
+    const [s, data] = await Promise.all([api("/api/state"), api("/api/chats")]);
     if (!s || s.authorized === false) return maybePaywall(s);
-    if (document.activeElement !== $("pf-prompt")) $("pf-prompt").value = s.prompt || "";
-    if (document.activeElement !== $("pf-name")) $("pf-name").value = s.owner_name || "";
+    if (s.ok === false) throw new Error(s.response);
+    if (data.authorized === false) return maybePaywall(data);
+    if (data.ok === false) throw new Error(data.response);
+    syncField("pf-prompt", s.prompt || "");
+    syncField("pf-name", s.owner_name || "");
     renderPromptPresets();
     const styles = ["casual", "concise", "formal", "humorous"];
-    $("pf-style").innerHTML = styles.map((st) =>
-      `<button class="seg ${st === s.style ? "active" : ""}" data-style="${st}">${st}</button>`).join("");
-    $("pf-style").querySelectorAll(".seg").forEach((b) =>
+    const styleChanged = updateHtml("pf-style", styles.map((st) =>
+      `<button class="seg ${st === s.style ? "active" : ""}" data-style="${st}">${st}</button>`).join(""));
+    if (styleChanged) $("pf-style").querySelectorAll(".seg").forEach((b) =>
       b.addEventListener("click", () => runAction("style", { value: b.dataset.style })));
-    const data = await api("/api/chats");
     const chats = (data.chats || []).filter((c) => c.prompt || c.context);
-    $("pf-chats").innerHTML = chats.length
+    const changed = updateHtml("pf-chats", chats.length
       ? chats.map((c) => {
           return `<div class="persona-chat-card">
             <div class="capsule-main">
@@ -1407,7 +1496,8 @@
             </div>
           </div>`;
         }).join("")
-      : `<div class="empty">No per-chat prompts or context notes yet. Set them from the Chats tab.</div>`;
+      : `<div class="empty">No per-chat prompts or context notes yet. Set them from the Chats tab.</div>`);
+    if (!changed) return;
     $("pf-chats").querySelectorAll("[data-op]").forEach((btn) =>
       btn.addEventListener("click", () => {
         const c = (data.chats || []).find((x) => String(x.id) === btn.dataset.cid);
@@ -1422,6 +1512,7 @@
   async function refreshApprovals() {
     const data = await api("/api/pending");
     if (!data || data.authorized === false) return maybePaywall(data);
+    if (data.ok === false) throw new Error(data.response);
     const rows = data.pending || [];
     const count = rows.length;
     $("tab-approvals").textContent = String(count);
@@ -1429,9 +1520,10 @@
     if ($("approval-batch-bar")) {
       $("approval-batch-bar").classList.toggle("hidden", count < 2);
     }
-    $("approval-list").innerHTML = count
+    const changed = updateHtml("approval-list", count
       ? rows.map(approvalCardHtml).join("")
-      : `<div class="empty">Nothing waiting. In approval mode every draft shows up here.</div>`;
+      : `<div class="empty">Nothing waiting. In approval mode every draft shows up here.</div>`);
+    if (!changed) return;
     $("approval-list").querySelectorAll("[data-ap]").forEach((btn) =>
       btn.addEventListener("click", () => runAction(btn.dataset.ap, { id: btn.dataset.id })));
     wireApprovalSwipes();
@@ -1586,12 +1678,13 @@
     }
     const selectedList = (Array.isArray(selectedOverride) ? selectedOverride : ($("ai-model").value || "").split(/[,;]/))
       .map((s) => String(s).trim().replace(/^models\//, "")).filter(Boolean);
-    container.innerHTML = modelsList.map((m) => {
+    const changed = updateHtml("ai-model-chips", modelsList.map((m) => {
       const cleanM = String(m).replace(/^models\//, "").trim();
       const idx = selectedList.indexOf(cleanM);
       const badge = idx === -1 ? "" : `<span class="chip-order-badge">${idx + 1}</span>`;
       return `<button class="model-chip ${idx === -1 ? "" : "active"}" data-model="${esc(cleanM)}" type="button">${badge}${esc(cleanM)}</button>`;
-    }).join("");
+    }).join(""));
+    if (!changed) return;
     container.querySelectorAll(".model-chip").forEach((chip) => {
       chip.addEventListener("click", async () => {
         const selected = [...selectedList];
@@ -1609,10 +1702,12 @@
   }
 
   async function refreshMore() {
-    const data = await api("/api/access");
+    const [data, s] = await Promise.all([api("/api/access"), api("/api/state")]);
     if (!data || data.authorized === false) return maybePaywall(data);
-    if (data.ok === false) return toast(data.response, "err");
-    $("access-list").innerHTML = (data.users || []).length
+    if (!s || s.authorized === false) return maybePaywall(s);
+    if (s.ok === false) throw new Error(s.response);
+    renderMoreControls(s);
+    const changed = updateHtml("access-list", data.ok === false ? `<p class="empty">${esc(data.response)}</p>` : (data.users || []).length
       ? data.users.map((u) => {
           const initials = u.initials || (u.name || "U").slice(0, 2).toUpperCase();
           const cleanUser = u.username ? u.username.replace(/^@/, "").trim() : "";
@@ -1642,26 +1737,21 @@
             </div>
           </div>`;
         }).join("")
-      : `<div class="empty">No authorized owners. Add an owner by ID or @username above.</div>`;
+      : `<div class="empty">No authorized owners. Add an owner by ID or @username above.</div>`);
+    if (!changed) return;
     $("access-list").querySelectorAll("[data-unauth]").forEach((btn) =>
       btn.addEventListener("click", () => openSheet("Remove owner", `<p>Revoke panel access for owner <span class="num">${esc(btn.dataset.unauth)}</span>?</p>`,
         [{ label: "Remove", kind: "danger", onClick: () => runAction("removeauth", { user_id: btn.dataset.unauth }) }, { label: "Cancel" }])));
 
-    const s = await api("/api/state");
-    if (s && s.ok === false) return toast(s.response, "err");
-    if (s && s.authorized !== false) {
-      renderMoreControls(s);
-    }
   }
 
   function renderMoreControls(s) {
     if (!s) return;
-    if (document.activeElement !== $("ai-model") && s.ai_model !== undefined) $("ai-model").value = s.ai_model;
-    if (document.activeElement !== $("ai-baseurl") && s.ai_base_url !== undefined) $("ai-baseurl").value = s.ai_base_url;
+    if (s.ai_model !== undefined) syncField("ai-model", s.ai_model);
+    if (s.ai_base_url !== undefined) syncField("ai-baseurl", s.ai_base_url);
     if (Array.isArray(s.available_models)) {
       cachedEndpointModels = s.available_models;
       $("models-fetched-count").textContent = `(${cachedEndpointModels.length})`;
-      renderModelChips(cachedEndpointModels);
     }
 
     // 1. Quiet Hours & Sleep (Phase 7)
@@ -1680,8 +1770,8 @@
     }
     const qhStart = $("qh-start-input");
     const qhEnd = $("qh-end-input");
-    if (qhStart && document.activeElement !== qhStart && s.quiet_hours_start) qhStart.value = s.quiet_hours_start;
-    if (qhEnd && document.activeElement !== qhEnd && s.quiet_hours_end) qhEnd.value = s.quiet_hours_end;
+    if (qhStart && s.quiet_hours_start) syncField("qh-start-input", s.quiet_hours_start);
+    if (qhEnd && s.quiet_hours_end) syncField("qh-end-input", s.quiet_hours_end);
 
     const isQhEnabled = s.quiet_hours_enabled !== false;
     const curWindow = `${s.quiet_hours_start || "02:00"} ${s.quiet_hours_end || "08:00"}`;
@@ -1709,6 +1799,9 @@
       if (!btn) return;
       const on = Boolean(isEnabled);
       btn.dataset.state = on ? "on" : "off";
+      btn.setAttribute("role", "switch");
+      btn.setAttribute("aria-checked", String(on));
+      btn.setAttribute("aria-label", btn.closest(".setting-toggle-row")?.querySelector(".toggle-title")?.textContent.trim() || action);
       btn.className = `clay-switch ${on ? "on" : "off"}`;
       btn.textContent = on ? "ON" : "OFF";
     });
@@ -1739,7 +1832,7 @@
     const rulesList = $("rules-list");
     if (rulesList) {
       const rules = s.rules || [];
-      rulesList.innerHTML = rules.length
+      const changed = updateHtml("rules-list", rules.length
         ? rules.map((r) => `<div class="rule-row">
             <div class="rule-info">
               <span class="rule-trigger">Trigger: &ldquo;${esc(r.keyword)}&rdquo;</span>
@@ -1747,9 +1840,9 @@
             </div>
             <button class="btn small danger" data-delrule="${esc(r.keyword)}">Delete</button>
           </div>`).join("")
-        : `<div class="empty">No keyword auto-replies configured. Tap &ldquo;+ Add Rule&rdquo; above.</div>`;
+        : `<div class="empty">No keyword auto-replies configured. Tap &ldquo;+ Add Rule&rdquo; above.</div>`);
 
-      rulesList.querySelectorAll("[data-delrule]").forEach((b) => {
+      if (changed) rulesList.querySelectorAll("[data-delrule]").forEach((b) => {
         b.addEventListener("click", () => {
           openSheet("Delete trigger", `<p>Remove keyword auto-reply for <strong>&ldquo;${esc(b.dataset.delrule)}&rdquo;</strong>?</p>`, [
             { label: "Delete", kind: "danger", onClick: () => runAction("delrule", { value: b.dataset.delrule }) },
@@ -1811,6 +1904,7 @@
 
   function enqueueAction(action, params) {
     const q = loadOfflineQueue();
+    if (q.some(item => item.action === action && JSON.stringify(item.params) === JSON.stringify(params))) return;
     q.push({
       id: Date.now() + "_" + Math.random().toString(36).slice(2, 6),
       action,
@@ -1863,49 +1957,57 @@
 
   // --------------------------------------------------------- run + notify
 
-  async function runAction(action, params) {
+  const actionsInFlight = new Map();
+  async function runAction(action, params = {}) {
+    const key = JSON.stringify([action, params]);
+    if (actionsInFlight.has(key)) return actionsInFlight.get(key);
+    const request = performAction(action, params);
+    actionsInFlight.set(key, request);
+    try { return await request; } finally { actionsInFlight.delete(key); }
+  }
+
+  async function performAction(action, params) {
     haptic();
-
-    // Optimistic UI for pending draft approvals
-    if (params && params.id && (action === "approve" || action === "reject")) {
-      const card = document.querySelector(`.approval-card-wrap[data-id="${params.id}"]`);
-      if (card) {
-        card.style.transition = "transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.22s ease";
-        card.style.transform = action === "approve" ? "translateX(120%)" : "translateX(-120%)";
-        card.style.opacity = "0";
-        setTimeout(() => {
-          card.remove();
-          const badge = $("tab-approvals");
-          if (badge) {
-            const count = Math.max(0, (parseInt(badge.textContent, 10) || 1) - 1);
-            badge.textContent = String(count);
-            badge.classList.toggle("hidden", !count);
-          }
-        }, 250);
-      }
-    }
-
-    let res = null;
+    const card = params.id ? document.querySelector(`.approval-card-wrap[data-id="${params.id}"]`) : null;
+    const buttons = card ? [...card.querySelectorAll("button")] : [...document.querySelectorAll(`[data-action="${action}"]`)];
+    buttons.forEach((button) => { button.disabled = true; });
+    card?.setAttribute("aria-busy", "true");
     try {
-      res = await api("/api/action", { action, params });
-    } catch {
-      // Offline fallback: queue action for automatic sync upon reconnection
-      enqueueAction(action, params);
-      haptic("light");
-      toast("Action queued offline. Will auto-sync when connected", "info");
-      return { ok: true, queued: true };
+      const res = await api("/api/action", { action, params });
+      if (res && res.authorized === false) {
+        maybePaywall(res);
+        return { ok: false, response: "Your access has changed. Reopen the app after the owner restores it." };
+      }
+      haptic(res && res.ok ? "ok" : "err");
+      latestState = null;
+      toast(res?.response || (res?.ok ? "Done" : "Failed"), res?.ok ? "ok" : "err");
+      await loadView(currentView);
+      updateClosingConfirmation();
+      return res;
+    } catch (error) {
+      if (navigator.onLine === false) {
+        enqueueAction(action, params);
+        toast("Action queued offline. Reconnect to sync it.", "info");
+        updateClosingConfirmation();
+        return { ok: false, queued: true, response: "Offline. Your action is queued; reconnect before making more changes." };
+      }
+      const response = error.message || "The request failed. Refresh to check its result before trying again.";
+      toast(response, "err");
+      return { ok: false, response };
+    } finally {
+      buttons.forEach((button) => { button.disabled = false; });
+      card?.removeAttribute("aria-busy");
+      const content = card?.querySelector(".approval-card-content");
+      if (content) content.style.transform = "translateX(0)";
     }
-
-    if (res && res.authorized === false) return maybePaywall(res);
-    haptic(res && res.ok ? "ok" : "err");
-    toast(res && res.response ? res.response : (res && res.ok ? "Done" : "Failed"));
-    loadView(currentView);
-    return res;
   }
 
   async function runCmd(command) {
     haptic();
-    const res = await api("/api/cmd", { command });
+    let res;
+    try { res = await api("/api/cmd", { command }); }
+    catch (error) { res = { ok: false, response: error.message || "Could not run the command. Try again." }; }
+    latestState = null;
     if (res && res.authorized === false) return maybePaywall(res);
     haptic(res && res.ok ? "ok" : "err");
     openSheet(`/${command.split(" ")[0].slice(1)}`, formatStructuredAppResponse(res && res.response ? res.response : "No response."), [{ label: "Close" }]);
@@ -1954,7 +2056,11 @@
 
   function maybePaywall(res) {
     hideLoading();
-    if (!res || res.authorized === false) {
+    if (!res) { showConnectionError("The server could not be reached. Check your connection and try again."); return true; }
+    if (res.authorized === false) {
+      stopUpdates();
+      closeSheet(true);
+      $("connection-error").classList.add("hidden");
       $("app").classList.add("hidden");
       $("paywall").classList.remove("hidden");
       if (res && res.version) $("pay-version").textContent = `v${res.version}`;
@@ -1982,6 +2088,7 @@
     if (paywallPoll) { clearInterval(paywallPoll); paywallPoll = null; }
     hideLoading();
     $("paywall").classList.add("hidden");
+    $("connection-error").classList.add("hidden");
     $("app").classList.remove("hidden");
     const uName = auth.user && auth.user.name ? auth.user.name : "";
     if (uName) {
@@ -1994,21 +2101,19 @@
     if (!wired) {
       wired = true;
       wire();
-      initEventSource();
       const params = new URLSearchParams(location.search);
       showView(["overview", "chats", "persona", "approvals", "more"].includes(params.get("view")) ? params.get("view") : "overview");
-      setInterval(() => { if (currentView === "overview") refreshOverview(); }, 12000);
+    } else {
+      loadView(currentView);
     }
+    startUpdates();
   }
 
-  function initSheetGestures() {
+  function initSheetControls() {
     const sheet = $("sheet");
     if (!sheet) return;
 
-    const grip = sheet.querySelector(".sheet-grip");
-    const head = sheet.querySelector(".sheet-head");
     const expandBtn = $("sheet-expand");
-    const body = $("sheet-body");
 
     if (expandBtn) {
       expandBtn.addEventListener("click", (e) => {
@@ -2017,90 +2122,37 @@
       });
     }
 
-    if (grip) {
-      grip.addEventListener("click", () => {
-        toggleSheetExpanded();
-      });
-    }
-
-    let startY = 0;
-    let startX = 0;
-    let lastY = 0;
-    let lastX = 0;
-    let tracking = false;
-    let touchArea = null;
-
-    const onTouchStart = (e) => {
-      if (!e.touches || e.touches.length !== 1) return;
-      const t = e.touches[0];
-      startY = t.clientY;
-      startX = t.clientX;
-      lastY = startY;
-      lastX = startX;
-
-      if (grip && (e.target === grip || grip.contains(e.target))) {
-        touchArea = "grip";
-        tracking = true;
-      } else if (head && (e.target === head || head.contains(e.target))) {
-        if (e.target.closest("#sheet-close, #sheet-expand")) return;
-        touchArea = "head";
-        tracking = true;
-      }
-    };
-
-    const onTouchMove = (e) => {
-      if (!tracking || !e.touches || e.touches.length !== 1) return;
-      lastY = e.touches[0].clientY;
-      lastX = e.touches[0].clientX;
-    };
-
-    const onTouchEnd = () => {
-      if (!tracking) return;
-      tracking = false;
-      const diffY = lastY - startY;
-      const diffX = lastX - startX;
-
-      if (Math.abs(diffY) > 28 && Math.abs(diffY) > Math.abs(diffX) * 1.1) {
-        if (diffY < 0) {
-          // Swiped UP on grip or header -> expand to full screen
-          if (touchArea === "grip" || touchArea === "head") {
-            expandSheet();
-          }
-        } else {
-          // Swiped DOWN on grip or header
-          if (sheet.classList.contains("is-expanded")) {
-            collapseSheet();
-          } else if (diffY > 55) {
-            closeSheet();
-          }
-        }
-      }
-      touchArea = null;
-    };
-
-    sheet.addEventListener("touchstart", onTouchStart, { passive: true });
-    sheet.addEventListener("touchmove", onTouchMove, { passive: true });
-    sheet.addEventListener("touchend", onTouchEnd, { passive: true });
-    sheet.addEventListener("touchcancel", () => { tracking = false; touchArea = null; }, { passive: true });
+    sheet.addEventListener("cancel", (event) => { event.preventDefault(); closeSheet(); });
+    let pointerStart = null;
+    sheet.addEventListener("pointerdown", (event) => { pointerStart = { x: event.clientX, y: event.clientY }; });
+    sheet.addEventListener("pointercancel", () => { pointerStart = null; });
+    sheet.addEventListener("click", (event) => {
+      if (event.target !== sheet || !pointerStart) return;
+      const rect = sheet.getBoundingClientRect();
+      const outside = event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom;
+      if (outside && Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y) < 8) closeSheet();
+      pointerStart = null;
+    });
   }
 
   // ---------------------------------------------------------------- init
 
   function wire() {
-    document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.view)));
-    $("sheet-backdrop").addEventListener("click", (e) => {
-      if (e.target === $("sheet-backdrop")) {
-        closeSheet();
-      }
+    $("retry-view").addEventListener("click", () => loadView(currentView));
+    document.addEventListener("input", (event) => {
+      const field = event.target;
+      if (!field.matches("input, textarea, select")) return;
+      field.dataset.dirty = String(field.value !== (field.dataset.syncedValue ?? field.defaultValue));
+      updateClosingConfirmation();
     });
-
+    document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.view)));
     const sheetCloseBtn = $("sheet-close");
     if (sheetCloseBtn) sheetCloseBtn.addEventListener("click", closeSheet);
 
-    initSheetGestures();
+    initSheetControls();
 
     const toastEl = $("toast");
-    if (toastEl) toastEl.addEventListener("click", () => toastEl.classList.add("hidden"));
+    if (toastEl) toastEl.addEventListener("click", hideToast);
 
     const beacon = $("live-beacon");
     if (beacon) {
@@ -2137,20 +2189,6 @@
         }
       });
     });
-
-    // Close open sheet or popup with Escape key
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        closeSheet();
-      }
-    });
-
-    // Instant Tactile Haptic on buttons
-    document.addEventListener("pointerdown", (e) => {
-      const target = e.target.closest(".btn, .pay-btn, .pay-check-btn, .chip, .seg, .model-chip, .preset-chip, .clay-switch, .m3-nav-item, .sheet-close-btn, .sheet-icon-btn, .sheet-grip, .linklike, .kpi[data-goto], .usage-cell[data-goto], .help-btn, .clay-action-btn, .chat-capsule-card, .feed-clickable");
-      if (!target) return;
-      haptic("light");
-    }, { passive: true });
 
     // Global click delegation for links, cards, help buttons & feeds
     document.addEventListener("click", (e) => {
@@ -2270,10 +2308,11 @@
     $("allow-btn").addEventListener("click", async () => {
       const v = $("allow-id").value.trim();
       if (!v) return toast("Enter a chat ID");
-      $("allow-id").value = "";
       const res = await runAction("allow", { chat_id: v });
       if (res && res.ok) {
-        refreshChats();
+        $("allow-id").value = "";
+        $("allow-id").dataset.dirty = "false";
+        updateClosingConfirmation();
       }
     });
     $("allow-id").addEventListener("keydown", (e) => { if (e.key === "Enter") $("allow-btn").click(); });
@@ -2297,11 +2336,15 @@
     });
     $("pf-name").addEventListener("keydown", (e) => { if (e.key === "Enter") $("pf-name-save").click(); });
 
-    $("auth-add").addEventListener("click", () => {
+    $("auth-add").addEventListener("click", async () => {
       const v = $("auth-id").value.trim();
       if (!v) return toast("Enter a Telegram user ID or @username");
-      $("auth-id").value = "";
-      runAction("addauth", { user_id: v });
+      const res = await runAction("addauth", { user_id: v });
+      if (res?.ok) {
+        $("auth-id").value = "";
+        $("auth-id").dataset.dirty = "false";
+        updateClosingConfirmation();
+      }
     });
     $("auth-id").addEventListener("keydown", (e) => { if (e.key === "Enter") $("auth-add").click(); });
 
@@ -2352,18 +2395,20 @@
           {
             label: "Confirm Selection",
             kind: "primary",
-            onClick: () => {
+            onClick: async () => {
               const cbs = Array.from(document.querySelectorAll(".model-popup-cb:checked"));
               const selected = cbs.map((cb) => cb.value.trim()).filter(Boolean);
               if (!selected.length) {
                 toast("Please select at least 1 model.");
-                return;
+                return false;
               }
+              const result = await runAction("save_available_models", { models: selected });
+              if (!result?.ok) return result;
               cachedEndpointModels = selected;
               $("models-fetched-count").textContent = `(${cachedEndpointModels.length})`;
               renderModelChips(cachedEndpointModels);
-              runAction("save_available_models", { models: selected });
               toast(`Loaded ${selected.length} model(s) into available models`);
+              return result;
             },
           },
           { label: "Cancel" },
@@ -2428,18 +2473,20 @@
           {
             label: "Apply Selected to Rotation",
             kind: "primary",
-            onClick: () => {
+            onClick: async () => {
               const cbs = Array.from(document.querySelectorAll(".health-result-cb:checked"));
               const selected = cbs.map((cb) => cb.value.trim()).filter(Boolean);
               if (!selected.length) {
                 toast("Select at least 1 healthy model.");
-                return;
+                return false;
               }
               const newChain = selected.join(",");
+              const result = await runAction("model", { value: newChain });
+              if (!result?.ok) return result;
               $("ai-model").value = newChain;
-              runAction("model", { value: newChain });
               renderModelChips(cachedEndpointModels.length ? cachedEndpointModels : selected, selected);
               toast(`Set active rotation (${selected.length} model(s)): ${newChain}`);
+              return result;
             },
           },
           { label: "Close" },
@@ -2800,8 +2847,8 @@
             onClick: () => {
               const kw = ($("rule-kw-input").value || "").trim();
               const rep = ($("rule-reply-input").value || "").trim();
-              if (!kw || !rep) return toast("Keyword and reply text cannot be empty", "err");
-              runAction("addrule", { value: `${kw} => ${rep}` });
+              if (!kw || !rep) return { ok: false, response: "Enter both a keyword and a reply." };
+              return runAction("addrule", { value: `${kw} => ${rep}` });
             }
           },
           { label: "Cancel" }
@@ -2855,49 +2902,114 @@
 
   function syncTelegramTheme() {
     if (!tg) return;
+    const background = getComputedStyle(document.documentElement).getPropertyValue("--ground").trim();
+    telegramCall("setHeaderColor", "6.1", background);
+    telegramCall("setBackgroundColor", "6.1", background);
+    telegramCall("setBottomBarColor", "7.10", background);
+  }
+
+  function telegramCall(method, version, ...args) {
+    if (!tg || typeof tg[method] !== "function" || (version && !tg.isVersionAtLeast?.(version))) return false;
+    try { tg[method](...args); return true; } catch { return false; }
+  }
+
+  function updateClosingConfirmation() {
+    const dirty = document.querySelector('.canvas [data-dirty="true"], #sheet[open] [data-dirty="true"]');
+    telegramCall(dirty || loadOfflineQueue().length ? "enableClosingConfirmation" : "disableClosingConfirmation", "6.2");
+  }
+
+  let viewportFrame = null;
+  let viewportBaseline = window.innerHeight;
+  function syncViewport() {
+    if (viewportFrame !== null) return;
+    viewportFrame = requestAnimationFrame(() => {
+      viewportFrame = null;
+      const root = document.documentElement;
+      const viewport = window.visualViewport;
+      const stable = tg?.viewportStableHeight || window.innerHeight;
+      const visible = Math.min(viewport?.height || window.innerHeight, stable);
+      const editing = document.activeElement?.matches("input, textarea, select");
+      if (!editing) viewportBaseline = visible;
+      root.style.setProperty("--app-height", `${stable}px`);
+      root.style.setProperty("--visual-height", `${visible}px`);
+      root.style.setProperty("--keyboard-inset", `${Math.max(0, window.innerHeight - visible - (viewport?.offsetTop || 0))}px`);
+      root.classList.toggle("keyboard-open", Boolean(editing && viewportBaseline - visible > 100));
+      for (const edge of ["top", "right", "bottom", "left"]) {
+        root.style.setProperty(`--tg-safe-area-inset-${edge}`, `${tg?.safeAreaInset?.[edge] || 0}px`);
+        root.style.setProperty(`--tg-content-safe-area-inset-${edge}`, `${tg?.contentSafeAreaInset?.[edge] || 0}px`);
+      }
+      $("fullscreen-button").classList.toggle("hidden", !tg?.isVersionAtLeast?.("8.0") || Boolean(tg.isFullscreen));
+    });
+  }
+
+  function showConnectionError(message) {
+    stopUpdates();
+    hideLoading();
+    $("connection-error-message").textContent = message;
+    $("connection-error").classList.remove("hidden");
+    $("paywall").classList.add("hidden");
+    $("app").classList.add("hidden");
+  }
+
+  async function authenticate() {
+    const retry = $("retry-connection");
+    retry.disabled = true;
     try {
-      const darkBg = (tg.themeParams && tg.themeParams.bg_color) || "#0B0E14";
-      if (tg.setHeaderColor) tg.setHeaderColor(darkBg);
-      if (tg.setBackgroundColor) tg.setBackgroundColor(darkBg);
-    } catch (_) {}
+      const auth = await api("/api/auth");
+      if (auth.ok === false) throw new Error(auth.response);
+      if (auth.authorized !== true) return maybePaywall(auth);
+      unlockApp(auth);
+      flushOfflineQueue();
+    } catch (error) { showConnectionError(error.message || "Check your connection and try again."); }
+    finally { retry.disabled = false; }
   }
 
   async function init() {
     updateSyncBadge();
+    $("retry-connection").addEventListener("click", authenticate);
+    $("fullscreen-button").addEventListener("click", () => telegramCall("requestFullscreen", "8.0"));
     window.addEventListener("online", () => {
-      flushOfflineQueue();
+      if (!$("connection-error").classList.contains("hidden")) authenticate();
+      else { flushOfflineQueue(); startUpdates(); }
     });
-
+    window.addEventListener("resize", syncViewport);
+    window.visualViewport?.addEventListener("resize", syncViewport);
+    document.addEventListener("focusin", syncViewport);
+    document.addEventListener("focusout", syncViewport);
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) stopUpdates();
+      else if (!$("app").classList.contains("hidden")) { startUpdates(); loadView(currentView); }
+    });
     if (tg) {
-      try {
-        tg.ready();
-        tg.expand();
-        syncTelegramTheme();
-        tg.onEvent("themeChanged", syncTelegramTheme);
-      } catch { /* older clients */ }
+      telegramCall("ready");
+      telegramCall("expand");
+      telegramCall("disableVerticalSwipes", "7.7");
+      telegramCall("requestFullscreen", "8.0");
+      syncTelegramTheme();
+      for (const event of ["viewportChanged", "safeAreaChanged", "contentSafeAreaChanged", "fullscreenChanged"]) tg.onEvent(event, syncViewport);
+      tg.onEvent("fullscreenFailed", () => { telegramCall("expand"); syncViewport(); });
+      tg.onEvent("themeChanged", syncTelegramTheme);
     }
-
-    let auth = null;
-    try { auth = await api("/api/auth"); } catch { /* no server (plain browser / file) → paywall */ }
-    if (!auth || auth.authorized !== true) { maybePaywall(auth); return; }
-
-    unlockApp(auth);
-    flushOfflineQueue();
+    syncViewport();
+    await authenticate();
   }
 
   function setConnectionStatus(status) {
     const beacon = $("live-beacon");
     if (!beacon) return;
+    const wasLive = beacon.classList.contains("live");
     beacon.className = `live-beacon ${status}`;
     beacon.title = status === "live"
       ? "Real-time engine connected"
       : (status === "connecting" ? "Connecting to engine…" : "Engine offline");
-    if (status === "live") {
+    if (status === "live" && !wasLive) {
       flushOfflineQueue();
     }
   }
 
   function initEventSource() {
+    if (DEMO) { setConnectionStatus("live"); return; }
+    if (eventSource) return;
     if (!window.EventSource) {
       setConnectionStatus("offline");
       return;
@@ -2906,6 +3018,7 @@
       const raw = initDataHeader();
       const q = raw ? `?initData=${encodeURIComponent(raw)}` : "";
       const es = new EventSource(`/api/events${q}`);
+      eventSource = es;
       let lastRevision;
       es.onopen = () => {
         setConnectionStatus("live");
@@ -2914,14 +3027,13 @@
         setConnectionStatus("live");
         try {
           const s = JSON.parse(e.data);
+          latestState = s;
           if (s && s.state) renderState(s);
-          if (s && currentView === "more") renderMoreControls(s);
+          if (s && currentView === "more" && !$("sheet").open) renderMoreControls(s);
           if (s && s.revision !== lastRevision) {
             lastRevision = s.revision;
-            if (currentView === "chats") refreshChats().catch(() => {});
-            if (currentView === "persona") refreshPersona().catch(() => {});
+            if (currentView !== "overview") loadView(currentView);
           }
-          if (s && currentView === "approvals") refreshApprovals().catch(() => {});
         } catch (_) {}
       });
       es.onerror = () => {
@@ -2934,6 +3046,25 @@
     }
   }
 
+  let eventSource = null;
+  let refreshTimer = null;
+  function startUpdates() {
+    if (document.hidden || $("app").classList.contains("hidden")) return;
+    initEventSource();
+    if (refreshTimer !== null) return;
+    refreshTimer = setInterval(() => {
+      if (!$("sheet").open && (!eventSource || eventSource.readyState !== 1 || currentView === "overview")) loadView(currentView);
+    }, 15000);
+  }
+
+  function stopUpdates() {
+    eventSource?.close();
+    eventSource = null;
+    latestState = null;
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+
   // Register Service Worker for Instant PWA Offline Loading
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
@@ -2941,5 +3072,5 @@
     });
   }
 
-  init();
+  init().catch((error) => showConnectionError(error.message));
 })();

@@ -622,7 +622,7 @@ def test_service_worker_asset_and_registration():
     sw_file = miniapp_dir / "sw.js"
     assert sw_file.is_file()
     sw_content = sw_file.read_text(encoding="utf-8")
-    assert "teleautomator-v3.0.4" in sw_content
+    assert "teleautomator-v3.0.5" in sw_content
     assert "caches.open" in sw_content
     assert "self.skipWaiting" in sw_content
     assert "self.clients.claim" in sw_content
@@ -882,10 +882,9 @@ def test_handle_action_ownreact_toggle(tmp_path):
     assert api.handle_state()["ownreact"] is True
 
 
-def test_dynamic_half_and_full_sheet_popups():
+def test_native_sheet_dialog_and_explicit_expand_control():
     miniapp_dir = Path(__file__).resolve().parent.parent / "miniapp"
     index_html = (miniapp_dir / "index.html").read_text(encoding="utf-8")
-    style_css = (miniapp_dir / "style.css").read_text(encoding="utf-8")
     app_js = (miniapp_dir / "app.js").read_text(encoding="utf-8")
 
     # Verify sheet expand/collapse button in markup
@@ -893,19 +892,11 @@ def test_dynamic_half_and_full_sheet_popups():
     assert 'icon-expand' in index_html
     assert 'icon-collapse' in index_html
 
-    # Verify responsive dynamic viewport units and expanded state in CSS
-    assert "max-height: 56dvh;" in style_css
-    assert ".sheet.is-expanded" in style_css
-    assert "max-height: 100dvh;" in style_css or "max-height: 92dvh;" in style_css
-    assert "transition: max-height" in style_css
-    assert ".sheet-grip" in style_css
-
-    # Verify gesture and toggle functions in JS
-    assert "initSheetGestures" in app_js
+    assert '<dialog id="sheet"' in index_html
+    assert 'aria-labelledby="sheet-title"' in index_html
+    assert 'id="sheet-error" role="alert"' in index_html
+    assert "initSheetControls" in app_js
     assert "toggleSheetExpanded" in app_js
-    assert "expandSheet" in app_js
-    assert "collapseSheet" in app_js
-    assert 'sheet.classList.remove("is-expanded")' in app_js
 
 
 

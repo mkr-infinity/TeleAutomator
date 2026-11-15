@@ -34,7 +34,7 @@
   "operatingSystem": "Cross-platform (Linux, Windows, macOS, Android, iOS)",
   "applicationCategory": "CommunicationApplication",
   "description": "AI-powered Telegram userbot and personal chat automation assistant with Telethon MTProto, Gemini LLM auto-replies, and Material 3 Expressive Mini App control panel.",
-  "softwareVersion": "3.0.4",
+  "softwareVersion": "3.0.5",
   "offers": {
     "@type": "Offer",
     "price": "0",
@@ -48,10 +48,7 @@
 }
 </script>
 
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=3.0.4">
+<link rel="stylesheet" href="style.css?v=3.0.5">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
@@ -59,7 +56,10 @@
 <!-- Shared top bar (single h1: the product name, visible in every state) -->
 <header class="topbar">
   <div class="brand"><img class="logo sm" src="logo.svg" alt=""><h1 class="brand-name">TeleAutomator</h1><span id="live-beacon" class="live-beacon live" title="Real-time engine connected" aria-label="Real-time engine connected"><span class="beacon-dot"></span></span><span id="offline-sync-badge" class="sync-badge hidden" title="Offline action queued" aria-label="Offline actions queued"><span class="sync-icon"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span><span id="offline-sync-count" class="num">0</span></span><span id="app-version" class="version num"></span></div>
-  <span id="whoami" class="whoami"></span>
+  <div class="topbar-actions">
+    <span id="whoami" class="whoami"></span>
+    <button id="fullscreen-button" class="sheet-icon-btn hidden" type="button" aria-label="Open fullscreen"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></svg></button>
+  </div>
 </header>
 
 <!-- Sleek loading screen -->
@@ -118,8 +118,17 @@
   </div>
 </section>
 
+<section id="connection-error" class="screen hidden" aria-labelledby="connection-title">
+  <div class="paywrap">
+    <h2 id="connection-title">Could not connect</h2>
+    <p id="connection-error-message">Check your connection and try again.</p>
+    <button id="retry-connection" class="btn primary" type="button">Try again</button>
+  </div>
+</section>
+
 <!-- Authorized app -->
 <div id="app" class="hidden">
+  <div id="view-error" class="inline-notice hidden" role="alert"><span id="view-error-message"></span><button id="retry-view" class="btn small" type="button">Retry</button></div>
   <main class="canvas">
 
     <!-- Overview -->
@@ -294,16 +303,12 @@
 
     <!-- More -->
     <section id="view-more" class="view hidden" aria-label="More">
-      <h2 class="view-title">More</h2>
+      <h2 class="view-title">Settings</h2>
+      <p class="view-sub">Manage your connection, reply behavior, and account safety.</p>
 
-      <h3 class="section-h">Owners &amp; Access</h3>
-      <div class="allow-row">
-        <input type="text" id="auth-id" placeholder="Telegram user ID or @username (e.g. 123456789 or @alice)">
-        <button type="button" class="btn primary" id="auth-add">Add owner</button>
-      </div>
-      <div class="owner-capsules-container" id="access-list"></div>
-
-      <h3 class="section-h">AI engine</h3>
+      <details class="settings-group" name="settings" id="settings-ai">
+      <summary>AI connection<span>Endpoint, API key, and active models</span></summary>
+      <div class="settings-content">
       <div class="card form">
         <label for="ai-baseurl">Custom endpoint</label>
         <input type="text" id="ai-baseurl" placeholder="https://integrate.api.nvidia.com/v1">
@@ -335,14 +340,18 @@
         </div>
       </div>
 
-      <h3 class="section-h">Live model test &amp; playground</h3>
+      </div></details>
+
+      <details class="settings-group" name="settings" id="settings-test">
+      <summary>Model playground<span>Test replies and check model health</span></summary>
+      <div class="settings-content">
       <div class="card form playground-card">
         <label for="test-prompt">Test prompt / message</label>
         <div class="test-row">
           <input type="text" id="test-prompt" value="hello" placeholder="Send a message (e.g. hello)">
           <button type="button" class="btn primary" id="btn-test-model">Send test</button>
         </div>
-        <p class="field-hint">Tests the model live. Automatically prunes dead models and saves working models to rotation.</p>
+        <p class="field-hint">Test a reply before using a model. Your manually selected rotation changes only when you apply a selection.</p>
         <div id="test-results-box" class="test-results-box hidden">
           <div class="test-status-row">
             <span class="pill pill-positive" id="test-badge">Working</span>
@@ -353,7 +362,11 @@
         </div>
       </div>
 
-      <!-- Phase 7: Sleep Schedule & Quiet Hours Visual Picker -->
+      </div></details>
+
+      <details class="settings-group" name="settings" id="settings-behavior">
+      <summary>Replies &amp; timing<span>Quiet hours, reactions, and chat behavior</span></summary>
+      <div class="settings-content">
       <h3 class="section-h">Sleep Schedule &amp; Quiet Hours</h3>
       <div class="card form qh-card">
         <div class="qh-head">
@@ -488,7 +501,11 @@
       </div>
 
       <!-- AI Parameters & Tuning -->
-      <h3 class="section-h">AI Parameters &amp; Tuning</h3>
+      </div></details>
+
+      <details class="settings-group" name="settings" id="settings-preferences">
+      <summary>Reply preferences<span>Language, length, and creativity</span></summary>
+      <div class="settings-content">
       <div class="card form">
         <label>Reasoning Effort (Thinking)</label>
         <div class="segrow" id="seg-thinking">
@@ -526,6 +543,11 @@
       </div>
 
       <!-- Keyword Auto-Reply Rules -->
+      </div></details>
+
+      <details class="settings-group" name="settings" id="settings-rules">
+      <summary>Keyword replies<span>Shortcuts for common messages</span></summary>
+      <div class="settings-content">
       <div class="section-head-btn">
         <h3 class="section-h" style="margin-top:0">Keyword Auto-Replies</h3>
         <button type="button" class="btn small primary" id="btn-add-rule">+ Add Rule</button>
@@ -533,7 +555,11 @@
       <div class="card list" id="rules-list"></div>
 
       <!-- System Maintenance & Safety -->
-      <h3 class="section-h">System Maintenance &amp; Safety</h3>
+      </div></details>
+
+      <details class="settings-group" name="settings" id="settings-safety">
+      <summary>Safety &amp; access<span>Owners, emergency controls, and backups</span></summary>
+      <div class="settings-content">
       <div class="card form">
         <div class="maintenance-row">
           <div class="maintenance-info">
@@ -557,6 +583,13 @@
           <button type="button" class="btn danger" id="btn-clear-context"><svg class="btn-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="m18 15-6-6M4 20l7.5-7.5M14 6l4 4M10 2l12 12M2 22l6-1 5-5-5-5-5 5-1 6z"/></svg> Clear AI Memory</button>
         </div>
       </div>
+      <h3 class="section-h">Owners &amp; access</h3>
+      <div class="allow-row">
+        <input type="text" id="auth-id" aria-label="Telegram user ID or username" placeholder="User ID or @username">
+        <button type="button" class="btn primary" id="auth-add">Add owner</button>
+      </div>
+      <div class="owner-capsules-container" id="access-list"></div>
+      </div></details>
     </section>
 
   </main>
@@ -619,11 +652,10 @@
 </div>
 
 <!-- Bottom sheet -->
-<div id="sheet-backdrop" class="sheet-backdrop hidden"></div>
-<div id="sheet" class="sheet hidden" role="dialog" aria-modal="true">
+<dialog id="sheet" class="sheet hidden" aria-labelledby="sheet-title">
   <div class="sheet-grip" aria-hidden="true"></div>
   <div class="sheet-head">
-    <h3 class="sheet-title" id="sheet-title">Sheet</h3>
+    <h3 class="sheet-title" id="sheet-title" tabindex="-1" autofocus>Sheet</h3>
     <div class="sheet-head-actions">
       <button type="button" class="sheet-icon-btn" id="sheet-expand" aria-label="Toggle full screen" title="Expand / Half">
         <svg class="icon-expand" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
@@ -633,15 +665,16 @@
     </div>
   </div>
   <div class="sheet-body" id="sheet-body"></div>
+  <p class="sheet-error hidden" id="sheet-error" role="alert"></p>
   <div class="sheet-actions" id="sheet-actions"></div>
-</div>
+</dialog>
 
-<div id="toast" class="toast hidden" role="status">
+<div id="toast" class="toast hidden" role="status" popover="manual">
   <span class="toast-icon" id="toast-icon"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></span>
   <div class="toast-msg" id="toast-msg"></div>
   <button type="button" class="toast-close-btn" id="toast-close" aria-label="Dismiss toast"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
 </div>
 
-<script src="app.js?v=3.0.4"></script>
+<script src="app.js?v=3.0.5"></script>
 </body>
 </html>

@@ -302,6 +302,8 @@ class MiniAppAPI:
         if hasattr(ctx.privacy, "_get_dynamic_set"):
             blocked = set(ctx.privacy._get_dynamic_set("dynamic_blocked_chats"))
         chats = []
+        default_min = getattr(ctx.safety, "min_chat_cooldown", 5.0)
+        default_max = getattr(ctx.safety, "max_chat_cooldown", 60.0)
         all_cids = sorted((priv | grps) | blocked)
         import re
         gradients = [
@@ -361,11 +363,17 @@ class MiniAppAPI:
                 "context": perm.get("notes") or "",
                 "cooldown_min": cooldown_min,
                 "cooldown_max": cooldown_max,
+                "cooldown_default_min": default_min,
+                "cooldown_default_max": default_max,
                 "cooldown_str": cooldown_str,
                 "voice_profile": bool(ctx.db.get_state(f"chat_voice_profile_{cid}")),
                 "blocked": cid in blocked,
             })
-        return {"chats": chats, "chatty_global": self.handle_state()["chatty_global"]}
+        try:
+            chatty_global = float(ctx.db.get_state("chatty_probability", "0.15") or 0.15)
+        except (ValueError, TypeError):
+            chatty_global = 0.15
+        return {"chats": chats, "chatty_global": chatty_global}
 
     def handle_pending(self) -> dict:
         rows = self.ctx.db.list_pending_approvals()
@@ -460,14 +468,6 @@ class MiniAppAPI:
         for uid in ids:
             meta = self.ctx.db.get_chat_metadata(uid) or {} if hasattr(self.ctx.db, "get_chat_metadata") else {}
             username = meta.get("username") or ""
-            if not username:
-                try:
-                    _, resolved_meta, _ = self._resolve_user_target(str(uid))
-                    if resolved_meta and resolved_meta.get("username"):
-                        meta = resolved_meta
-                        username = meta.get("username") or ""
-                except Exception:
-                    pass
             clean_user = username.lstrip("@").strip()
             avatar_url = f"https://t.me/i/userpic/320/{clean_user}.jpg" if clean_user else ""
             title = meta.get("title") or ("Main Owner" if uid == main_id else f"User {uid}")

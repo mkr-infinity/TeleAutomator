@@ -14,7 +14,7 @@ from app.config import AppConfig
 from app.event_handlers import is_thread_ender, record_own_outgoing_message, register_handlers
 from app.miniapp_server import MiniAppAPI, MiniAppContext, _authorized_user_ids
 from app.privacy_manager import PrivacyManager
-from app.reply_manager import ReplyManager
+from app.reply_manager import ReplyManager, capitalize_message
 from app.safety_manager import SafetyManager
 from app.storage.database import Database
 from tests.test_miniapp import http_server, forge_init_data, _get, _post
@@ -493,3 +493,52 @@ def test_typo_correction_keeps_room_greeting_unthreaded(tmp_path, clock):
     s.client.send_message.assert_awaited_once()
     assert s.client.send_message.call_args.kwargs["reply_to"] is None
     s.client.edit_message.assert_awaited_once()
+
+
+def test_access_list_never_waits_on_telegram_profile_lookups(tmp_path):
+    s = make_stack(tmp_path)
+    s.api._resolve_user_target = MagicMock(side_effect=AssertionError("Read-only lists must use cached metadata"))
+    users = s.api.handle_access()["users"]
+    assert users[0]["id"] == 111
+    s.api._resolve_user_target.assert_not_called()
+
+
+def test_chat_list_returns_actual_default_cooldown_without_rebuilding_dashboard(tmp_path):
+    s = make_stack(tmp_path)
+    s.db.set_state("min_chat_cooldown_seconds", "3")
+    s.db.set_state("max_chat_cooldown_seconds", "8")
+    s.db.set_state("chatty_probability", "0.4")
+    s.api.handle_state = MagicMock(side_effect=AssertionError("Chat lists should not rebuild the whole dashboard"))
+    result = s.api.handle_chats()
+    assert result["chatty_global"] == 0.4
+    assert all(chat["cooldown_default_min"] == 3 and chat["cooldown_default_max"] == 8 for chat in result["chats"])
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("hello API and iPhone", "Hello API and iPhone"),
+    ("😊 hello NASA", "😊 Hello NASA"),
+    ('"hello there"', '"Hello there"'),
+    ("123 ready", "123 Ready"),
+    ("привет", "Привет"),
+    ("नमस्ते", "नमस्ते"),
+    ("👍", "👍"),
+    ("", ""),
+])
+def test_message_capitalization_preserves_remaining_case(text, expected):
+    assert capitalize_message(text) == expected
+
+
+def test_each_sent_bubble_and_approval_uses_capitalized_text_in_its_history(tmp_path, clock):
+    s = make_stack(tmp_path)
+    s.client.send_message.side_effect = [SimpleNamespace(id=1), SimpleNamespace(id=2), SimpleNamespace(id=3)]
+    s.db.set_state("max_chat_replies_per_minute", "10")
+    s.db.set_state("max_replies_per_minute", "20")
+    async def run():
+        assert await s.manager._send_reply(123, 1, "hello API\n😊 meet iPhone users", adaptive_delay=False)
+        s.manager.set_mode("approval")
+        approval = s.db.add_approval(-100111, "Group", 1, 222, "hi", "ready for NASA")
+        assert "sent successfully" in await s.manager.handle_control_command(f"/approve {approval}")
+    asyncio.run(run())
+    assert [call.args[1] for call in s.client.send_message.await_args_list] == ["Hello API", "😊 Meet iPhone users", "Ready for NASA"]
+    assert [row["text"] for row in s.db.get_recent_chat_messages(123)] == ["Hello API", "😊 Meet iPhone users"]
+    assert s.db.get_recent_chat_messages(-100111)[0]["text"] == "Ready for NASA"

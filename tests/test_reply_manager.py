@@ -1047,7 +1047,7 @@ def test_mandatory_mention_when_mentioned_by_peer(tmp_path: Path):
         # Text must NEVER write user names or @usernames
         assert "@" not in text
         assert "Alice" not in text
-        assert text == "sounds good to me 👍"
+        assert text == "Sounds good to me 👍"
         # Must swipe-to-reply (quote message ID 404)
         assert reply_to == 404
 
@@ -1803,9 +1803,9 @@ def test_typo_injection_and_auto_correction(tmp_path: Path, clock):
         await mgr._send_reply(chat_id=555, reply_to_msg_id=0, text="sounds good bro", adaptive_delay=False)
         assert len(sent_messages) == 1
         # The sent message initially had the typo
-        assert sent_messages[0] != "sounds good bro"
+        assert sent_messages[0] != "Sounds good bro"
         # The message was edited in-place clean (never sending *word)
-        mock_client.edit_message.assert_awaited_once_with(555, 1, "sounds good bro")
+        mock_client.edit_message.assert_awaited_once_with(555, 1, "Sounds good bro")
 
     asyncio.run(_run())
 
@@ -2231,7 +2231,7 @@ def test_multibubble_splitting_and_controls(tmp_path: Path, clock):
         # Should have sent 2 sequential message bubbles
         assert mock_client.send_message.call_count == 2
         calls = [c[0][1] for c in mock_client.send_message.call_args_list]
-        assert calls == ["sounds good", "will let you know"]
+        assert calls == ["Sounds good", "Will let you know"]
 
         # Now test with multibubble disabled
         db.set_state("multibubble_enabled", "0")
@@ -2244,7 +2244,7 @@ def test_multibubble_splitting_and_controls(tmp_path: Path, clock):
         )
         # Should have sent only 1 message bubble
         assert mock_client.send_message.call_count == 1
-        assert mock_client.send_message.call_args[0][1] == "sounds good... will let you know"
+        assert mock_client.send_message.call_args[0][1] == "Sounds good... will let you know"
 
     asyncio.run(_run())
 
@@ -2413,8 +2413,8 @@ def test_self_edit_fix_simulation(tmp_path: Path):
         assert ok is True
         # Exactly one bubble was sent, and a fast same-message edit followed with the clean original text
         sent_text = client.send_message.await_args.args[1]
-        assert sent_text != original  # typo'd version went out first
-        client.edit_message.assert_awaited_once_with(-100, 734, original)
+        assert sent_text != "Bro my phone glitched hard"  # typo'd version went out first
+        client.edit_message.assert_awaited_once_with(-100, 734, "Bro my phone glitched hard")
 
     asyncio.run(_run())
 
@@ -2476,7 +2476,7 @@ def test_recent_replies_persist_across_restart(tmp_path: Path):
 
         # Simulate restart: new manager loads persisted history
         mgr2 = ReplyManager(cfg, db, safety, privacy, generator)
-        assert "shipping todays build now on main" in mgr2._recent_replies_history[55]
+        assert "Shipping todays build now on main" in mgr2._recent_replies_history[55]
         # Duplicate reply is suppressed after the restart
         assert mgr2._prevent_duplicate_reply(55, "shipping todays build now on main") == ""
 

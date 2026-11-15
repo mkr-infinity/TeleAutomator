@@ -138,6 +138,12 @@ python run.py --test
 ```
 Tests cover configuration, authorization, safety guards, quiet hours, live custom cooldowns, isolated chat memory, duplicate approvals, and mocked Telegram/AI workflows. Install Node.js to include the Mini App JavaScript workflow checks; pytest skips that check when Node.js is unavailable. No live Telegram account or AI API key is needed.
 
+With Playwright and Chromium installed, pytest also checks the real Mini App in a mobile browser: popup scrolling, small swipes, fullscreen compatibility, keyboard resizing, failed saves, repeated taps, preserved drafts, and reconnects across six window sizes. These checks use local fixtures. `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` can select an existing Chromium binary.
+
+The Mini App requests fullscreen on supported Telegram clients, respects Telegram/system safe areas, and disables body swipes that would minimize it. Telegram still controls its native header gestures. Settings use expandable sections; popups keep failed edits visible and require confirmation before discarding unsaved input. Public assets are cached separately from authenticated API responses.
+
+Automated outgoing messages start with a capital letter, including each separate bubble and approved draft. Remaining casing, such as `API` and `iPhone`, is preserved.
+
 ---
 
 ## ☕ Support & Donations

@@ -1,0 +1,269 @@
+/* Real Chromium checks. All Telegram/AI responses are local fixtures. */
+const assert = require("node:assert/strict");
+const fs = require("node:fs/promises");
+const http = require("node:http");
+const path = require("node:path");
+const vm = require("node:vm");
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
+const root = path.join(__dirname, "../miniapp");
+
+function telegramMock({ version }) {
+  const handlers = {};
+  window.telegramCalls = [];
+  window.sources = [];
+  Object.defineProperty(navigator, "clipboard", { value: { async writeText() {} }, configurable: true });
+  const app = {
+    version, platform: "android", initData: "local-test-fixture", isFullscreen: false,
+    viewportStableHeight: innerHeight, safeAreaInset: { top: 24, bottom: 24 }, contentSafeAreaInset: { top: 52, bottom: 0 },
+    isVersionAtLeast: value => Number(version) >= Number(value),
+    onEvent: (event, callback) => (handlers[event] ||= []).push(callback),
+    BackButton: { show() {}, hide() {}, onClick(callback) { window.telegramBack = callback; }, offClick() {} },
+    HapticFeedback: { impactOccurred() {}, notificationOccurred() {} },
+  };
+  for (const method of ["ready", "expand", "disableVerticalSwipes", "setHeaderColor", "setBackgroundColor", "setBottomBarColor", "enableClosingConfirmation", "disableClosingConfirmation"]) {
+    app[method] = () => window.telegramCalls.push(method);
+  }
+  app.requestFullscreen = () => { window.telegramCalls.push("requestFullscreen"); app.isFullscreen = true; };
+  window.Telegram = { WebApp: app };
+  window.addEventListener("resize", () => {
+    if (!window.lockStableHeight) app.viewportStableHeight = innerHeight;
+    (handlers.viewportChanged || []).forEach(callback => callback({ isStateStable: true }));
+  });
+  window.EventSource = class {
+    constructor() { this.readyState = 1; this.handlers = {}; window.sources.push(this); queueMicrotask(() => this.onopen?.()); }
+    addEventListener(event, callback) { this.handlers[event] = callback; }
+    emit(state) { this.handlers.state?.({ data: JSON.stringify(state) }); }
+    close() { this.readyState = 2; }
+  };
+}
+
+(async () => {
+  const source = await fs.readFile(path.join(root, "app.js"), "utf8");
+  const fixture = source.match(/const DEMO_DATA = (\{[\s\S]*?\n  \});/);
+  assert(fixture, "dashboard fixtures must be available");
+  const data = JSON.parse(JSON.stringify(vm.runInNewContext(`(${fixture[1]})`)));
+  data.state.ai_model = "first,second";
+  data.state.available_models = ["first", "second"];
+  data.state.rules = [{ keyword: "help", reply: "Send a message" }];
+  const requests = [];
+  let rejectAction = null;
+  let authFailure = false;
+  const server = http.createServer(async (req, res) => {
+    const pathname = new URL(req.url, "http://local").pathname;
+    if (process.env.BROWSER_TRACE) console.log("server", pathname);
+    if (pathname.startsWith("/api/")) {
+      let raw = "";
+      for await (const part of req) raw += part;
+      const body = raw ? JSON.parse(raw) : {};
+      requests.push({ path: pathname, body });
+      let result = {};
+      if (pathname === "/api/auth") {
+        if (authFailure) { res.statusCode = 503; result = { ok: false, response: "The engine is starting. Try again." }; }
+        else result = { authorized: true, is_main: true, version: "3.0.5", user: { name: "Test owner" } };
+      } else if (pathname === "/api/state") result = data.state;
+      else if (pathname === "/api/chats") result = { chats: data.chats };
+      else if (pathname === "/api/access") result = { users: data.access };
+      else if (pathname === "/api/pending") result = { pending: data.pending };
+      else if (pathname === "/api/activity") result = { activity: data.activity };
+      else if (pathname === "/api/commands") result = { commands: data.commands };
+      else if (pathname === "/api/fetch_models") result = { ok: true, models: ["first", "second", "third"] };
+      else if (pathname === "/api/test_model") result = { ok: true, reply: "hello", active_model: "first,second", model_used: "first", working_models: ["first", "second"], failed_models: [], results: [{ model: "first", ok: true, detail: "Working" }, { model: "second", ok: true, detail: "Working" }] };
+      else if (pathname === "/api/cmd") result = { ok: true, response: "Status: active\nMode: restricted_auto" };
+      else if (pathname === "/api/action") {
+        await new Promise(resolve => setTimeout(resolve, 40));
+        if (rejectAction === body.action) { rejectAction = null; result = { ok: false, response: "Save failed. Please retry." }; }
+        else {
+          result = { ok: true, response: "Saved" };
+          if (body.action === "chat_cooldown") {
+            const chat = data.chats.find(chat => String(chat.id) === String(body.params.chat_id));
+            chat.cooldown_min = body.params.reset ? null : body.params.min;
+            chat.cooldown_max = body.params.reset ? null : body.params.max;
+          }
+          if (body.action === "approve" || body.action === "reject") data.pending = data.pending.filter(draft => String(draft.id) !== String(body.params.id));
+        }
+      }
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(result));
+      return;
+    }
+    const files = { "/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css", "/sw.js": "sw.js", "/logo.svg": "logo.svg" };
+    const file = files[pathname];
+    if (!file) { res.writeHead(404).end(); return; }
+    res.setHeader("Content-Type", ({ ".html": "text/html", ".js": "application/javascript", ".css": "text/css", ".svg": "image/svg+xml" })[path.extname(file)]);
+    res.end(await fs.readFile(path.join(root, file)));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  let browser;
+  let popups = 0;
+  const errors = [];
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const { expect } = require(path.join(path.dirname(require.resolve(process.env.PLAYWRIGHT_MODULE || "playwright")), "test"));
+  async function makePage(version = "8.0", width = 390, height = 844, serviceWorkers = "block") {
+    const context = await browser.newContext({ viewport: { width, height }, isMobile: true, hasTouch: true, reducedMotion: "reduce", serviceWorkers });
+    await context.route(/^https:\/\//, route => route.fulfill({
+      contentType: "application/javascript",
+      body: route.request().url().includes("telegram-web-app.js") ? `(${telegramMock.toString()})(${JSON.stringify({ version })});` : "/* external requests disabled */",
+    }));
+    const page = await context.newPage();
+    page.on("pageerror", error => errors.push(error.message));
+    if (process.env.BROWSER_TRACE) {
+      page.on("request", request => console.log("request", new URL(request.url()).pathname));
+      page.on("requestfailed", request => console.log("failed", new URL(request.url()).pathname, request.failure()?.errorText));
+      page.on("pageerror", error => console.log("pageerror", error.message));
+    }
+    await page.goto(base, { waitUntil: "domcontentloaded", timeout: 45000 });
+    return page;
+  }
+  async function navigate(page, view, group) {
+    await page.locator(`.tab[data-view="${view}"]`).click();
+    if (group) await page.locator(`#settings-${group}`).evaluate(element => { element.open = true; });
+  }
+  async function checkSheet(page, title) {
+    const sheet = page.locator("#sheet");
+    await expect(sheet).toBeVisible();
+    if (title) await expect(page.locator("#sheet-title")).toContainText(new RegExp(title, "i"));
+    assert(await sheet.evaluate(element => element.open && element.matches(":modal")));
+    const bounds = await sheet.boundingBox();
+    const size = page.viewportSize();
+    assert(bounds.x >= -1 && bounds.x + bounds.width <= size.width + 1, "popup must fit horizontally");
+    assert(bounds.y >= 75 && bounds.y + bounds.height <= size.height + 1, "popup must respect Android safe areas");
+    const close = await page.locator("#sheet-close").boundingBox();
+    assert(close.width >= 48 && close.height >= 48);
+    await page.locator(".sheet-head").evaluate(element => {
+      for (const [type, y] of [["touchstart", 200], ["touchmove", 265], ["touchend", 265]]) {
+        element.dispatchEvent(new TouchEvent(type, { bubbles: true, touches: type === "touchend" ? [] : [new Touch({ identifier: 1, target: element, clientX: 100, clientY: y })] }));
+      }
+    });
+    assert(await sheet.evaluate(element => element.open), "small swipes must not dismiss popups");
+    popups++;
+  }
+  async function close(page) { await page.locator("#sheet-close").click(); await expect(page.locator("#sheet")).not.toBeVisible(); }
+  try {
+    try { browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }); }
+    catch (error) {
+      if (error.message.includes("Executable doesn't exist")) { console.log("Browser checks need Playwright Chromium installed"); process.exitCode = 77; return; }
+      throw error;
+    }
+    const page = await makePage();
+    await expect(page.locator("#app")).toBeVisible();
+    const calls = await page.evaluate(() => window.telegramCalls);
+    assert(calls.includes("requestFullscreen") && calls.includes("disableVerticalSwipes"), JSON.stringify({ calls, sdk: await page.evaluate(() => ({ version: window.Telegram?.WebApp?.version, supported: window.Telegram?.WebApp?.isVersionAtLeast?.("8.0") })) }));
+    for (const [selector, title] of [["#act-mode", "mode"], ["#act-stop", "Stop"], ["#goto-activity", "Recent"]]) {
+      await page.locator(selector).click(); await checkSheet(page, title); await close(page);
+    }
+    for (const [action, title] of [[null, "Rohan"], ["prompt", "Prompt"], ["context", "Context"], ["chatty", "Chatty"], ["cooldown", "Cooldown"], ["remove", "Remove"]]) {
+      await navigate(page, "chats");
+      await page.locator(".chat-capsule-card").first().click();
+      if (action) await page.locator(`.clay-action-btn[data-action="${action}"]`).click();
+      await checkSheet(page, title);
+      if (!action) {
+        await page.locator(".copy-id-btn").click();
+        await expect(page.locator("#toast")).toBeVisible();
+        await expect(page.locator("#toast-msg")).toContainText("copied");
+        assert(await page.locator("#toast").evaluate(element => element.matches(":popover-open")));
+        await page.locator("#toast-close").click();
+        assert(await page.locator("#sheet").evaluate(element => element.open));
+      }
+      await close(page);
+    }
+    await page.locator(".chat-capsule-card").first().click();
+    await page.locator('.clay-action-btn[data-action="cooldown"]').click();
+    await page.locator("#cd-min-input").fill("8");
+    await page.locator("#cd-min-input").press("Enter");
+    await expect(page.locator("#cd-max-input")).toBeFocused();
+    await page.locator("#cd-max-input").fill("2");
+    await page.locator("#sheet-actions .primary").click();
+    await expect(page.locator("#sheet-error")).toContainText("Maximum cooldown");
+    await expect(page.locator("#cd-min-input")).toHaveValue("8");
+    await page.locator("#cd-min-input").fill("3");
+    await page.locator("#cd-max-input").fill("7");
+    rejectAction = "chat_cooldown";
+    await page.locator("#sheet-actions .primary").click();
+    await expect(page.locator("#sheet-error")).toContainText("Save failed");
+    const before = requests.filter(request => request.body.action === "chat_cooldown").length;
+    assert(await page.locator("#sheet-actions .primary").evaluate(button => { button.click(); button.click(); return document.getElementById("sheet-close").disabled; }));
+    await expect(page.locator("#sheet")).not.toBeVisible();
+    assert.equal(requests.filter(request => request.body.action === "chat_cooldown").length, before + 1);
+    await page.locator("#allow-id").fill("@new_chat");
+    rejectAction = "allow";
+    await page.locator("#allow-btn").click();
+    await expect(page.locator("#toast-msg")).toContainText("Save failed");
+    await expect(page.locator("#allow-id")).toHaveValue("@new_chat");
+    await page.locator("#allow-btn").click();
+    await expect(page.locator("#allow-id")).toHaveValue("");
+    await navigate(page, "more", "ai");
+    await expect(page.locator("#ai-model")).toHaveValue("first,second");
+    await page.locator("#ai-baseurl").fill("https://unsaved.test/v1");
+    await page.locator("#ai-baseurl").blur();
+    await page.evaluate(() => {
+      window.savedChip = document.querySelector(".model-chip");
+      const state = { mode: "restricted_auto", state: "active", ai_model: "first,second", ai_base_url: "https://remote.test/v1", available_models: ["first", "second"], revision: "new-revision" };
+      window.sources.at(-1).emit(state);
+    });
+    await expect(page.locator("#ai-baseurl")).toHaveValue("https://unsaved.test/v1");
+    assert(await page.evaluate(() => window.savedChip.isConnected), "unchanged live model chips should keep their DOM nodes");
+    await page.locator("#ai-fetch-models").click();
+    await checkSheet(page, "Available Models"); await close(page);
+    await page.locator("#ai-check").click();
+    await checkSheet(page, "Health Check Results"); await close(page);
+    await navigate(page, "more", "behavior");
+    for (const help of ["reaction", "ownreact", "multibubble", "typo", "debounce", "followup", "mentiononly"]) {
+      await page.locator(`[data-help="${help}"]`).click(); await checkSheet(page, ""); await close(page);
+    }
+    await page.locator("#btn-all-behavior-help").click(); await checkSheet(page, "Guide"); await close(page);
+    await page.locator("#btn-quick-sleep").click(); await checkSheet(page, "Sleep"); await close(page);
+    await navigate(page, "more", "rules");
+    await page.locator("#btn-add-rule").click(); await checkSheet(page, "Keyword");
+    await page.locator("#rule-kw-input").fill("test");
+    page.once("dialog", dialog => dialog.dismiss());
+    await page.locator("#sheet-close").click();
+    await expect(page.locator("#rule-kw-input")).toHaveValue("test");
+    await page.evaluate(() => { window.lockStableHeight = true; });
+    await page.locator("#rule-reply-input").focus();
+    await page.setViewportSize({ width: 390, height: 460 });
+    await checkSheet(page, "Keyword");
+    page.once("dialog", dialog => dialog.accept()); await close(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => { window.lockStableHeight = false; });
+    await navigate(page, "more", "safety");
+    for (const [selector, title] of [["#btn-backup-db", "Backup"], ["#btn-clear-context", "Memory"], ["#btn-emergency-toggle", "Kill-Switch"], ["[data-unauth]", "Remove owner"]]) {
+      await page.locator(selector).first().click(); await checkSheet(page, title); await close(page);
+    }
+    await navigate(page, "approvals");
+    for (const [selector, title] of [["#btn-approve-all", "Approve"], ["#btn-reject-all", "Reject"]]) {
+      await page.locator(selector).click(); await checkSheet(page, title); await close(page);
+    }
+    for (const [width, height] of [[320, 568], [412, 915], [800, 360], [840, 900], [1280, 800]]) {
+      await page.setViewportSize({ width, height });
+      await navigate(page, "more");
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `layout must fit ${width}px`);
+      await navigate(page, "chats");
+      await page.locator(".chat-capsule-card").first().click(); await checkSheet(page, "Rohan"); await close(page);
+    }
+    if (process.env.TELEAUTOMATOR_UI_ARTIFACTS) {
+      await fs.mkdir(process.env.TELEAUTOMATOR_UI_ARTIFACTS, { recursive: true });
+      await page.setViewportSize({ width: 390, height: 844 });
+      await navigate(page, "more");
+      await page.screenshot({ path: path.join(process.env.TELEAUTOMATOR_UI_ARTIFACTS, "settings.png") });
+      await navigate(page, "chats");
+      await page.locator(".chat-capsule-card").first().click();
+      await page.screenshot({ path: path.join(process.env.TELEAUTOMATOR_UI_ARTIFACTS, "chat-popup.png") });
+    }
+    const old = await makePage("7.6");
+    await expect(old.locator("#app")).toBeVisible();
+    assert(!(await old.evaluate(() => window.telegramCalls)).includes("requestFullscreen"));
+    authFailure = true;
+    const retry = await makePage();
+    await expect(retry.locator("#connection-error")).toBeVisible();
+    await expect(retry.locator("#paywall")).not.toBeVisible();
+    authFailure = false;
+    await retry.locator("#retry-connection").click();
+    await expect(retry.locator("#app")).toBeVisible();
+    assert.deepEqual(errors, []);
+    console.log(JSON.stringify({ popupChecks: popups, viewportSizes: 6, fullscreen: "supported and older clients", formRecovery: "passed", duplicateSaves: "blocked", liveUpdates: "preserve drafts and DOM", connectionRetry: "passed", pageErrors: errors.length }));
+  } finally {
+    await browser?.close();
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });
