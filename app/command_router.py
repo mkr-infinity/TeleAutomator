@@ -13,13 +13,14 @@ import asyncio
 import datetime
 import difflib
 import json
+import math
 import random
 import re
-import shutil
 import time
 from typing import Optional, Any
 
 from app.logger import setup_logger
+from app.ai.provider import normalize_base_url
 
 logger = setup_logger(__name__)
 from app.miniapp_server import resolve_miniapp_url
@@ -32,7 +33,7 @@ _BOT_COMMAND_NAMES = (
     "/addrule", "/delrule", "/rules", "/chats", "/allowchat", "/removechat",
     "/blockchat", "/mentiononly", "/contextttl", "/clearcontext", "/syncpins", "/setcontext", "/showcontext",
     "/delcontext", "/backup", "/pending", "/approve", "/reject", "/name", "/prompt", "/setprompt", "/chatty",
-    "/chatprompt", "/gencontext", "/safemode", "/miniapp",
+    "/chatprompt", "/gencontext", "/safemode", "/miniapp", "/feedback",
 )
 
 
@@ -50,13 +51,42 @@ def _parse_time_str(val: str) -> Optional[str]:
 class CommandRouterMixin:
     """Mixin providing modular control command dispatchers for ReplyManager."""
 
-    async def handle_control_command(self, text: str) -> Optional[str]:
+    async def handle_control_command(self, text: str, *, audit_source="control", actor_id=None) -> Optional[str]:
+        root = text.strip().split()[0].lower().split("@")[0] if text.strip() else ""
+        action = root if root in _BOT_COMMAND_NAMES else "unknown_command"
+        numeric_commands = {"/pause", "/off", "/sleep", "/goodnight", "/contextttl", "/aging", "/chatty", "/banter",
+                            "/reactioncooldown", "/reactcd", "/reactionlimit", "/reactioninterval", "/chatcooldown", "/chatcd",
+                            "/globalcooldown", "/globalcd", "/ratelimit", "/spamlimits", "/rate", "/antispam",
+                            "/debounce", "/burst", "/debouncer", "/temp", "/temperature"}
+        if root in numeric_commands:
+            for token in text.strip().split()[1:]:
+                try:
+                    value = float(token.rstrip("%sSmMhHdD"))
+                except ValueError:
+                    continue
+                if not math.isfinite(value):
+                    return "❌ Enter finite numeric values; NaN and infinity are not valid settings."
+        try:
+            response = await self._execute_control_command(text, actor_id=actor_id)
+        except Exception:
+            if audit_source and root.startswith("/"):
+                self.db.record_action(audit_source, action, "failed", "Command failed; check its inputs and engine diagnostics", actor_id=actor_id)
+            raise
+        if audit_source and root.startswith("/"):
+            ok = bool(response) and not response.startswith(("❌", "⚠️", "❓", "Usage:"))
+            self.db.record_action(audit_source, action, "success" if ok else "failed", "Command completed" if ok else "Command rejected; check its inputs or current safety controls", actor_id=actor_id)
+        return response
+
+    async def _execute_control_command(self, text: str, *, actor_id=None) -> Optional[str]:
         """Handle control commands sent via the control channel (control bot or Saved Messages)."""
         cmd_parts = text.strip().split()
         if not cmd_parts:
             return None
 
         cmd = cmd_parts[0].lower().split("@")[0]
+
+        if cmd == "/feedback":
+            return self._reply_feedback_command(cmd_parts, actor_id)
 
         routers = (
             self._route_core_control,
@@ -68,7 +98,7 @@ class CommandRouterMixin:
         )
 
         for router in routers:
-            res = await router(cmd, cmd_parts, text)
+            res = await router(cmd, cmd_parts, text, actor_id=actor_id) if router == self._route_rules_and_drafts else await router(cmd, cmd_parts, text)
             if res is not None:
                 return res
 
@@ -83,6 +113,24 @@ class CommandRouterMixin:
             f"Common ones: {known}{hint}\n"
             f"Send */help* for the full guide."
         )
+
+    def _reply_feedback_command(self, parts, actor_id=None):
+        usage = "Usage: /feedback <chat_id> <message_id> helpful|unnecessary|off_topic|style|clear"
+        if len(parts) == 1:
+            private, groups = self.privacy.get_all_allowed_chats()
+            rows = self.db.list_reply_feedback(private | groups, limit=10)
+            return "Reply feedback\n" + ("\n".join(f"{r['chat_id']} / {r['message_id']}: {r['rating']}" for r in rows) or "No ratings yet. Rate an automated reply from Recent replies in the Mini App.") + "\n" + usage
+        try:
+            if len(parts) != 4:
+                raise ValueError(usage)
+            chat_id, message_id = int(parts[1]), int(parts[2])
+            if not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
+                raise ValueError("Feedback is only available for allowed chats")
+            self.db.set_reply_feedback(chat_id, message_id, parts[3].lower(), actor_id)
+            self.context_agent.observe(chat_id)
+            return "✅ Reply feedback cleared." if parts[3].lower() == "clear" else "✅ Reply feedback saved for this chat."
+        except (ValueError, OverflowError) as error:
+            return f"❌ {error}" if not str(error).startswith("invalid literal") else usage
 
     async def _route_core_control(self, cmd: str, cmd_parts: list[str], text: str) -> Optional[str]:
         if cmd in ("/help", "/start"):
@@ -131,6 +179,7 @@ class CommandRouterMixin:
                 "• `/addrule <word> => <reply>` - Auto-reply when a word is detected\n"
                 "• `/delrule <word>` - Delete keyword trigger\n"
                 "• `/rules` - List all active custom keyword triggers\n\n"
+                "• `/feedback [chat_id message_id rating]` - Review or rate automated replies (helpful, unnecessary, off_topic, style, clear)\n\n"
                 "*Chat & Group Management:*\n"
                 "• `/chats` - View all allowlisted private contacts & groups\n"
                 "• `/allowchat <id>` - Allow a contact or group directly from Telegram\n"
@@ -284,6 +333,7 @@ class CommandRouterMixin:
                 )
             new_model = cmd_parts[1].strip()
             self.db.set_state("ai_model", new_model)
+            self.db.set_state("models_manually_set", "1")
             self.generator.reload_provider()
             return f"✅ AI model switched to *{new_model}* (provider reloaded)."
 
@@ -349,7 +399,7 @@ class CommandRouterMixin:
 
         return None
 
-    async def _route_rules_and_drafts(self, cmd: str, cmd_parts: list[str], text: str) -> Optional[str]:
+    async def _route_rules_and_drafts(self, cmd: str, cmd_parts: list[str], text: str, *, actor_id=None) -> Optional[str]:
         if cmd in ("/rules", "/listrules"):
             rules = self.db.list_keyword_rules()
             if not rules:
@@ -379,7 +429,7 @@ class CommandRouterMixin:
                     "Fix: /addrule <keyword> => <reply> (e.g. /addrule hello => Hey there!)"
                 )
             self.db.add_keyword_rule(kw, reply)
-            return f"✅ Keyword rule added!\n• When message contains: *'{kw}'*\n• Client will reply: \"{reply}\""
+            return f"✅ Keyword rule added!\n• When message contains: *'{kw}'*\n• Model rewrites this reply intent using the chat's prompt and context: \"{reply}\"\n• Normal cooldowns and safety checks still apply."
 
         if cmd == "/delrule":
             if len(cmd_parts) < 2:
@@ -411,24 +461,7 @@ class CommandRouterMixin:
                     "Fix: /approve <id> (e.g. /approve 1) or /approve all"
                 )
             if cmd_parts[1].strip().lower() == "all":
-                pending = self.db.list_pending_approvals()
-                if not pending:
-                    return "No drafts currently pending approval."
-                sent_count = 0
-                failed_count = 0
-                for item in pending:
-                    approval_id = item["id"]
-                    can_send, reason = self.safety.can_reply(item["chat_id"], item["draft_text"])
-                    if not can_send:
-                        failed_count += 1
-                        continue
-                    success = await self._send_reply(item["chat_id"], item["reply_to_msg_id"], item["draft_text"], adaptive_delay=False)
-                    if success:
-                        self.db.update_approval_status(approval_id, "sent")
-                        sent_count += 1
-                    else:
-                        failed_count += 1
-                return f"✅ Batch approved: {sent_count} sent, {failed_count} failed."
+                return self._start_approval_batch(actor_id)
 
             try:
                 approval_id = int(cmd_parts[1])
@@ -439,24 +472,8 @@ class CommandRouterMixin:
                     "Fix: /approve <id> (e.g. /approve 1) or /approve all"
                 )
 
-            item = self.db.get_pending_approval(approval_id)
-            if not item:
-                return (
-                    f"❌ Draft #{approval_id} no longer exists.\n"
-                    "Missing: Active pending draft\n"
-                    "Fix: /pending to see current drafts."
-                )
-
-            can_send, reason = self.safety.can_reply(item["chat_id"], item["draft_text"])
-            if not can_send:
-                return f"⚠️ Cannot send draft #{approval_id}: {reason}"
-
-            success = await self._send_reply(item["chat_id"], item["reply_to_msg_id"], item["draft_text"], adaptive_delay=False)
-            if success:
-                self.db.update_approval_status(approval_id, "sent")
-                return f"✅ Draft #{approval_id} sent successfully."
-            else:
-                return f"❌ Failed to send draft #{approval_id}."
+            _, response = await self._approve_draft(approval_id, actor_id=actor_id)
+            return response
 
         if cmd == "/reject":
             if len(cmd_parts) < 2:
@@ -466,12 +483,7 @@ class CommandRouterMixin:
                     "Fix: /reject <id> (e.g. /reject 1) or /reject all"
                 )
             if cmd_parts[1].strip().lower() == "all":
-                pending = self.db.list_pending_approvals()
-                if not pending:
-                    return "No drafts currently pending approval."
-                count = len(pending)
-                for item in pending:
-                    self.db.update_approval_status(item["id"], "rejected")
+                count = self.db.reject_all_pending()
                 return f"🗑️ Batch rejected: {count} drafts discarded."
 
             try:
@@ -491,10 +503,59 @@ class CommandRouterMixin:
                     "Fix: /pending to see current drafts."
                 )
 
-            self.db.update_approval_status(approval_id, "rejected")
+            if not self.db.update_approval_status(approval_id, "rejected", expected_status="pending"):
+                return f"❌ Draft #{approval_id} is already being handled."
             return f"🗑️ Draft #{approval_id} rejected and discarded."
 
         return None
+
+    def _start_approval_batch(self, actor_id=None):
+        task = self._approval_batch_task
+        if task and not task.done():
+            return "An approval batch is already running. Check pending drafts or action history."
+        pending = self.db.list_pending_approvals()
+        if not pending:
+            return "No drafts currently pending approval."
+
+        async def deliver():
+            sent = 0
+            status = "success"
+            try:
+                for item in pending:
+                    if not self.privacy.is_chat_allowed(item["chat_id"], item["chat_id"] < 0):
+                        status = "blocked"
+                        continue
+                    if not self._operator_allowed(actor_id) or not self._outgoing_allowed(item["chat_id"], approved=True):
+                        status = "blocked"
+                        break
+                    success, _ = await self._approve_draft(item["id"], actor_id=actor_id)
+                    sent += int(success)
+                    if not success:
+                        status = "blocked"
+            except asyncio.CancelledError:
+                status = "blocked"
+                raise
+            except Exception:
+                status = "failed"
+                logger.exception("Approval batch failed")
+            finally:
+                self.db.record_action("control", "approval_batch", status, f"{sent} sent; {len(pending) - sent} not sent; review pending drafts and history", actor_id=actor_id)
+
+        self._approval_batch_task = self.start_background(deliver())
+        return f"✅ Approval batch started for {len(pending)} visible drafts. It runs in the background and follows live safety controls."
+
+    async def _approve_draft(self, approval_id: int, *, actor_id=None) -> tuple[bool, str]:
+        item = self.db.claim_approval(approval_id)
+        if not item:
+            return False, f"❌ Draft #{approval_id} no longer exists or is already being handled. Use /pending to see current drafts."
+        try:
+            sent = await self._send_reply(item["chat_id"], item["reply_to_msg_id"], item["draft_text"], adaptive_delay=False, approved=True, operator_id=actor_id)
+        except BaseException:
+            # An interrupted send has an unknown delivery outcome; never retry it automatically.
+            self.db.update_approval_status(approval_id, "failed", expected_status="sending")
+            raise
+        self.db.update_approval_status(approval_id, "sent" if sent else "pending", expected_status="sending")
+        return sent, (f"✅ Draft #{approval_id} sent successfully." if sent else f"⚠️ Cannot send draft #{approval_id}: check chat access, pause, quiet hours, and rate limits.")
 
     async def _resolve_chat_id(self, raw_target: str) -> tuple[Optional[int], Optional[dict], Optional[str]]:
         """Resolve a chat ID, @username, or link to (chat_id, metadata, error_msg)."""
@@ -643,9 +704,9 @@ class CommandRouterMixin:
             result = f"✅ {target}{info_str} [ID: `{cid}`] has been added to the allowlist!"
             # Immediately initialize isolated context file, pins, and history for this chat/group
             if hasattr(self, "init_chat_context"):
-                asyncio.create_task(self.init_chat_context(cid))
+                self.start_background(self.init_chat_context(cid))
             elif cid < 0 and self._client:
-                asyncio.create_task(self.generate_chat_voice_profile(cid))
+                self.start_background(self.generate_chat_voice_profile(cid))
 
             if cid < 0:
                 result += "\n\n🧠 _AI is initializing context, reading pinned announcements, and learning how this group talks. Isolated context saved to disk._"
@@ -938,12 +999,10 @@ class CommandRouterMixin:
                 )
             backup_dir = db_path.parent / "backups"
             backup_dir.mkdir(parents=True, exist_ok=True)
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             backup_file = backup_dir / f"teleautomator_backup_{ts}.db"
             try:
-                with self.db._get_connection() as conn:
-                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                shutil.copy2(db_path, backup_file)
+                await asyncio.to_thread(self.db.backup_to, backup_file)
                 if getattr(self, "bot_control", None) and hasattr(self.bot_control, "send_message"):
                     await self.bot_control.send_message(
                         self.bot_control.main_user_id,
@@ -1119,7 +1178,7 @@ class CommandRouterMixin:
                     "💬 *Group Banter Rate*",
                     "━━━━━━━━━━━━━━━━━━━━",
                     f"🌐 *Global default:* `{int(curr_prob * 100)}%`",
-                    "🎯 *Unset chats:* random 30–60% band (natural human default)",
+                    "🎯 *Unset chats:* follow the global rate, only for relevant conversations",
                     "",
                     "*Per-chat settings:*",
                 ]
@@ -1137,7 +1196,7 @@ class CommandRouterMixin:
                         except ValueError:
                             continue
                 if not overrides_found:
-                    lines.append("• _No per-chat overrides — every group uses the global default / band._")
+                    lines.append("• _No per-chat overrides — every group uses the global default._")
                 lines.append(
                     "\n👇 *Tap a chat below to set its banter %* — or globally: `/chatty off` (mention-only) · `/chatty <0-100>`."
                 )
@@ -1733,7 +1792,7 @@ class CommandRouterMixin:
                     "Missing: Active provider supporting live model verification\n"
                     "Fix: Live model verification is supported on Gemini, OpenAI, and Inception custom providers."
                 )
-            results = self.generator.provider.check_working_models()
+            results = await asyncio.to_thread(self.generator.provider.check_working_models)
             lines = ["🔍 *Model Live Health Check:*"]
             healthy_models: list[str] = []
             for m, ok, detail in results:
@@ -1766,7 +1825,13 @@ class CommandRouterMixin:
                 )
             raw_url = " ".join(cmd_parts[1:]).strip()
             target_url = "" if raw_url.lower() == "default" else raw_url
+            try:
+                if target_url:
+                    target_url = normalize_base_url(target_url)
+            except ValueError as e:
+                return f"❌ Invalid API base URL: {e}"
             self.db.set_state("ai_base_url", target_url)
+            self.db.set_state("available_models", "[]")
             self.generator.reload_provider()
             return f"✅ AI base URL updated to: `{target_url or 'default'}` (provider reloaded)."
 
@@ -1785,6 +1850,8 @@ class CommandRouterMixin:
             target = cmd_parts[1].lower().strip()
             if target in ("gemini", "openai", "nvidia", "custom", "groq", "together", "deepseek", "local", "inception"):
                 self.db.set_state("ai_provider", target)
+                self.db.set_state("available_models", "[]")
+                self.db.set_state("ai_enabled", "0" if target == "local" else "1")
                 self.generator.reload_provider()
                 return f"🧠 AI provider switched to *{target.upper()}* (provider reloaded)."
             return (
@@ -1832,12 +1899,16 @@ class CommandRouterMixin:
                     f"• `/provider <name>` — Switch provider"
                 )
             p = cmd_parts[1].lower().strip()
+            if p not in ("mercury", "inception", "gemini", "openai", "nvidia", "custom", "groq", "together", "deepseek", "local"):
+                return "❌ Unsupported AI provider. Use /provider to see supported providers."
             if p in ("mercury", "inception") and len(cmd_parts) >= 3:
                 k = cmd_parts[2].strip()
                 self.db.set_state("ai_provider", "custom")
+                self.db.set_state("ai_enabled", "1")
                 self.db.set_state("ai_api_key", k)
                 self.db.set_state("ai_base_url", "https://api.inceptionlabs.ai/v1")
                 self.db.set_state("ai_model", "mercury-3,mercury-3-preview-1014,mercury-3-preview-1002")
+                self.db.set_state("available_models", "[]")
                 self.generator.reload_provider()
                 return (
                     f"✅ *Inception Labs Mercury Configured & Activated!*\n\n"
@@ -1848,11 +1919,16 @@ class CommandRouterMixin:
                 )
             elif len(cmd_parts) >= 4:
                 k = cmd_parts[2].strip()
-                u = cmd_parts[3].strip()
+                try:
+                    u = normalize_base_url(cmd_parts[3].strip())
+                except ValueError as e:
+                    return f"❌ Invalid API base URL: {e}"
                 m = cmd_parts[4].strip() if len(cmd_parts) >= 5 else ""
                 self.db.set_state("ai_provider", p)
+                self.db.set_state("ai_enabled", "0" if p == "local" else "1")
                 self.db.set_state("ai_api_key", k)
                 self.db.set_state("ai_base_url", u)
+                self.db.set_state("available_models", "[]")
                 if m:
                     self.db.set_state("ai_model", m)
                 self.generator.reload_provider()

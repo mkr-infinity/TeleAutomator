@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Set
@@ -40,6 +41,13 @@ def _parse_bool(value: str | None, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _finite_float(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("Numeric settings must be finite; NaN and infinity are not valid")
+    return number
 
 
 @dataclass(frozen=True)
@@ -217,21 +225,21 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         global_cooldown = max(0, int(os.getenv("GLOBAL_COOLDOWN_SECONDS", "30")))
         per_chat_cooldown = max(0, int(os.getenv("PER_CHAT_COOLDOWN_SECONDS", "60")))
         max_length = max(10, int(os.getenv("MAX_MESSAGE_LENGTH", "1000")))
-        typing_delay = max(0.0, float(os.getenv("TYPING_DELAY_SECONDS", "2.0")))
-        min_delay = max(0.0, float(os.getenv("MIN_REPLY_DELAY_SECONDS", "5.0")))
-        max_delay = max(min_delay, float(os.getenv("MAX_REPLY_DELAY_SECONDS", "60.0")))
+        typing_delay = max(0.0, _finite_float(os.getenv("TYPING_DELAY_SECONDS", "2.0")))
+        min_delay = max(0.0, _finite_float(os.getenv("MIN_REPLY_DELAY_SECONDS", "5.0")))
+        max_delay = max(min_delay, _finite_float(os.getenv("MAX_REPLY_DELAY_SECONDS", "60.0")))
         default_chat_language = os.getenv("DEFAULT_CHAT_LANGUAGE", "english").strip().lower() or "english"
         reaction_enabled = _parse_bool(os.getenv("REACTION_ENABLED"), default=True)
         reaction_max_per_window = max(1, int(os.getenv("REACTION_MAX_PER_WINDOW", "6")))
         reaction_window_seconds = max(10, int(os.getenv("REACTION_WINDOW_SECONDS", "1800")))
-        chatty_probability = max(0.0, min(1.0, float(os.getenv("CHATTY_PROBABILITY", "0.15"))))
-        react_only_probability = max(0.0, min(1.0, float(os.getenv("REACT_ONLY_PROBABILITY", "0.25"))))
-        min_chat_cd = max(0.0, float(os.getenv("MIN_CHAT_COOLDOWN_SECONDS", "5.0")))
-        max_chat_cd = max(min_chat_cd, float(os.getenv("MAX_CHAT_COOLDOWN_SECONDS", "60.0")))
-        min_global_cd = max(0.0, float(os.getenv("MIN_GLOBAL_COOLDOWN_SECONDS", "5.0")))
-        max_global_cd = max(min_global_cd, float(os.getenv("MAX_GLOBAL_COOLDOWN_SECONDS", "60.0")))
-        reaction_min_cd = max(0.0, float(os.getenv("REACTION_MIN_COOLDOWN_SECONDS", "15.0")))
-        reaction_max_cd = max(reaction_min_cd, float(os.getenv("REACTION_MAX_COOLDOWN_SECONDS", "60.0")))
+        chatty_probability = max(0.0, min(1.0, _finite_float(os.getenv("CHATTY_PROBABILITY", "0.15"))))
+        react_only_probability = max(0.0, min(1.0, _finite_float(os.getenv("REACT_ONLY_PROBABILITY", "0.25"))))
+        min_chat_cd = max(0.0, _finite_float(os.getenv("MIN_CHAT_COOLDOWN_SECONDS", "5.0")))
+        max_chat_cd = max(min_chat_cd, _finite_float(os.getenv("MAX_CHAT_COOLDOWN_SECONDS", "60.0")))
+        min_global_cd = max(0.0, _finite_float(os.getenv("MIN_GLOBAL_COOLDOWN_SECONDS", "5.0")))
+        max_global_cd = max(min_global_cd, _finite_float(os.getenv("MAX_GLOBAL_COOLDOWN_SECONDS", "60.0")))
+        reaction_min_cd = max(0.0, _finite_float(os.getenv("REACTION_MIN_COOLDOWN_SECONDS", "15.0")))
+        reaction_max_cd = max(reaction_min_cd, _finite_float(os.getenv("REACTION_MAX_COOLDOWN_SECONDS", "60.0")))
         max_replies_per_minute = max(1, int(os.getenv("MAX_REPLIES_PER_MINUTE", "5")))
         max_message_length = max(1, int(os.getenv("MAX_MESSAGE_LENGTH", "1000")))
         quiet_hours_enabled = _parse_bool(os.getenv("QUIET_HOURS_ENABLED"), default=True)

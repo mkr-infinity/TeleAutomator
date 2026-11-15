@@ -266,8 +266,8 @@ def test_per_chat_custom_cooldown(tmp_path: Path):
         assert 20.0 <= val <= 50.0
 
 
-def test_zero_cooldown_no_wait_and_antispam_preserved(tmp_path: Path):
-    """Zero cooldown allows immediate replies without waiting, but anti-spam limits remain strictly enforced."""
+def test_zero_chat_cooldown_preserves_global_wait_and_antispam(tmp_path: Path):
+    """A zero chat timer never disables the account-wide timer or anti-spam limits."""
     import time as _time
     cfg = AppConfig(
         api_id=123,
@@ -290,10 +290,10 @@ def test_zero_cooldown_no_wait_and_antispam_preserved(tmp_path: Path):
     assert can_reply is True
     safety.mark_reply_sent(999)
 
-    # 3. Immediately send second message: no cooldown wait (bypasses global & chat timers)
+    # 3. A zero chat timer still respects the account-wide timer.
     can_reply2, reason2 = safety.can_reply(999, "Second fast reply")
-    assert can_reply2 is True
-    assert reason2 == "OK"
+    assert can_reply2 is False
+    assert "Global cooldown" in reason2
 
     # 4. Anti-spam safety is STILL enforced: rolling burst cap stops spamming
     db.set_state("max_replies_per_minute", "2")

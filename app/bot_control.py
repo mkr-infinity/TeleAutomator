@@ -83,6 +83,7 @@ REMOVED_NOTICE = (
 # beautifully described. Telegram allows up to 100; we register all of them so typing '/'
 # always shows the full structured toolbox.
 BOT_COMMAND_MENU: list[dict] = [
+    {"command": "feedback", "description": "Rate automated replies — /feedback chat_id message_id helpful|unnecessary|off_topic|style|clear"},
     # -- Overview & control --
     {"command": "start", "description": "🚀 Guided tour — help menu + live status"},
     {"command": "help", "description": "📖 Full command reference, grouped by section"},
@@ -215,6 +216,29 @@ def chatty_picker_markup(chats: list[tuple[int, str]]) -> dict:
     return {"inline_keyboard": rows}
 
 
+def _user_id_state(db: Database, key: str) -> set[int]:
+    try:
+        return {int(uid) for uid in json.loads(db.get_state(key, "[]")) if int(uid) > 0}
+    except (ValueError, TypeError):
+        return set()
+
+
+def authorized_user_ids(db: Database, seeds=()) -> set[int]:
+    return (_user_id_state(db, "bot_authorized_users") | set(seeds)) - _user_id_state(db, "bot_revoked_users")
+
+
+def save_authorized_users(db: Database, users: set[int], seeds=()) -> None:
+    revoked = (_user_id_state(db, "bot_revoked_users") | (authorized_user_ids(db, seeds) - users)) - users
+    db.set_state("bot_revoked_users", json.dumps(sorted(revoked)))
+    db.set_state("bot_authorized_users", json.dumps(sorted(users)))
+
+
+def can_run_command(db: Database, user_id: int, command: str, main_user_id: int) -> bool:
+    granted = db.get_state(f"bot_granted_cmds_{user_id}", "all").strip().lower()
+    root = command.strip().split()[0].lower().split("@")[0]
+    return user_id == main_user_id or granted == "all" or root in {c.strip().split("@")[0] for c in granted.split(",")}
+
+
 class BotControl:
     """Async Telegram Bot API client with long-poll command routing."""
 
@@ -235,45 +259,32 @@ class BotControl:
         self.seed_user_ids: set[int] = {int(x) for x in (seed_user_ids or ()) if int(x) > 0}
         self._offset: int = 0
         self._running = False
+        self._command_tasks = set()
         self._me_cache: Optional[dict] = None
         self._watchdog_last_alert: float = 0.0
         # Bootstrap: seed authorized users from env (DB list persists dynamic changes)
-        existing = self._load_authorized()
-        if not existing and self.seed_user_ids:
-            self._save_authorized(self.seed_user_ids)
-            self.db.set_state("main_owner_id", str(sorted(self.seed_user_ids)[0]))
-            logger.info(f"Seeded bot authorized users from env: {sorted(self.seed_user_ids)}")
-        elif existing and self.seed_user_ids:
-            # Synchronize seed IDs into database so all env IDs are recognized
-            merged = existing.union(self.seed_user_ids)
-            if merged != existing:
-                self._save_authorized(merged)
-                logger.info(f"Updated bot authorized users with env seed: {sorted(merged)}")
-            if not self.db.get_state("main_owner_id", ""):
-                self.db.set_state("main_owner_id", str(sorted(self.seed_user_ids)[0]))
+        self._save_authorized(authorized_user_ids(self.db, self.seed_user_ids))
+        if not self.db.get_state("main_owner_id", "") and self.seed_user_ids:
+            self.db.set_state("main_owner_id", str(min(self.seed_user_ids)))
 
     # ------------------------------------------------------------------ state
     def _load_authorized(self) -> set[int]:
-        try:
-            raw = self.db.get_state("bot_authorized_users", "")
-            return set(json.loads(raw)) if raw else set()
-        except Exception:
-            return set()
+        return authorized_user_ids(self.db)
 
     def _save_authorized(self, users: set[int]) -> None:
-        self.db.set_state("bot_authorized_users", json.dumps(sorted(users)))
+        save_authorized_users(self.db, users, self.seed_user_ids)
 
     @property
     def main_user_id(self) -> int:
         """Main authorized user (project owner) — first env-provided ID or saved main owner."""
-        if self.seed_user_ids:
-            return sorted(self.seed_user_ids)[0]
         try:
             saved = self.db.get_state("main_owner_id", "")
             if saved and int(saved) > 0:
                 return int(saved)
         except Exception:
             pass
+        if self.seed_user_ids:
+            return min(self.seed_user_ids)
         users = self._load_authorized()
         if not users:
             return 0
@@ -286,10 +297,7 @@ class BotControl:
         uid = int(user_id)
         if uid == self.main_user_id:
             return True
-        authorized = self._load_authorized()
-        if not authorized and self.seed_user_ids:
-            return uid in self.seed_user_ids
-        return uid in authorized
+        return uid in authorized_user_ids(self.db, self.seed_user_ids)
 
     def is_main_user(self, user_id: int) -> bool:
         return self.main_user_id == int(user_id)
@@ -421,10 +429,11 @@ class BotControl:
                 for update in data.get("result", []):
                     self._offset = max(self._offset, update.get("update_id", 0) + 1)
                     try:
-                        await self._process_update(update)
+                        await self._dispatch_update(update)
                     except Exception as e:
                         logger.debug(f"Bot update processing error: {e}")
             except asyncio.CancelledError:
+                await self.stop()
                 raise
             except Exception as e:
                 logger.debug(f"Bot long-poll error: {e}. Backing off {backoff}s.")
@@ -432,6 +441,30 @@ class BotControl:
                 backoff = min(backoff * 2, 60.0)
 
         logger.info("Bot control channel stopped.")
+
+    async def _dispatch_update(self, update):
+        message = update.get("message") or {}
+        callback = update.get("callback_query") or {}
+        text = str(message.get("text") or callback.get("data") or "").removeprefix("cmd:")
+        root = text.split()[0].split("@")[0].lower() if text.split() else ""
+        slow = root in {"/approve", "/checkmodels", "/syncpins", "/gencontext", "/backup", "/name"} or text.startswith("approve:")
+        if not slow:
+            return await self._process_update(update)
+        if len(self._command_tasks) >= 4:
+            chat = message.get("chat") or (callback.get("message") or {}).get("chat") or {}
+            if chat.get("id"):
+                await self.send_message(chat["id"], "Four commands are still running. Check status and try again shortly; stop controls remain available.")
+            return
+
+        async def run_command():
+            try:
+                await self._process_update(update)
+            except Exception:
+                logger.exception("Background control command failed")
+
+        task = asyncio.create_task(run_command())
+        self._command_tasks.add(task)
+        task.add_done_callback(self._command_tasks.discard)
 
     async def send_welcome_card(self, bot_name: str) -> None:
         """Beautiful welcome card sent to the main owner on every deploy/restart so they
@@ -499,6 +532,12 @@ class BotControl:
 
     async def stop(self) -> None:
         self._running = False
+        tasks = list(self._command_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._command_tasks.clear()
 
     @staticmethod
     def _extract_message(update: dict) -> Optional[dict]:
@@ -740,7 +779,7 @@ class BotControl:
             return
 
         # All remaining commands route to the shared command engine of ReplyManager
-        response = await self.reply_manager.handle_control_command(text)
+        response = await self.reply_manager.handle_control_command(text, audit_source="bot", actor_id=user_id)
         if response:
             if len(response) > 4000:
                 response = response[:4000] + "\n…"
@@ -767,11 +806,7 @@ class BotControl:
 
     def _user_can(self, user_id: int, raw_command: str) -> bool:
         """Check this user's granted command list ('all' or trailing-specific commands like /prompt)."""
-        granted = self.db.get_state(f"bot_granted_cmds_{user_id}", "all")
-        if not granted or granted.strip() == "all":
-            return True
-        root = raw_command.strip().split()[0].lower().split("@")[0]
-        return root in {c.strip().lower().split("@")[0] for c in granted.split(",") if c.strip()}
+        return can_run_command(self.db, user_id, raw_command, self.main_user_id)
 
     async def _handle_authlist(self, chat_id: int) -> None:
         users = sorted(self._load_authorized())
@@ -825,7 +860,7 @@ class BotControl:
                     "show_alert": True,
                 })
                 return
-            response = await self.reply_manager.handle_control_command(command) or "Done."
+            response = await self.reply_manager.handle_control_command(command, audit_source="bot", actor_id=user_id) or "Done."
             await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": response[:180], "show_alert": False})
             new_text = f"⚡ *{command.split()[0]}* →\n\n{response[:3500]}"
             edited = await self._call(
@@ -874,14 +909,14 @@ class BotControl:
                     try:
                         text = f"💬 {name}: per-chat {int(float(cur) * 100)}% banter"
                     except ValueError:
-                        text = f"💬 {name}: default band (30-60%)"
+                        text = f"💬 {name}: global default"
                 else:
-                    text = f"💬 {name}: default band (30-60%)"
+                    text = f"💬 {name}: global default"
                 await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": text[:180], "show_alert": False})
                 return
             if action == "default":
                 self.reply_manager.db.set_state(f"chat_chatty_{cid}", "")
-                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": f"♻️ {name}: reset to default 30-60% band", "show_alert": True})
+                await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": f"♻️ {name}: reset to the global setting", "show_alert": True})
                 return
             try:
                 pct = max(0, min(100, int(action)))
@@ -907,7 +942,7 @@ class BotControl:
             })
             return
 
-        response = await self.reply_manager.handle_control_command(f"/{action} {target_id}") or "Done."
+        response = await self.reply_manager.handle_control_command(f"/{action} {target_id}", audit_source="bot", actor_id=user_id) or "Done."
         # Popup answer + update the message in-place so buttons disappear and message is preserved (never delete)
         await self._call("answerCallbackQuery", {"callback_query_id": cb_id, "text": response[:180], "show_alert": True})
         message = cb.get("message") or {}

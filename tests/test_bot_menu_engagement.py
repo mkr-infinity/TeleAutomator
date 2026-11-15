@@ -60,21 +60,22 @@ def test_quick_menu_markup_with_miniapp():
 # --------------------------------------------------------------------- engagement
 
 
-def test_engagement_boosts_in_busy_rooms_and_dampens_in_dead_rooms():
+def test_engagement_respects_configured_chance_in_busy_rooms():
     base = 0.20
-    # Busy room (>=3 recent messages): more talkative, capped to stay non-spammy
-    assert adjust_engagement_for_room_heat(base, 4) == min(0.55, base * 1.4)
-    # Dead room (<=1 recent message): quieter but never fully silent
+    # Busy rooms must not raise the owner's chosen reply frequency.
+    assert adjust_engagement_for_room_heat(base, 4) == base
+    # Quiet rooms lower it.
     dead = adjust_engagement_for_room_heat(base, 1)
     assert dead == base * 0.6
     # Normal room: unchanged
     assert adjust_engagement_for_room_heat(base, 2) == base
-    # Never crosses the spam ceiling
-    assert adjust_engagement_for_room_heat(0.60, 10) <= 0.55
+    assert adjust_engagement_for_room_heat(0.60, 10) == 0.60
 
 
-def test_engagement_never_drops_below_floor():
-    assert adjust_engagement_for_room_heat(0.01, 0) == 0.02
+def test_engagement_never_invents_a_minimum_probability():
+    assert adjust_engagement_for_room_heat(0.01, 0) == 0.006
+    assert adjust_engagement_for_room_heat(0, 0) == 0
+    assert adjust_engagement_for_room_heat(0, 10) == 0
 
 
 # --------------------------------------------------------- conversation endings
@@ -110,8 +111,8 @@ def test_thread_end_policy_thresholds():
     assert decide_thread_end_action(is_group=True, roll=0.10) == "reaction"
     assert decide_thread_end_action(is_group=True, roll=0.50) == "silent"
 
-    # DMs: tiny ack sometimes, reaction sometimes, often left on read
-    assert decide_thread_end_action(is_group=False, roll=0.20) == "reply"
+    # DMs close with a reaction or silence, without starting another reply loop.
+    assert decide_thread_end_action(is_group=False, roll=0.20) == "reaction"
     assert decide_thread_end_action(is_group=False, roll=0.50) == "reaction"
     assert decide_thread_end_action(is_group=False, roll=0.80) == "silent"
 
@@ -135,6 +136,7 @@ class _FakeEvent:
 
 def test_own_outgoing_recorded_and_not_duplicated(tmp_path: Path):
     mgr = _make_manager(tmp_path)
+    mgr.privacy.allow_chat(555)
     event = _FakeEvent(chat_id=555, msg_id=101, text="brb grabbing coffee")
     record_own_outgoing_message(mgr, event, my_user_id=999)
 

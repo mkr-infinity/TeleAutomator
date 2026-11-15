@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
+import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
-from app.logger import setup_logger
+from app.logger import redact_secrets, setup_logger
 from app.session_manager import ensure_secure_dir, ensure_secure_file
 
 logger = setup_logger(__name__)
@@ -20,16 +24,22 @@ class Database:
 
     def __init__(self, db_path: Path):
         self.db_path = db_path
+        self._context_lock = threading.RLock()
         ensure_secure_dir(db_path.parent)
         self.contexts_dir = db_path.parent / "contexts"
         ensure_secure_dir(self.contexts_dir)
         self._init_db()
         ensure_secure_file(self.db_path)
 
-    def _get_connection(self) -> sqlite3.Connection:
+    @contextmanager
+    def _get_connection(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init_db(self) -> None:
         with self._get_connection() as conn:
@@ -37,6 +47,28 @@ class Database:
                 """
                 PRAGMA journal_mode=WAL;
                 PRAGMA synchronous=NORMAL;
+
+                CREATE TABLE IF NOT EXISTS action_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    detail TEXT NOT NULL DEFAULT '',
+                    chat_id INTEGER,
+                    actor_id INTEGER,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_action_history_status ON action_history(status, id DESC);
+
+                CREATE TABLE IF NOT EXISTS reply_feedback (
+                    chat_id INTEGER NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    rating TEXT NOT NULL CHECK(rating IN ('helpful','unnecessary','off_topic','style')),
+                    reply_text TEXT NOT NULL,
+                    actor_id INTEGER,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(chat_id, message_id)
+                );
 
                 CREATE TABLE IF NOT EXISTS pending_approvals (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,6 +122,7 @@ class Database:
                     sender_name TEXT,
                     text TEXT NOT NULL,
                     is_outgoing INTEGER NOT NULL DEFAULT 0,
+                    is_automated INTEGER NOT NULL DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(chat_id, message_id)
                 );
@@ -122,6 +155,12 @@ class Database:
                 );
                 """
             )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_pending_status_id ON pending_approvals(status,id)")
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(chat_messages)")}
+            if "is_automated" not in columns:
+                conn.execute("ALTER TABLE chat_messages ADD COLUMN is_automated INTEGER NOT NULL DEFAULT 0")
+                # Older automated sends used no sender ID; manual events retained the account ID.
+                conn.execute("UPDATE chat_messages SET is_automated=1 WHERE is_outgoing=1 AND sender_id IS NULL")
 
     def add_approval(
         self,
@@ -141,7 +180,12 @@ class Database:
                 """,
                 (chat_id, chat_title, reply_to_msg_id, sender_id, incoming_text, draft_text),
             )
+            self._pending_revision(conn)
             return int(cursor.lastrowid)
+
+    @staticmethod
+    def _pending_revision(conn):
+        conn.execute("INSERT INTO runtime_state(key,value) VALUES('state_revision',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(time.time_ns()),))
 
     def get_pending_approval(self, approval_id: int) -> Optional[Dict[str, Any]]:
         with self._get_connection() as conn:
@@ -159,13 +203,37 @@ class Database:
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def update_approval_status(self, approval_id: int, status: str) -> bool:
+    def claim_approval(self, approval_id: int) -> Optional[Dict[str, Any]]:
         with self._get_connection() as conn:
-            cursor = conn.execute(
-                "UPDATE pending_approvals SET status = ? WHERE id = ?",
-                (status, approval_id),
+            claimed = conn.execute(
+                "UPDATE pending_approvals SET status = 'sending' WHERE id = ? AND status = 'pending'",
+                (approval_id,),
             )
+            if not claimed.rowcount:
+                return None
+            self._pending_revision(conn)
+            return dict(conn.execute("SELECT * FROM pending_approvals WHERE id = ?", (approval_id,)).fetchone())
+
+    def update_approval_status(self, approval_id: int, status: str, expected_status: Optional[str] = None) -> bool:
+        with self._get_connection() as conn:
+            query = "UPDATE pending_approvals SET status = ? WHERE id = ?"
+            params = (status, approval_id)
+            if expected_status is not None:
+                query += " AND status = ?"
+                params += (expected_status,)
+            cursor = conn.execute(
+                query, params,
+            )
+            if cursor.rowcount:
+                self._pending_revision(conn)
             return cursor.rowcount > 0
+
+    def reject_all_pending(self) -> int:
+        with self._get_connection() as conn:
+            changed = conn.execute("UPDATE pending_approvals SET status='rejected' WHERE status='pending'").rowcount
+            if changed:
+                self._pending_revision(conn)
+            return changed
 
     def is_duplicate_message(self, msg_hash: str) -> bool:
         with self._get_connection() as conn:
@@ -189,6 +257,10 @@ class Database:
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (key, value),
             )
+            conn.execute(
+                "INSERT INTO runtime_state (key, value) VALUES ('state_revision', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (str(time.time_ns()),),
+            )
 
     def get_state(self, key: str, default: str = "") -> str:
         with self._get_connection() as conn:
@@ -197,6 +269,96 @@ class Database:
                 (key,),
             ).fetchone()
             return str(row["value"]) if row else default
+
+    def get_chat_panel_data(self, chat_ids):
+        """Read chat cards in one connection instead of opening a connection for every field."""
+        ids = tuple(chat_ids)
+        metadata, contexts, states = {}, {}, {}
+        if not ids:
+            return metadata, contexts, states
+        with self._get_connection() as conn:
+            for offset in range(0, len(ids), 400):
+                batch = ids[offset:offset + 400]
+                slots = ",".join("?" for _ in batch)
+                metadata.update((row["chat_id"], dict(row)) for row in conn.execute("SELECT * FROM known_chats WHERE chat_id IN (" + slots + ")", batch))
+                contexts.update((row["chat_id"], dict(row)) for row in conn.execute("SELECT * FROM permanent_chat_context WHERE chat_id IN (" + slots + ")", batch))
+            prefixes = ("chat_chatty_*", "chat_style_*", "chat_prompt_*", "chat_cooldown_min_*", "chat_cooldown_max_*", "chat_voice_profile_*")
+            rows = conn.execute("SELECT key,value FROM runtime_state WHERE " + " OR ".join("key GLOB ?" for _ in prefixes), prefixes)
+            states = {row["key"]: row["value"] for row in rows}
+        for cid in ids:
+            if cid not in contexts and self._get_context_file_path(cid).is_file():
+                contexts[cid] = self.get_permanent_context(cid)
+        return metadata, contexts, states
+
+    def count_pending_approvals(self) -> int:
+        with self._get_connection() as conn:
+            return int(conn.execute("SELECT COUNT(*) FROM pending_approvals WHERE status='pending'").fetchone()[0])
+
+    def backup_to(self, path: Path) -> None:
+        """Use SQLite's consistent backup snapshot while the live database keeps receiving writes."""
+        ensure_secure_dir(path.parent)
+        with self._get_connection() as source, sqlite3.connect(str(path)) as target:
+            source.backup(target)
+        ensure_secure_file(path)
+
+    def record_action(self, source: str, action: str, status: str, detail: str = "", *, chat_id=None, actor_id=None) -> None:
+        """Keep bounded metadata, never command arguments or message bodies; auditing cannot interrupt delivery."""
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "INSERT INTO action_history (source, action, status, detail, chat_id, actor_id) VALUES (?, ?, ?, ?, ?, ?)",
+                    (source[:32], redact_secrets(action)[:64], status[:16], redact_secrets(detail)[:300], chat_id, actor_id),
+                )
+                if row.lastrowid % 100 == 0:
+                    conn.execute("DELETE FROM action_history WHERE id <= ?", (row.lastrowid - 1000,))
+        except Exception:
+            logger.warning("Could not record action history")
+
+    def latest_action_id(self) -> int:
+        with self._get_connection() as conn:
+            return int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM action_history").fetchone()[0])
+
+    def list_actions(self, status: str = "", before: int = 0, limit: int = 40) -> List[Dict[str, Any]]:
+        clauses, params = [], []
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if before:
+            clauses.append("id < ?")
+            params.append(before)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT * FROM action_history" + where + " ORDER BY id DESC LIMIT ?",
+                                (*params, max(1, min(100, limit)))).fetchall()
+            return [dict(row) for row in rows]
+
+    def apply_preferences(self, states: Dict[str, str], contexts: List[Dict[str, Any]], rules: List[Dict[str, str]], *, expected_states=None) -> bool:
+        """Apply a validated preference plan atomically, then refresh isolated context files."""
+        with self._context_lock:
+            with self._get_connection() as conn:
+                if expected_states is not None:
+                    conn.execute("BEGIN IMMEDIATE")
+                    for key, expected in expected_states.items():
+                        row = conn.execute("SELECT value FROM runtime_state WHERE key=?", (key,)).fetchone()
+                        if (row["value"] if row else "") != expected:
+                            return False
+                conn.executemany(
+                    "INSERT INTO runtime_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    [*states.items(), ("state_revision", str(time.time_ns()))],
+                )
+                for context in contexts:
+                    conn.execute(
+                        "INSERT INTO permanent_chat_context (chat_id, notes, pinned_text) VALUES (?, ?, ?) "
+                        "ON CONFLICT(chat_id) DO UPDATE SET notes = excluded.notes, pinned_text = excluded.pinned_text, updated_at = CURRENT_TIMESTAMP",
+                        (context["id"], context["notes"], context["pinned_text"]),
+                    )
+                conn.executemany(
+                    "INSERT INTO keyword_rules (keyword, reply) VALUES (?, ?) ON CONFLICT(keyword) DO UPDATE SET reply = excluded.reply",
+                    [(rule["keyword"], rule["reply"]) for rule in rules],
+                )
+            for context in contexts:
+                self.sync_chat_context_file(context["id"])
+            return True
 
     def add_keyword_rule(self, keyword: str, reply: str) -> None:
         """Add or update custom trigger keyword and reply."""
@@ -308,6 +470,7 @@ class Database:
         sender_name: str,
         text: str,
         is_outgoing: bool = False,
+        is_automated: bool = False,
     ) -> None:
         """Cache message in database with automatic size and row capping to keep resource usage minimal."""
         if not text or not text.strip():
@@ -317,14 +480,17 @@ class Database:
         with self._get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO chat_messages (chat_id, message_id, sender_id, sender_name, text, is_outgoing)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO chat_messages (chat_id, message_id, sender_id, sender_name, text, is_outgoing, is_automated)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(chat_id, message_id) DO UPDATE SET
                     text = excluded.text,
-                    sender_name = excluded.sender_name
+                    sender_name = excluded.sender_name,
+                    is_automated = MAX(chat_messages.is_automated, excluded.is_automated)
                 """,
-                (chat_id, message_id, sender_id, sender_name, truncated_text, 1 if is_outgoing else 0),
+                (chat_id, message_id, sender_id, sender_name, truncated_text, int(is_outgoing), int(is_automated and is_outgoing)),
             )
+            if is_automated:
+                conn.execute("UPDATE reply_feedback SET reply_text=? WHERE chat_id=? AND message_id=?", (truncated_text, chat_id, message_id))
             # Lightweight automatic pruning: keep a deep-enough history per chat for
             # the 40-message group prompt window (with room to spare), cap the rest
             conn.execute(
@@ -351,6 +517,37 @@ class Database:
                 (chat_id, message_id),
             ).fetchone()
         return bool(row)
+
+    def set_reply_feedback(self, chat_id: int, message_id: int, rating: str, actor_id=None) -> None:
+        if rating not in ("helpful", "unnecessary", "off_topic", "style", "clear") or message_id <= 0:
+            raise ValueError("Choose helpful, unnecessary, off_topic, style, or clear for a valid message ID")
+        with self._context_lock, self._get_connection() as conn:
+            row = conn.execute("SELECT text FROM chat_messages WHERE chat_id=? AND message_id=? AND is_outgoing=1 AND is_automated=1",
+                               (chat_id, message_id)).fetchone()
+            old = conn.execute("SELECT reply_text FROM reply_feedback WHERE chat_id=? AND message_id=?", (chat_id, message_id)).fetchone()
+            if not row and not old:
+                raise ValueError("This automated reply is no longer available. Rate a recent reply from the app")
+            if rating == "clear":
+                conn.execute("DELETE FROM reply_feedback WHERE chat_id=? AND message_id=?", (chat_id, message_id))
+            else:
+                conn.execute("INSERT INTO reply_feedback(chat_id,message_id,rating,reply_text,actor_id) VALUES(?,?,?,?,?) "
+                             "ON CONFLICT(chat_id,message_id) DO UPDATE SET rating=excluded.rating,reply_text=excluded.reply_text,actor_id=excluded.actor_id,updated_at=strftime('%Y-%m-%d %H:%M:%f','now')",
+                             (chat_id, message_id, rating, (row["text"] if row else old["reply_text"])[:300], actor_id))
+                conn.execute("DELETE FROM reply_feedback WHERE rowid NOT IN (SELECT rowid FROM reply_feedback ORDER BY updated_at DESC,rowid DESC LIMIT 500)")
+            conn.execute("INSERT INTO runtime_state(key,value) VALUES('state_revision',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(time.time_ns()),))
+
+    def list_reply_feedback(self, chat_ids, limit=40) -> List[Dict[str, Any]]:
+        ids = tuple(chat_ids)
+        if not ids:
+            return []
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT f.*,COALESCE(k.title,'') AS chat_title FROM reply_feedback f LEFT JOIN known_chats k ON k.chat_id=f.chat_id WHERE f.chat_id IN (" + ",".join("?" for _ in ids) + ") ORDER BY f.updated_at DESC,f.rowid DESC LIMIT ?",
+                                (*ids, max(1, min(500, limit)))).fetchall()
+            return [dict(row) for row in rows]
+
+    def latest_incoming_row_id(self, chat_id: int) -> int:
+        with self._get_connection() as conn:
+            return int(conn.execute("SELECT COALESCE(MAX(id),0) FROM chat_messages WHERE chat_id=? AND is_outgoing=0", (chat_id,)).fetchone()[0])
 
     def record_token_usage(
         self, provider: str, model: str, prompt_tokens: int, completion_tokens: int, total_tokens: int
@@ -507,6 +704,8 @@ class Database:
         summary = self.get_state(f"chat_summary_{chat_id}", "")
         if summary:
             return summary
+        if self.get_state(f"chat_memory_epoch_{chat_id}"):
+            return ""
         # Fallback to isolated context file on disk
         file_path = self._get_context_file_path(chat_id)
         if file_path.exists():
@@ -514,8 +713,7 @@ class Database:
                 data = json.loads(file_path.read_text(encoding="utf-8"))
                 memory = data.get("ai_memory") or ""
                 if memory:
-                    self.set_state(f"chat_summary_{chat_id}", memory)
-                    return memory
+                    return memory if self.set_chat_summary(chat_id, memory, epoch="") else ""
             except Exception:
                 pass
         return ""
@@ -546,10 +744,18 @@ class Database:
             ).fetchone()
             return int(row[0]) if row else 0
 
-    def set_chat_summary(self, chat_id: int, summary: str) -> None:
+    def set_chat_summary(self, chat_id: int, summary: str, *, epoch: Optional[str] = None, marker: Optional[int] = None) -> bool:
         """Store the AI-generated rolling recap for chat_id and sync to isolated context file."""
-        self.set_state(f"chat_summary_{chat_id}", (summary or "").strip())
-        self.sync_chat_context_file(chat_id)
+        with self._context_lock:
+            if epoch is not None and self.get_state(f"chat_memory_epoch_{chat_id}") != epoch:
+                return False
+            if marker is not None and int(self.get_state(f"chat_summary_marker_{chat_id}", "0")) > marker:
+                return False
+            self.set_state(f"chat_summary_{chat_id}", (summary or "").strip())
+            if marker is not None:
+                self.set_state(f"chat_summary_marker_{chat_id}", str(marker))
+            self.sync_chat_context_file(chat_id)
+            return True
 
     def prune_messages_older_than(self, max_age_seconds: float) -> int:
         """Delete locally cached chat messages older than max_age_seconds (context aging purge).
@@ -570,9 +776,18 @@ class Database:
         CRITICAL SAFETY: This ONLY clears local SQLite context cache used for AI prompts;
         it NEVER deletes any Telegram messages on Telegram servers.
         """
-        with self._get_connection() as conn:
-            cursor = conn.execute("DELETE FROM chat_messages WHERE chat_id = ?", (chat_id,))
-            return cursor.rowcount
+        with self._context_lock:
+            with self._get_connection() as conn:
+                count = conn.execute("DELETE FROM chat_messages WHERE chat_id = ?", (chat_id,)).rowcount
+                conn.execute("DELETE FROM reply_feedback WHERE chat_id = ?", (chat_id,))
+                conn.executemany(
+                    "INSERT INTO runtime_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    [(f"chat_summary_{chat_id}", ""), (f"chat_summary_marker_{chat_id}", "0"),
+                     (f"chat_memory_epoch_{chat_id}", str(time.time_ns()))],
+                )
+            self.sync_chat_context_file(chat_id)
+            self.set_state("state_revision", str(time.time_ns()))
+            return count
 
     def clear_all_chat_context(self) -> int:
         """Clear locally cached conversation context and summaries across all chats.
@@ -580,13 +795,15 @@ class Database:
         CRITICAL SAFETY: This ONLY clears local SQLite context cache used for AI prompts;
         it NEVER deletes any Telegram messages on Telegram servers.
         """
-        with self._get_connection() as conn:
-            cursor = conn.execute("DELETE FROM chat_messages")
-            try:
-                conn.execute("DELETE FROM chat_summaries")
-            except Exception:
-                pass
-            return cursor.rowcount
+        with self._context_lock:
+            with self._get_connection() as conn:
+                chats = {r[0] for r in conn.execute(
+                    "SELECT chat_id FROM known_chats UNION SELECT chat_id FROM chat_messages UNION SELECT chat_id FROM permanent_chat_context UNION SELECT chat_id FROM reply_feedback"
+                )}
+                keys = [r[0] for r in conn.execute("SELECT key FROM runtime_state WHERE key LIKE 'chat_summary_%'")]
+            chats.update(int(k.rsplit("_", 1)[-1]) for k in keys if k.rsplit("_", 1)[-1].lstrip("-").isdigit())
+            chats.update(int(p.stem) for p in self.contexts_dir.glob("*.json") if p.stem.lstrip("-").isdigit())
+            return sum(self.clear_chat_context(cid) for cid in chats)
 
     def prune_chat_messages(self, chat_id: int, keep_last: int = 50) -> None:
         """Prune old cached chat context keeping only the last N messages."""
@@ -657,33 +874,42 @@ class Database:
         chat_id: int,
         pinned_text: str = "",
         notes: str = "",
-    ) -> None:
+    ) -> bool:
         """Write isolated per-group context file named by chat_id so groups never mix context."""
-        try:
-            ensure_secure_dir(self.contexts_dir)
-            meta = self.get_chat_metadata(chat_id) or {}
-            file_path = self._get_context_file_path(chat_id)
-            data = {
-                "chat_id": chat_id,
-                "title": meta.get("title") or f"Chat {chat_id}",
-                "chat_type": meta.get("chat_type") or ("Group" if chat_id < 0 else "Private contact"),
-                "notes": notes or "",
-                "pinned_text": pinned_text or "",
-                "ai_memory": self.get_state(f"chat_summary_{chat_id}") or "",
-                "voice_profile": self.get_state(f"chat_voice_profile_{chat_id}") or "",
-                "prompt": self.get_state(f"chat_prompt_{chat_id}") or "",
-                "style": self.get_state(f"chat_style_{chat_id}") or "",
-                "updated_at": time.time(),
-            }
-            file_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            ensure_secure_file(file_path)
-        except Exception as e:
-            logger.debug(f"Failed to write context file for chat {chat_id} to disk: {e}")
+        with self._context_lock:
+            try:
+                ensure_secure_dir(self.contexts_dir)
+                meta = self.get_chat_metadata(chat_id) or {}
+                file_path = self._get_context_file_path(chat_id)
+                data = {
+                    "chat_id": chat_id,
+                    "title": meta.get("title") or f"Chat {chat_id}",
+                    "chat_type": meta.get("chat_type") or ("Group" if chat_id < 0 else "Private contact"),
+                    "notes": notes or "",
+                    "pinned_text": pinned_text or "",
+                    "ai_memory": self.get_state(f"chat_summary_{chat_id}") or "",
+                    "voice_profile": self.get_state(f"chat_voice_profile_{chat_id}") or "",
+                    "prompt": self.get_state(f"chat_prompt_{chat_id}") or "",
+                    "style": self.get_state(f"chat_style_{chat_id}") or "",
+                    "recent_messages": self.get_recent_chat_messages(chat_id, limit=15),
+                    "reply_feedback": self.list_reply_feedback([chat_id], limit=5),
+                    "updated_at": time.time(),
+                }
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.contexts_dir, delete=False) as tmp:
+                    tmp.write(json.dumps(data, indent=2))
+                try:
+                    os.replace(tmp.name, file_path)
+                finally:
+                    Path(tmp.name).unlink(missing_ok=True)
+                return True
+            except Exception as e:
+                logger.debug(f"Failed to write context file for chat {chat_id} to disk: {e}")
+                return False
 
-    def sync_chat_context_file(self, chat_id: int) -> None:
+    def sync_chat_context_file(self, chat_id: int) -> bool:
         """Sync full per-chat context snapshot (persona, notes, pins) to its isolated disk file."""
         ctx = self.get_permanent_context(chat_id)
-        self._sync_context_to_disk(chat_id, pinned_text=ctx.get("pinned_text", ""), notes=ctx.get("notes", ""))
+        return self._sync_context_to_disk(chat_id, pinned_text=ctx.get("pinned_text", ""), notes=ctx.get("notes", ""))
 
     def set_permanent_context(
         self,
@@ -729,7 +955,7 @@ class Database:
                 "SELECT pinned_text, notes FROM permanent_chat_context WHERE chat_id = ?",
                 (chat_id,),
             ).fetchone()
-            if row and (row["pinned_text"] or row["notes"]):
+            if row:
                 pinned = row["pinned_text"] or ""
                 notes = row["notes"] or ""
                 file_path = self._get_context_file_path(chat_id)

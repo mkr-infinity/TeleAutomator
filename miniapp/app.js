@@ -8,6 +8,9 @@
   const $ = (id) => document.getElementById(id);
   const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
   const DEMO = new URLSearchParams(location.search).has("demo");
+  let canGiveFeedback = false;
+  let activeUserId = null;
+  const FEEDBACK_LABELS = { helpful: "Helpful", unnecessary: "Unneeded", off_topic: "Off-topic", style: "Style mismatch" };
 
   const SVGS = {
     check: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>',
@@ -98,7 +101,7 @@
       title: "Per-Chat Cooldown",
       desc: "Controls the minimum and maximum seconds the bot waits before replying in a specific chat.",
       onText: "Replies are delayed naturally between Min and Max seconds to simulate realistic reading and typing time.",
-      offText: "When Min and Max are set to 0, replies are sent without waiting (instant reply, strictly within anti-spam rate limits).",
+      offText: "When this chat's Min and Max are 0, its own cooldown is disabled. The account-wide cooldown and anti-spam limits still apply.",
     },
   };
 
@@ -208,14 +211,51 @@
     } catch { return ""; }
   }
 
+  const readsInFlight = new Map();
+
   async function api(path, body) {
     if (DEMO) return demoApi(path, body);
+    if (!body && readsInFlight.has(path)) return readsInFlight.get(path);
     const opts = { method: body ? "POST" : "GET", headers: { "X-Telegram-Init-Data": initDataHeader() } };
     if (body) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
-    const res = await fetch(path, opts);
-    const data = await res.json().catch(() => ({}));
-    if (res.status === 401) return { authorized: false, paywall: data.paywall, version: data.version };
-    return data;
+    const controller = new AbortController();
+    opts.signal = controller.signal;
+    const timeout = setTimeout(() => controller.abort(), body ? 120000 : 20000);
+    const request = (async () => {
+      const res = await fetch(path, opts);
+      const data = await res.json();
+      if (res.status === 401) return { authorized: false, paywall: data.paywall, version: data.version };
+      if (res.status >= 400) return { ...data, ok: false, response: data.response || data.error || `Server returned ${res.status}. Try again.` };
+      return data;
+    })();
+    if (!body) readsInFlight.set(path, request);
+    try { return await request; }
+    catch (error) {
+      if (error.name === "AbortError") throw new Error("The request timed out. Refresh to check the result before trying again.");
+      if (error.name === "SyntaxError") throw new Error("The server sent an invalid response. Try again.");
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      if (!body) readsInFlight.delete(path);
+    }
+  }
+
+  const renderedHtml = new WeakMap();
+  function updateHtml(id, html) {
+    const element = $(id);
+    if (renderedHtml.get(element) === html) return false;
+    element.innerHTML = html;
+    renderedHtml.set(element, html);
+    return true;
+  }
+
+  function syncField(id, value) {
+    const field = $(id);
+    if (!field) return;
+    const next = String(value ?? "");
+    if ((field.dataset.syncedValue === undefined && field.dataset.dirty !== "true") || field.value === field.dataset.syncedValue) field.value = next;
+    field.dataset.syncedValue = next;
+    field.dataset.dirty = String(field.value !== next);
   }
 
   // ------------------------------------------------------------ demo data
@@ -229,7 +269,7 @@
       owner_name: "Kaif", ai_engine: "Gemini", ai_model: "gemini-2.5-flash-lite", ai_base_url: "",
       available_models: ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"],
       models_manually_set: false,
-      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.4",
+      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.9",
       auto_reactions: true, ownreact: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
       thinking: "default", temperature: "0.7", lang: "english", max_tokens: "512",
       quiet_hours_start: "02:00", quiet_hours_end: "08:00", quiet_hours_schedule: "02:00 AM – 08:00 AM IST",
@@ -272,11 +312,16 @@
   };
 
   async function demoApi(path, body) {
-    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.4", user: { id: 555000111, name: "Kaif" } };
+    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.9", user: { id: 555000111, name: "Kaif" } };
     if (path === "/api/state") return DEMO_DATA.state;
     if (path === "/api/chats") return { chats: DEMO_DATA.chats, chatty_global: DEMO_DATA.state.chatty_global };
     if (path === "/api/pending") return { pending: DEMO_DATA.pending };
     if (path === "/api/activity") return { activity: DEMO_DATA.activity };
+    if (path.startsWith("/api/feedback")) {
+      const rows = DEMO_DATA.activity.filter(row => row.feedback).map(row => ({ ...row, reply_text: row.text, chat_title: row.chat, rating: row.feedback, updated_at: row.ts }));
+      const rating = new URLSearchParams(path.split("?")[1]).get("rating");
+      return { ok: true, feedback: rows.filter(row => !rating || row.rating === rating), counts: Object.fromEntries(Object.keys(FEEDBACK_LABELS).map(key => [key, rows.filter(row => row.rating === key).length])) };
+    }
     if (path === "/api/access") return { users: DEMO_DATA.access };
     if (path === "/api/commands") return { commands: DEMO_DATA.commands };
     if (path === "/api/models" || path === "/api/fetch_models") {
@@ -318,6 +363,13 @@
     }
     if (path === "/api/action") {
       const a = body && body.action;
+      if (a === "feedback") {
+        const params = body.params || {};
+        const row = DEMO_DATA.activity.find(row => String(row.chat_id) === String(params.chat_id) && String(row.message_id) === String(params.id));
+        if (!row) return { ok: false, response: "Choose a recent automated reply." };
+        row.feedback = params.value === "clear" ? "" : params.value;
+        return { ok: true, response: "Reply feedback saved for this chat." };
+      }
       const p = (body && body.params) || {};
       if (a === "approve" || a === "reject") {
         const i = DEMO_DATA.pending.findIndex((item) => String(item.id) === String(p.id));
@@ -658,7 +710,8 @@
     else el.textContent = plainText;
 
     el.classList.remove("hidden");
-    const dismiss = () => { el.classList.add("hidden"); clearTimeout(toastTimer); };
+    if (el.showPopover && !el.matches(":popover-open")) el.showPopover();
+    const dismiss = hideToast;
     el.onclick = dismiss;
     if (closeBtn) closeBtn.onclick = (e) => { e.stopPropagation(); dismiss(); };
     haptic(statusKind === "err" ? "err" : (statusKind === "ok" ? "ok" : "light"));
@@ -666,7 +719,13 @@
     const duration = statusKind === "err"
       ? Math.min(9000, 4500 + plainText.length * 40)
       : Math.min(7000, 3600 + plainText.length * 30);
-    toastTimer = setTimeout(() => el.classList.add("hidden"), duration);
+    toastTimer = setTimeout(hideToast, duration);
+  }
+
+  function hideToast() {
+    if ($("toast").hidePopover && $("toast").matches(":popover-open")) $("toast").hidePopover();
+    $("toast").classList.add("hidden");
+    clearTimeout(toastTimer);
   }
 
   function haptic(kind) {
@@ -686,26 +745,18 @@
     haptic("light");
   }
 
-  function expandSheet() {
-    const sheet = $("sheet");
-    if (!sheet || sheet.classList.contains("is-expanded")) return;
-    sheet.classList.add("is-expanded");
-    const expBtn = $("sheet-expand");
-    if (expBtn) expBtn.setAttribute("aria-expanded", "true");
-    haptic("light");
-  }
-
-  function collapseSheet() {
-    const sheet = $("sheet");
-    if (!sheet || !sheet.classList.contains("is-expanded")) return;
-    sheet.classList.remove("is-expanded");
-    const expBtn = $("sheet-expand");
-    if (expBtn) expBtn.setAttribute("aria-expanded", "false");
-    haptic("light");
-  }
+  let sheetVersion = 0;
+  let sheetBusy = false;
 
   function openSheet(title, bodyHtml, buttons) {
     const sheet = $("sheet");
+    hideToast();
+    sheet.appendChild($("toast"));
+    const version = ++sheetVersion;
+    sheetBusy = false;
+    $("sheet-close").disabled = false;
+    sheet.removeAttribute("aria-busy");
+    $("sheet-error").classList.add("hidden");
     if (sheet) sheet.classList.remove("is-expanded");
     const expBtn = $("sheet-expand");
     if (expBtn) expBtn.setAttribute("aria-expanded", "false");
@@ -719,54 +770,83 @@
     actions.innerHTML = "";
     (buttons || []).forEach((b) => {
       const btn = document.createElement("button");
+      btn.type = "button";
       btn.className = `btn ${b.kind || ""}`.trim();
       btn.textContent = b.label;
-      btn.addEventListener("click", () => { closeSheet(); b.onClick && b.onClick(); });
+      btn.addEventListener("click", async () => {
+        if (sheetBusy) return;
+        if (!b.onClick) return closeSheet();
+        const fields = [...bodyEl.querySelectorAll("input, textarea, select")];
+        if (b.kind === "primary" && fields.some((field) => !field.reportValidity())) return;
+        sheetBusy = true;
+        $("sheet-close").disabled = true;
+        sheet.setAttribute("aria-busy", "true");
+        btn.textContent = "Working…";
+        actions.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+        try {
+          const result = await b.onClick();
+          if (version !== sheetVersion) return;
+          if (result === false || (result && (result.ok === false || result.queued))) {
+            $("sheet-error").textContent = result.response || "Your changes have not been saved. Review the values and try again.";
+            $("sheet-error").classList.remove("hidden");
+          } else closeSheet(true);
+        } catch (error) {
+          if (version === sheetVersion) {
+            $("sheet-error").textContent = error.message || "Could not save. Try again.";
+            $("sheet-error").classList.remove("hidden");
+          }
+        } finally {
+          if (version === sheetVersion) {
+            sheetBusy = false;
+            $("sheet-close").disabled = false;
+            sheet.removeAttribute("aria-busy");
+            actions.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+            btn.textContent = b.label;
+          }
+        }
+      });
       actions.appendChild(btn);
     });
-    const inp = $("sheet-body").querySelector("input");
-    if (inp) {
-      inp.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          const primaryBtn = actions.querySelector(".btn.primary") || actions.querySelector(".btn");
-          if (primaryBtn) primaryBtn.click();
-        }
+    const inputs = [...bodyEl.querySelectorAll('input:not([type="checkbox"]), textarea, select')];
+    inputs.forEach((field, index) => {
+      field.enterKeyHint = index < inputs.length - 1 ? "next" : "done";
+      field.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || (field.tagName === "TEXTAREA" && !event.ctrlKey && !event.metaKey)) return;
+        event.preventDefault();
+        if (index < inputs.length - 1) inputs[index + 1].focus();
+        else (actions.querySelector(".btn.primary") || actions.querySelector(".btn"))?.click();
       });
-      setTimeout(() => inp.focus(), 60);
-    }
-    const ta = $("sheet-body").querySelector("textarea");
-    if (ta) {
-      ta.addEventListener("keydown", (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-          e.preventDefault();
-          const primaryBtn = actions.querySelector(".btn.primary") || actions.querySelector(".btn");
-          if (primaryBtn) primaryBtn.click();
-        }
-      });
-      setTimeout(() => ta.focus(), 60);
-    }
-    $("sheet-backdrop").classList.remove("hidden");
-    if (sheet) sheet.classList.remove("hidden");
+    });
+    sheet.classList.remove("hidden");
+    if (!sheet.open) sheet.showModal();
+    document.body.classList.add("sheet-open");
+    $("sheet-title").focus({ preventScroll: true });
     updateTmaBackButton();
     haptic("light");
   }
 
-  function closeSheet() {
+  function closeSheet(saved = false) {
     const sheet = $("sheet");
+    if (sheetBusy && saved !== true) return;
+    if (saved !== true && sheet.querySelector('[data-dirty="true"]') && !window.confirm("Discard the unsaved changes in this popup?")) return;
     if (sheet) sheet.classList.remove("is-expanded");
     const expBtn = $("sheet-expand");
     if (expBtn) expBtn.setAttribute("aria-expanded", "false");
-    $("sheet-backdrop").classList.add("hidden");
-    if (sheet) sheet.classList.add("hidden");
+    sheet.close();
+    document.body.appendChild($("toast"));
+    if (!$("toast").classList.contains("hidden") && $("toast").showPopover && !$("toast").matches(":popover-open")) $("toast").showPopover();
+    sheet.classList.add("hidden");
+    document.body.classList.remove("sheet-open");
     updateTmaBackButton();
+    updateClosingConfirmation();
+    if (refreshAfterSheet) { refreshAfterSheet = false; loadView(currentView); }
     haptic("light");
   }
 
   function updateTmaBackButton() {
     try {
       if (!tg || !tg.BackButton) return;
-      const sheetOpen = $("sheet") && !$("sheet").classList.contains("hidden");
+      const sheetOpen = $("sheet") && $("sheet").open;
       if (sheetOpen) {
         tg.BackButton.show();
         tg.BackButton.offClick(backToOverview);
@@ -792,37 +872,59 @@
   // -------------------------------------------------------------- views
 
   let currentView = "overview";
+  let latestState = null;
+  const viewLoads = new Map();
+  const viewScroll = new Map();
+  let refreshAfterSheet = false;
 
   function showView(name) {
+    if (!$(`view-${name}`)) return;
+    viewScroll.set(currentView, window.scrollY);
     currentView = name;
     document.querySelectorAll(".view").forEach((v) => v.classList.add("hidden"));
     $(`view-${name}`).classList.remove("hidden");
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === name));
+    document.querySelectorAll(".tab").forEach((t) => {
+      if (t.dataset.view === name) t.setAttribute("aria-current", "page");
+      else t.removeAttribute("aria-current");
+    });
+    window.scrollTo({ top: viewScroll.get(name) || 0, behavior: "instant" });
     updateTmaBackButton();
     haptic();
     loadView(name);
   }
 
   function loadView(name) {
-    if (name === "overview") refreshOverview();
-    else if (name === "chats") refreshChats();
-    else if (name === "persona") refreshPersona();
-    else if (name === "approvals") refreshApprovals();
-    else if (name === "more") refreshMore();
+    if ($("sheet").open) { refreshAfterSheet = true; return Promise.resolve(); }
+    if (viewLoads.has(name)) return viewLoads.get(name);
+    const refresh = { overview: refreshOverview, chats: refreshChats, persona: refreshPersona, approvals: refreshApprovals, more: refreshMore }[name];
+    if (!refresh) return Promise.resolve();
+    const view = $(`view-${name}`);
+    view.setAttribute("aria-busy", "true");
+    $("view-error").classList.add("hidden");
+    const request = refresh().catch((error) => {
+      if (currentView === name) {
+        $("view-error-message").textContent = error.message || "Could not refresh. Your current view is still available.";
+        $("view-error").classList.remove("hidden");
+      }
+    }).finally(() => { view.removeAttribute("aria-busy"); viewLoads.delete(name); });
+    viewLoads.set(name, request);
+    return request;
   }
 
   // ------------------------------------------------------------ overview
 
   async function refreshOverview() {
-    const s = await api("/api/state");
+    const [s, acts] = await Promise.all([latestState || api("/api/state"), api("/api/activity")]);
     if (!s || s.authorized === false) return maybePaywall(s);
+    if (s.ok === false) throw new Error(s.response);
     renderState(s);
-    const acts = await api("/api/activity");
+    if (acts.authorized === false) return maybePaywall(acts);
     renderSparkline(acts && acts.activity ? acts.activity : [], s.replies_24h || 0);
     const rows = (acts.activity || []).slice(0, 4);
-    $("ov-activity").innerHTML = rows.length
+    updateHtml("ov-activity", rows.length
       ? rows.map(feedRowHtml).join("")
-      : `<div class="empty">No replies yet, the account stays quiet until a chat talks.</div>`;
+      : `<div class="empty">No replies yet, the account stays quiet until a chat talks.</div>`);
     $("tab-approvals").textContent = String(s.pending_count || 0);
     $("tab-approvals").classList.toggle("hidden", !s.pending_count);
   }
@@ -994,7 +1096,7 @@
       ? `<span class="feed-link-icon" title="Jump to message in Telegram">${SVGS.externalLink}</span>`
       : "";
 
-    return `<div class="feed-row ${hasLink ? "feed-clickable" : ""}" ${hasLink ? `data-msg-url="${esc(a.msg_url)}"` : ""} role="${hasLink ? "button" : "article"}" tabindex="${hasLink ? "0" : "-1"}">
+    return `<article class="rated-reply"><div class="feed-row ${hasLink ? "feed-clickable" : ""}" ${hasLink ? `data-msg-url="${esc(a.msg_url)}"` : ""} role="${hasLink ? "button" : "article"}" tabindex="${hasLink ? "0" : "-1"}">
       <div class="feed-top">
         <span class="feed-chat">${esc(a.chat)}</span>
         <div class="feed-meta">
@@ -1004,7 +1106,7 @@
       </div>
       ${voiceBadge}${mediaBadge}
       <span class="feed-text">${esc(a.text)}</span>
-    </div>`;
+    </div>${(a.is_automated || DEMO) && canGiveFeedback && a.message_id > 0 ? `<button type="button" class="btn small feedback-button" data-feedback-chat="${esc(a.chat_id)}" data-feedback-message="${esc(a.message_id)}" data-feedback-rating="${esc(a.feedback || "")}">${esc(FEEDBACK_LABELS[a.feedback] || "Rate reply")}</button>` : ""}</article>`;
   }
 
   // --------------------------------------------------------------- chats
@@ -1014,11 +1116,12 @@
   async function refreshChats() {
     const data = await api("/api/chats");
     if (!data || data.authorized === false) return maybePaywall(data);
+    if (data.ok === false) throw new Error(data.response);
     chatCache = data.chats || [];
-    $("chat-list").innerHTML = chatCache.length
+    const changed = updateHtml("chat-list", chatCache.length
       ? chatCache.map(chatRowHtml).join("")
-      : `<div class="empty">No chats allowed yet. Add a chat ID above.</div>`;
-    wireChatRows();
+      : `<div class="empty">No chats allowed yet. Add a chat ID above.</div>`);
+    if (changed) wireChatRows();
   }
 
   function chatRowHtml(c) {
@@ -1071,8 +1174,8 @@
       ? `<a href="https://t.me/${encodeURIComponent(cleanUser)}" target="_blank" rel="noopener noreferrer" class="pill pill-neutral chat-user chat-user-link" title="Open @${esc(cleanUser)} in Telegram">@${esc(cleanUser)} ${SVGS.externalLink}</a>`
       : "";
 
-    const chattyDisplay = c.chatty !== "" && c.chatty !== null && c.chatty !== undefined ? `${Math.round(parseFloat(c.chatty) * 100)}%` : "Default (30–60%)";
-    const cooldownDisplay = c.cooldown_str || "Global Default (5s – 60s)";
+    const chattyDisplay = c.chatty !== "" && c.chatty !== null && c.chatty !== undefined ? `${Math.round(parseFloat(c.chatty) * 100)}%` : "Global default";
+    const cooldownDisplay = c.cooldown_str || `Global Default (${c.cooldown_default_min ?? 5}s – ${c.cooldown_default_max ?? 60}s)`;
 
     const bodyHtml = `
       <div class="chat-detail-wrap">
@@ -1087,7 +1190,7 @@
               ${userDisplay}
               <div class="chat-id-badge-wrap">
                 <span class="pill pill-neutral num">ID: ${esc(String(c.id))}</span>
-                <button type="button" class="copy-id-btn" data-copy="${esc(String(c.id))}" title="Copy Chat ID">${SVGS.copy}</button>
+                <button type="button" class="copy-id-btn" data-copy="${esc(String(c.id))}" aria-label="Copy Chat ID" title="Copy Chat ID">${SVGS.copy}</button>
               </div>
             </div>
           </div>
@@ -1165,7 +1268,7 @@
 
     openSheet(c.name, bodyHtml, [{ label: "Close", kind: "" }]);
 
-    setTimeout(() => {
+    {
       const sheetBody = $("sheet-body");
       if (!sheetBody) return;
 
@@ -1173,7 +1276,7 @@
         e.stopPropagation();
         const copyText = e.currentTarget.dataset.copy;
         if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(copyText).then(() => toast("Chat ID copied!"));
+          navigator.clipboard.writeText(copyText).then(() => toast("Chat ID copied!")).catch(() => toast(`ID: ${copyText}`));
         } else {
           toast(`ID: ${copyText}`);
         }
@@ -1181,7 +1284,6 @@
 
       sheetBody.querySelectorAll(".clay-action-btn").forEach((btn) => {
         btn.addEventListener("click", () => {
-          closeSheet();
           const act = btn.dataset.action;
           if (act === "prompt") promptSheet(c);
           else if (act === "context") contextSheet(c);
@@ -1190,12 +1292,12 @@
           else if (act === "remove") removeSheet(c, "remove");
         });
       });
-    }, 50);
+    }
   }
 
   function chatCooldownSheet(c) {
-    const curMin = c.cooldown_min != null ? c.cooldown_min : 5;
-    const curMax = c.cooldown_max != null ? c.cooldown_max : 60;
+    const curMin = c.cooldown_min ?? c.cooldown_default_min ?? 5;
+    const curMax = c.cooldown_max ?? c.cooldown_default_max ?? 60;
     const isCustom = c.cooldown_min != null && c.cooldown_max != null;
 
     const bodyHtml = `
@@ -1206,11 +1308,11 @@
         <div class="cooldown-inputs-grid">
           <div class="field-group">
             <label for="cd-min-input" class="field-label">Min Cooldown (sec)</label>
-            <input type="number" id="cd-min-input" class="clay-input" min="0" max="600" value="${curMin}" step="1">
+            <input type="number" id="cd-min-input" class="clay-input" min="0" value="${curMin}" step="0.1" required>
           </div>
           <div class="field-group">
             <label for="cd-max-input" class="field-label">Max Cooldown (sec)</label>
-            <input type="number" id="cd-max-input" class="clay-input" min="0" max="1200" value="${curMax}" step="1">
+            <input type="number" id="cd-max-input" class="clay-input" min="0" value="${curMax}" step="0.1" required>
           </div>
         </div>
         <div class="cooldown-presets-section">
@@ -1223,7 +1325,7 @@
           </div>
         </div>
         <div class="current-cd-status" style="margin-top:12px;font-size:12px;color:var(--faint);">
-          Status: ${isCustom ? `<span style="color:var(--accent-bright);font-weight:600">Custom (${curMin}s - ${curMax}s)</span>` : `<span>Global default (5s - 60s)</span>`}
+          Status: ${isCustom ? `<span style="color:var(--accent-bright);font-weight:600">Custom (${curMin}s - ${curMax}s)</span>` : `<span>Default (${curMin}s - ${curMax}s)</span>`}
         </div>
       </div>
     `;
@@ -1238,29 +1340,32 @@
           onClick: () => {
             const minVal = parseFloat($("cd-min-input")?.value || "5");
             const maxVal = parseFloat($("cd-max-input")?.value || "60");
-            runAction("chat_cooldown", { chat_id: c.id, min: minVal, max: maxVal });
+            if (maxVal < minVal) return { ok: false, response: "Maximum cooldown must be at least the minimum." };
+            return runAction("chat_cooldown", { chat_id: c.id, min: minVal, max: maxVal });
           },
         },
         {
           label: "Reset to Global",
           onClick: () => {
-            runAction("chat_cooldown", { chat_id: c.id, reset: true });
+            return runAction("chat_cooldown", { chat_id: c.id, reset: true });
           },
         },
       ]
     );
 
-    setTimeout(() => {
+    {
       document.querySelectorAll(".cooldown-preset-chips .preset-chip").forEach((btn) => {
         btn.addEventListener("click", () => {
           const minInp = $("cd-min-input");
           const maxInp = $("cd-max-input");
           if (minInp) minInp.value = btn.dataset.min;
           if (maxInp) maxInp.value = btn.dataset.max;
+          minInp?.dispatchEvent(new Event("input", { bubbles: true }));
+          maxInp?.dispatchEvent(new Event("input", { bubbles: true }));
           haptic("light");
         });
       });
-    }, 50);
+    }
   }
 
   function chattySheet(c) {
@@ -1272,7 +1377,7 @@
       onClick: () => runAction("chat_chatty", { chat_id: c.id, value: String(p) }),
     }));
     buttons.push({ label: "Default", onClick: () => runAction("chat_chatty", { chat_id: c.id, value: "def" }) });
-    openSheet(`Chatty · ${c.name}`, `<p>Chance the account joins the chat on its own. Default follows the global 30–60% band.</p>`, buttons);
+    openSheet(`Chatty · ${c.name}`, `<p>Chance of occasionally joining a relevant conversation. Default follows the global setting. Messages addressed to other people are ignored.</p>`, buttons);
   }
 
   function promptSheet(c) {
@@ -1283,8 +1388,6 @@
         { label: "Save", kind: "primary", onClick: () => runAction("chatprompt", { chat_id: c.id, value: $("sheet-input").value.trim() }) },
         { label: "Clear", onClick: () => runAction("chatprompt", { chat_id: c.id, value: "default" }) },
       ]);
-    const ta = $("sheet-input");
-    if (ta) ta.focus();
   }
 
   function contextSheet(c) {
@@ -1296,8 +1399,6 @@
         { label: "Clear notes", onClick: () => runAction("delcontext", { chat_id: c.id }) },
         { label: "Sync pins", onClick: () => runAction("syncpins", { chat_id: c.id }) },
       ]);
-    const ta = $("sheet-input");
-    if (ta) ta.focus();
   }
 
   function removeSheet(c, op) {
@@ -1355,20 +1456,21 @@
     if (!el) return;
     const currentPrompt = ($("pf-prompt").value || "").trim();
 
-    el.innerHTML = PROMPT_PRESETS.map((p) => {
+    const changed = updateHtml("preset-carousel", PROMPT_PRESETS.map((p) => {
       const isActive = p.prompt ? currentPrompt === p.prompt : !currentPrompt;
       return `<button type="button" class="preset-chip ${isActive ? "active" : ""}" data-preset="${p.id}">
         <span class="preset-icon">${p.icon}</span>
         <span>${esc(p.name)}</span>
       </button>`;
-    }).join("");
-
+    }).join(""));
+    if (!changed) return;
     el.querySelectorAll(".preset-chip").forEach((chip) => {
       chip.addEventListener("click", () => {
         haptic("light");
         const found = PROMPT_PRESETS.find((x) => x.id === chip.dataset.preset);
         if (!found) return;
         $("pf-prompt").value = found.prompt;
+        $("pf-prompt").dispatchEvent(new Event("input", { bubbles: true }));
         el.querySelectorAll(".preset-chip").forEach((c) => c.classList.remove("active"));
         chip.classList.add("active");
         toast(found.prompt ? `Loaded "${found.name}". Tap Save prompt to apply.` : "Reset to built-in persona. Tap Save prompt to apply.", "info");
@@ -1377,19 +1479,21 @@
   }
 
   async function refreshPersona() {
-    const s = await api("/api/state");
+    const [s, data] = await Promise.all([api("/api/state"), api("/api/chats")]);
     if (!s || s.authorized === false) return maybePaywall(s);
-    if (document.activeElement !== $("pf-prompt")) $("pf-prompt").value = s.prompt || "";
-    if (document.activeElement !== $("pf-name")) $("pf-name").value = s.owner_name || "";
+    if (s.ok === false) throw new Error(s.response);
+    if (data.authorized === false) return maybePaywall(data);
+    if (data.ok === false) throw new Error(data.response);
+    syncField("pf-prompt", s.prompt || "");
+    syncField("pf-name", s.owner_name || "");
     renderPromptPresets();
     const styles = ["casual", "concise", "formal", "humorous"];
-    $("pf-style").innerHTML = styles.map((st) =>
-      `<button class="seg ${st === s.style ? "active" : ""}" data-style="${st}">${st}</button>`).join("");
-    $("pf-style").querySelectorAll(".seg").forEach((b) =>
+    const styleChanged = updateHtml("pf-style", styles.map((st) =>
+      `<button class="seg ${st === s.style ? "active" : ""}" data-style="${st}">${st}</button>`).join(""));
+    if (styleChanged) $("pf-style").querySelectorAll(".seg").forEach((b) =>
       b.addEventListener("click", () => runAction("style", { value: b.dataset.style })));
-    const data = await api("/api/chats");
     const chats = (data.chats || []).filter((c) => c.prompt || c.context);
-    $("pf-chats").innerHTML = chats.length
+    const changed = updateHtml("pf-chats", chats.length
       ? chats.map((c) => {
           return `<div class="persona-chat-card">
             <div class="capsule-main">
@@ -1407,7 +1511,8 @@
             </div>
           </div>`;
         }).join("")
-      : `<div class="empty">No per-chat prompts or context notes yet. Set them from the Chats tab.</div>`;
+      : `<div class="empty">No per-chat prompts or context notes yet. Set them from the Chats tab.</div>`);
+    if (!changed) return;
     $("pf-chats").querySelectorAll("[data-op]").forEach((btn) =>
       btn.addEventListener("click", () => {
         const c = (data.chats || []).find((x) => String(x.id) === btn.dataset.cid);
@@ -1419,19 +1524,24 @@
 
   // ------------------------------------------------------------ approvals (Phase 2: Swipe Actions)
 
+  let approvalTotal = 0;
   async function refreshApprovals() {
     const data = await api("/api/pending");
     if (!data || data.authorized === false) return maybePaywall(data);
+    if (data.ok === false) throw new Error(data.response);
     const rows = data.pending || [];
     const count = rows.length;
-    $("tab-approvals").textContent = String(count);
-    $("tab-approvals").classList.toggle("hidden", !count);
+    approvalTotal = data.total ?? count;
+    $("tab-approvals").textContent = String(approvalTotal);
+    $("tab-approvals").classList.toggle("hidden", !approvalTotal);
+    $("approval-summary").textContent = count < approvalTotal ? `Showing ${count} of ${approvalTotal} drafts. Approve this batch to see the next drafts.` : `${count} pending draft(s).`;
     if ($("approval-batch-bar")) {
       $("approval-batch-bar").classList.toggle("hidden", count < 2);
     }
-    $("approval-list").innerHTML = count
+    const changed = updateHtml("approval-list", count
       ? rows.map(approvalCardHtml).join("")
-      : `<div class="empty">Nothing waiting. In approval mode every draft shows up here.</div>`;
+      : `<div class="empty">Nothing waiting. In approval mode every draft shows up here.</div>`);
+    if (!changed) return;
     $("approval-list").querySelectorAll("[data-ap]").forEach((btn) =>
       btn.addEventListener("click", () => runAction(btn.dataset.ap, { id: btn.dataset.id })));
     wireApprovalSwipes();
@@ -1577,10 +1687,47 @@
 
   // ----------------------------------------------------------------- more
 
+  function renderModelChips(modelsList, selectedOverride) {
+    const container = $("ai-model-chips");
+    if (!container) return;
+    if (!modelsList || !modelsList.length) {
+      container.innerHTML = '<div class="empty sm">No models loaded. Tap &ldquo;Fetch models&rdquo; to query your endpoint.</div>';
+      return;
+    }
+    const selectedList = (Array.isArray(selectedOverride) ? selectedOverride : ($("ai-model").value || "").split(/[,;]/))
+      .map((s) => String(s).trim().replace(/^models\//, "")).filter(Boolean);
+    const changed = updateHtml("ai-model-chips", modelsList.map((m) => {
+      const cleanM = String(m).replace(/^models\//, "").trim();
+      const idx = selectedList.indexOf(cleanM);
+      const badge = idx === -1 ? "" : `<span class="chip-order-badge">${idx + 1}</span>`;
+      return `<button class="model-chip ${idx === -1 ? "" : "active"}" data-model="${esc(cleanM)}" type="button">${badge}${esc(cleanM)}</button>`;
+    }).join(""));
+    if (!changed) return;
+    container.querySelectorAll(".model-chip").forEach((chip) => {
+      chip.addEventListener("click", async () => {
+        const selected = [...selectedList];
+        const idx = selected.indexOf(chip.dataset.model);
+        if (idx === -1) selected.push(chip.dataset.model);
+        else selected.splice(idx, 1);
+        if (!selected.length) return toast("Keep at least one active model", "err");
+        const res = await runAction("model", { value: selected.join(",") });
+        if (res && res.ok) {
+          $("ai-model").value = selected.join(",");
+          renderModelChips(modelsList, selected);
+        }
+      });
+    });
+  }
+
   async function refreshMore() {
-    const data = await api("/api/access");
+    const [data, s] = await Promise.all([api("/api/access"), api("/api/state")]);
     if (!data || data.authorized === false) return maybePaywall(data);
-    $("access-list").innerHTML = (data.users || []).length
+    if (!s || s.authorized === false) return maybePaywall(s);
+    if (s.ok === false) throw new Error(s.response);
+    renderMoreControls(s);
+    if ($("settings-history").open) await refreshHistory();
+    if ($("settings-feedback").open) await refreshFeedback();
+    const changed = updateHtml("access-list", data.ok === false ? `<p class="empty">${esc(data.response)}</p>` : (data.users || []).length
       ? data.users.map((u) => {
           const initials = u.initials || (u.name || "U").slice(0, 2).toUpperCase();
           const cleanUser = u.username ? u.username.replace(/^@/, "").trim() : "";
@@ -1610,26 +1757,142 @@
             </div>
           </div>`;
         }).join("")
-      : `<div class="empty">No authorized owners. Add an owner by ID or @username above.</div>`;
+      : `<div class="empty">No authorized owners. Add an owner by ID or @username above.</div>`);
+    if (!changed) return;
     $("access-list").querySelectorAll("[data-unauth]").forEach((btn) =>
       btn.addEventListener("click", () => openSheet("Remove owner", `<p>Revoke panel access for owner <span class="num">${esc(btn.dataset.unauth)}</span>?</p>`,
         [{ label: "Remove", kind: "danger", onClick: () => runAction("removeauth", { user_id: btn.dataset.unauth }) }, { label: "Cancel" }])));
 
-    const s = await api("/api/state");
-    if (s && s.authorized !== false) {
-      if (document.activeElement !== $("ai-model") && s.ai_model) $("ai-model").value = s.ai_model;
-      if (document.activeElement !== $("ai-baseurl") && s.ai_base_url) $("ai-baseurl").value = s.ai_base_url;
-      if (s.available_models && Array.isArray(s.available_models) && s.available_models.length) {
-        cachedEndpointModels = s.available_models;
-        $("models-fetched-count").textContent = `(${cachedEndpointModels.length})`;
-        renderModelChips(cachedEndpointModels);
+  }
+
+  function openFeedbackSheet(chatId, messageId, current) {
+    const buttons = Object.entries(FEEDBACK_LABELS).map(([rating, label]) => ({ label, kind: rating === current ? "primary" : "",
+      onClick: () => runAction("feedback", { chat_id: chatId, id: messageId, value: rating }) }));
+    if (current) buttons.push({ label: "Clear rating", onClick: () => runAction("feedback", { chat_id: chatId, id: messageId, value: "clear" }) });
+    buttons.push({ label: "Cancel" });
+    openSheet("Rate this reply", `<p>Your rating guides future replies in this chat.</p><p class="helper">Chat ${esc(chatId)} · Message ${esc(messageId)}</p>`, buttons);
+  }
+
+  let feedbackRequest = 0;
+  async function refreshFeedback() {
+    const request = ++feedbackRequest;
+    $("feedback-refresh").disabled = true;
+    $("feedback-error").classList.add("hidden");
+    try {
+      const result = await api(`/api/feedback?rating=${encodeURIComponent($("feedback-filter").value)}`);
+      if (request !== feedbackRequest) return;
+      if (result.authorized === false) return maybePaywall(result);
+      if (!result.ok) throw new Error(result.response || "Could not load feedback.");
+      $("feedback-counts").textContent = Object.entries(FEEDBACK_LABELS).map(([key, label]) => `${label}: ${result.counts?.[key] || 0}`).join(" · ");
+      updateHtml("feedback-list", result.feedback.length ? result.feedback.map(row => `<article class="history-row">
+        <div class="history-heading"><strong>${esc(row.chat_title || `Chat ${row.chat_id}`)}</strong><span class="pill">${esc(FEEDBACK_LABELS[row.rating] || row.rating)}</span></div>
+        <p>${esc(row.reply_text)}</p><small>${esc(formatIST(row.updated_at))}</small>
+        <button type="button" class="btn small feedback-button" data-feedback-chat="${esc(row.chat_id)}" data-feedback-message="${esc(row.message_id)}" data-feedback-rating="${esc(row.rating)}">Change rating</button>
+      </article>`).join("") : '<p class="empty">No matching ratings. Start from Recent replies on Overview.</p>');
+    } catch (error) {
+      if (request === feedbackRequest) { $("feedback-error").textContent = error.message || "Could not load feedback. Try Refresh."; $("feedback-error").classList.remove("hidden"); }
+    } finally { if (request === feedbackRequest) $("feedback-refresh").disabled = false; }
+  }
+
+  let historyRows = [];
+  let historyBefore = null;
+  let historyRequest = 0;
+
+  async function refreshHistory(reset = true) {
+    const request = ++historyRequest;
+    const button = $(reset ? "history-refresh" : "history-more");
+    button.disabled = true;
+    $("history-error").classList.add("hidden");
+    try {
+      const query = new URLSearchParams({ status: $("history-status").value, limit: "40" });
+      if (!reset && historyBefore) query.set("before", historyBefore);
+      const result = DEMO ? { ok: true, events: [], diagnostics: DEMO_DATA.state } : await api(`/api/history?${query}`);
+      if (request !== historyRequest) return;
+      if (result.authorized === false) return maybePaywall(result);
+      if (!result.ok) throw new Error(result.response || "Could not load action history.");
+      historyRows = reset ? result.events : [...historyRows, ...result.events];
+      historyBefore = result.next_before;
+      const d = result.diagnostics || {};
+      updateHtml("history-diagnostics", [
+        ["Engine", d.state || "Unknown"], ["Mode", formatMode(d.mode || "")],
+        ["Provider", d.ai_engine || "Unknown"], ["Model", d.ai_model || "Default"],
+        ["Safe mode", d.safe_mode ? "Active" : "Clear"], ["Quiet hours", d.quiet_hours ? "Active" : "Off"],
+      ].map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join(""));
+      updateHtml("history-list", historyRows.length ? historyRows.map(event => `<article class="history-row">
+        <div class="history-heading"><strong>${esc(String(event.action).replaceAll("_", " "))}</strong><span class="pill">${esc(event.status)}</span></div>
+        <p>${esc(event.detail || "")}</p><small>${esc(formatIST(event.created_at))} · ${esc(event.source)}${event.chat_id ? ` · Chat ${esc(event.chat_id)}` : ""}</small>
+      </article>`).join("") : '<p class="empty">No matching actions yet.</p>');
+      $("history-more").classList.toggle("hidden", !historyBefore);
+    } catch (error) {
+      if (request === historyRequest) {
+        $("history-error").textContent = error.message || "Could not load history. Tap Refresh to retry.";
+        $("history-error").classList.remove("hidden");
       }
-      renderMoreControls(s);
-    }
+    } finally { button.disabled = false; }
+  }
+
+  async function exportSettings() {
+    const button = $("settings-export");
+    button.disabled = true;
+    try {
+      if (DEMO) throw new Error("Connect to your engine to export preferences.");
+      const result = await api("/api/settings/export");
+      if (result.authorized === false) return maybePaywall(result);
+      if (!result.ok) throw new Error(result.response || "Could not prepare the backup.");
+      const url = new URL(result.download_url, location.origin);
+      if (url.origin !== location.origin) throw new Error("Invalid download address.");
+      if (url.protocol === "https:" && telegramCall("downloadFile", "8.0", { url: url.href, file_name: result.file_name }, accepted => toast(accepted ? "Download requested" : "Download cancelled", "info"))) return;
+      const link = document.createElement("a");
+      link.href = url.href;
+      link.download = result.file_name;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      toast("Download requested", "info");
+    } catch (error) { toast(error.message || "Could not export preferences.", "err"); }
+    finally { button.disabled = false; }
+  }
+
+  async function previewSettingsFile() {
+    const input = $("settings-file");
+    const file = input.files?.[0];
+    if (!file) return;
+    input.disabled = true;
+    try {
+      if (DEMO) throw new Error("Connect to your engine to import preferences.");
+      if (file.size > 1000000) throw new Error("Choose a backup smaller than 1 MB.");
+      let backup;
+      try { backup = JSON.parse(await file.text()); }
+      catch (_) { throw new Error("The file is not valid JSON. Choose a TeleAutomator backup."); }
+      const preview = await api("/api/settings/preview", { backup });
+      if (preview.authorized === false) return maybePaywall(preview);
+      if (!preview.ok) throw new Error(preview.response || "This backup is invalid.");
+      const summary = preview.summary;
+      openSheet("Review preference import", `<p>Merge <strong>${esc(summary.settings)} settings</strong>, <strong>${esc(summary.chats)} chat profiles</strong>, and <strong>${esc(summary.rules)} keyword rules</strong>.</p>
+        <p>Access permissions and conversation memory are preserved. Existing preferences listed in this backup will be replaced.</p>
+        <p class="helper">Settings: ${esc((preview.setting_keys || []).join(", ") || "None")}</p>
+        <p class="helper">Chat IDs: ${esc((preview.chat_ids || []).join(", ") || "None")}</p>`, [
+        { label: "Apply preferences", kind: "primary", onClick: async () => {
+          const result = await api("/api/settings/import", { backup });
+          if (result.authorized === false) { maybePaywall(result); return false; }
+          if (result.ok) { latestState = null; refreshAfterSheet = true; toast("Preferences restored", "ok"); }
+          return result;
+        } }, { label: "Cancel" },
+      ]);
+    } catch (error) { toast(error.message || "Could not read the backup.", "err"); }
+    finally { input.disabled = false; input.value = ""; input.dataset.dirty = "false"; updateClosingConfirmation(); }
   }
 
   function renderMoreControls(s) {
     if (!s) return;
+    const pipeline = s.pipeline || { context: "Per-chat files and batched summaries", writer: "Selected model", humanizer: "Local checks; no extra model call" };
+    updateHtml("pipeline-status", [["Context stage", pipeline.context], ["Writer stage", pipeline.writer], ["Final style check", pipeline.humanizer]].map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join(""));
+    if (s.ai_model !== undefined) syncField("ai-model", s.ai_model);
+    if (s.ai_base_url !== undefined) syncField("ai-baseurl", s.ai_base_url);
+    if (Array.isArray(s.available_models)) {
+      cachedEndpointModels = s.available_models;
+      $("models-fetched-count").textContent = `(${cachedEndpointModels.length})`;
+    }
 
     // 1. Quiet Hours & Sleep (Phase 7)
     const qhStatus = $("qh-status-pill");
@@ -1647,8 +1910,8 @@
     }
     const qhStart = $("qh-start-input");
     const qhEnd = $("qh-end-input");
-    if (qhStart && document.activeElement !== qhStart && s.quiet_hours_start) qhStart.value = s.quiet_hours_start;
-    if (qhEnd && document.activeElement !== qhEnd && s.quiet_hours_end) qhEnd.value = s.quiet_hours_end;
+    if (qhStart && s.quiet_hours_start) syncField("qh-start-input", s.quiet_hours_start);
+    if (qhEnd && s.quiet_hours_end) syncField("qh-end-input", s.quiet_hours_end);
 
     const isQhEnabled = s.quiet_hours_enabled !== false;
     const curWindow = `${s.quiet_hours_start || "02:00"} ${s.quiet_hours_end || "08:00"}`;
@@ -1676,6 +1939,9 @@
       if (!btn) return;
       const on = Boolean(isEnabled);
       btn.dataset.state = on ? "on" : "off";
+      btn.setAttribute("role", "switch");
+      btn.setAttribute("aria-checked", String(on));
+      btn.setAttribute("aria-label", btn.closest(".setting-toggle-row")?.querySelector(".toggle-title")?.textContent.trim() || action);
       btn.className = `clay-switch ${on ? "on" : "off"}`;
       btn.textContent = on ? "ON" : "OFF";
     });
@@ -1691,7 +1957,7 @@
     setSegActive("seg-thinking", s.thinking || "default");
     setSegActive("seg-temp", s.temperature || "0.7");
     setSegActive("seg-lang", s.lang || "english");
-    setSegActive("seg-maxtokens", s.max_tokens || "512");
+    setSegActive("seg-maxtokens", s.max_tokens || "default");
 
     if (!cachedEndpointModels.length && s.ai_model) {
       const curModels = s.ai_model.split(/[,;]/).map((x) => x.trim().replace(/^models\//, "")).filter(Boolean);
@@ -1706,7 +1972,7 @@
     const rulesList = $("rules-list");
     if (rulesList) {
       const rules = s.rules || [];
-      rulesList.innerHTML = rules.length
+      const changed = updateHtml("rules-list", rules.length
         ? rules.map((r) => `<div class="rule-row">
             <div class="rule-info">
               <span class="rule-trigger">Trigger: &ldquo;${esc(r.keyword)}&rdquo;</span>
@@ -1714,9 +1980,9 @@
             </div>
             <button class="btn small danger" data-delrule="${esc(r.keyword)}">Delete</button>
           </div>`).join("")
-        : `<div class="empty">No keyword auto-replies configured. Tap &ldquo;+ Add Rule&rdquo; above.</div>`;
+        : `<div class="empty">No keyword auto-replies configured. Tap &ldquo;+ Add Rule&rdquo; above.</div>`);
 
-      rulesList.querySelectorAll("[data-delrule]").forEach((b) => {
+      if (changed) rulesList.querySelectorAll("[data-delrule]").forEach((b) => {
         b.addEventListener("click", () => {
           openSheet("Delete trigger", `<p>Remove keyword auto-reply for <strong>&ldquo;${esc(b.dataset.delrule)}&rdquo;</strong>?</p>`, [
             { label: "Delete", kind: "danger", onClick: () => runAction("delrule", { value: b.dataset.delrule }) },
@@ -1740,137 +2006,152 @@
 
     const emergBtn = $("btn-emergency-toggle");
     if (emergBtn) {
-      const isStopped = s.emergency_stopped || s.status === "stopped";
+      const isStopped = s.emergency || s.state === "stopped";
       emergBtn.textContent = isStopped ? "Resume Engine" : "Halt Engine";
       emergBtn.className = `btn small ${isStopped ? "primary" : "danger"}`;
     }
   }
 
-  // ------------------------------------------------ Offline Optimistic Action Queue (Phase 8)
-  const OFFLINE_QUEUE_KEY = "teleautomator_offline_queue_v1";
+  // Queue only bounded, non-secret preferences for the authenticated account.
+  const OFFLINE_QUEUE_PREFIX = "teleautomator_offline_queue_v2:";
+  const QUEUED_PREFERENCES = new Set(["style", "chatstyle", "lang", "temp", "maxtokens", "thinking", "chat_chatty"]);
 
-  function loadOfflineQueue() {
+  function safeQueuedAction(item) {
+    if (!item || !QUEUED_PREFERENCES.has(item.action) || !item.params || typeof item.params !== "object") return false;
+    if (Object.keys(item.params).some(key => !["value", "chat_id"].includes(key))) return false;
+    const value = item.params.value;
+    if (typeof value !== "string" || !value || value.length > 40) return false;
+    if (["chatstyle", "chat_chatty"].includes(item.action) && !/^-?\d+$/.test(String(item.params.chat_id || ""))) return false;
+    if (["style", "chatstyle"].includes(item.action)) return ["casual", "concise", "formal", "humorous"].includes(value);
+    if (item.action === "lang") return /^[a-zA-Z][a-zA-Z -]{0,39}$/.test(value);
+    if (item.action === "thinking") return ["default", "off", "none", "low", "medium", "high"].includes(value);
+    if (item.action === "maxtokens" && value === "default") return true;
+    if (item.action === "chat_chatty" && ["def", "default"].includes(value)) return true;
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 && (item.action === "temp" ? number <= 2 : item.action === "chat_chatty" ? number <= 100 : Number.isInteger(number) && number > 0 && number <= 1000000);
+  }
+
+  function loadOfflineQueue(userId = activeUserId) {
     try {
-      const raw = localStorage.getItem(OFFLINE_QUEUE_KEY);
-      return raw ? JSON.parse(raw) : [];
+      localStorage.removeItem("teleautomator_offline_queue_v1");
+      if (!userId) return [];
+      const parsed = JSON.parse(localStorage.getItem(OFFLINE_QUEUE_PREFIX + userId) || "[]");
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(item => safeQueuedAction(item) && item.id && Number.isFinite(Date.parse(item.time)) && Math.abs(Date.now() - Date.parse(item.time)) < 3600000).slice(-50);
     } catch { return []; }
   }
 
-  function saveOfflineQueue(q) {
+  function saveOfflineQueue(queue, userId = activeUserId) {
+    if (!userId) return false;
     try {
-      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(q));
-    } catch {}
+      localStorage.setItem(OFFLINE_QUEUE_PREFIX + userId, JSON.stringify(queue.filter(safeQueuedAction).slice(-50)));
+      return true;
+    } catch { return false; }
   }
 
   function updateSyncBadge() {
     const badge = $("offline-sync-badge");
     const countEl = $("offline-sync-count");
     if (!badge) return;
-    const q = loadOfflineQueue();
-    if (q.length > 0) {
-      if (countEl) countEl.textContent = String(q.length);
-      badge.classList.remove("hidden");
-      badge.title = `${q.length} action(s) queued for sync`;
-    } else {
-      badge.classList.add("hidden");
-    }
+    const count = loadOfflineQueue().length;
+    if (countEl) countEl.textContent = String(count);
+    badge.classList.toggle("hidden", count === 0);
+    badge.title = `${count} preference change(s) queued for this account`;
   }
 
   function enqueueAction(action, params) {
-    const q = loadOfflineQueue();
-    q.push({
-      id: Date.now() + "_" + Math.random().toString(36).slice(2, 6),
-      action,
-      params,
-      time: new Date().toISOString()
-    });
-    saveOfflineQueue(q);
+    if (!activeUserId || !safeQueuedAction({ action, params })) return false;
+    const queue = loadOfflineQueue();
+    if (queue.some(item => item.action === action && JSON.stringify(item.params) === JSON.stringify(params))) return true;
+    queue.push({ id: Date.now() + "_" + Math.random().toString(36).slice(2, 6), action, params, time: new Date().toISOString() });
+    const saved = saveOfflineQueue(queue);
     updateSyncBadge();
+    return saved;
   }
 
   let isFlushingQueue = false;
   async function flushOfflineQueue() {
-    if (isFlushingQueue) return;
-    const q = loadOfflineQueue();
-    if (!q.length) {
-      updateSyncBadge();
-      return;
-    }
+    if (isFlushingQueue || !activeUserId) return;
+    const userId = activeUserId;
+    const queue = loadOfflineQueue(userId);
+    if (!queue.length) { updateSyncBadge(); return; }
     isFlushingQueue = true;
     const remaining = [];
     let synced = 0;
-    for (const item of q) {
-      try {
-        const res = await api("/api/action", { action: item.action, params: item.params });
-        if (res && res.authorized === false) {
-          remaining.push(item);
-          break;
-        }
-        if (res && res.ok) {
-          synced++;
-        } else {
-          remaining.push(item);
-        }
-      } catch {
-        remaining.push(item);
-        break; // Network dropped or still offline
+    try {
+      for (let index = 0; index < queue.length; index++) {
+        if (activeUserId !== userId) { remaining.push(...queue.slice(index)); break; }
+        const item = queue[index];
+        try {
+          const result = await api("/api/action", { action: item.action, params: item.params });
+          if (result?.authorized === false) { remaining.push(...queue.slice(index)); break; }
+          if (result?.ok) synced++;
+          else remaining.push(item);
+        } catch { remaining.push(...queue.slice(index)); break; }
       }
-    }
-    saveOfflineQueue(remaining);
-    updateSyncBadge();
-    isFlushingQueue = false;
-    if (synced > 0) {
-      haptic("ok");
-      toast(`Synced ${synced} offline action${synced > 1 ? "s" : ""}`, "ok");
-      loadView(currentView);
-    }
+      const ids = new Set(queue.map(item => item.id));
+      saveOfflineQueue([...remaining, ...loadOfflineQueue(userId).filter(item => !ids.has(item.id))], userId);
+      if (activeUserId === userId) {
+        updateSyncBadge();
+        if (synced) { toast(`Synced ${synced} preference change(s)`, "ok"); loadView(currentView); }
+      }
+    } finally { isFlushingQueue = false; }
   }
 
   // --------------------------------------------------------- run + notify
 
-  async function runAction(action, params) {
+  const actionsInFlight = new Map();
+  async function runAction(action, params = {}) {
+    const key = JSON.stringify([action, params]);
+    if (actionsInFlight.has(key)) return actionsInFlight.get(key);
+    const request = performAction(action, params);
+    actionsInFlight.set(key, request);
+    try { return await request; } finally { actionsInFlight.delete(key); }
+  }
+
+  async function performAction(action, params) {
     haptic();
-
-    // Optimistic UI for pending draft approvals
-    if (params && params.id && (action === "approve" || action === "reject")) {
-      const card = document.querySelector(`.approval-card-wrap[data-id="${params.id}"]`);
-      if (card) {
-        card.style.transition = "transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.22s ease";
-        card.style.transform = action === "approve" ? "translateX(120%)" : "translateX(-120%)";
-        card.style.opacity = "0";
-        setTimeout(() => {
-          card.remove();
-          const badge = $("tab-approvals");
-          if (badge) {
-            const count = Math.max(0, (parseInt(badge.textContent, 10) || 1) - 1);
-            badge.textContent = String(count);
-            badge.classList.toggle("hidden", !count);
-          }
-        }, 250);
-      }
-    }
-
-    let res = null;
+    const card = ["approve", "reject"].includes(action) && params.id ? document.querySelector(`.approval-card-wrap[data-id="${params.id}"]`) : null;
+    const buttons = card ? [...card.querySelectorAll("button")] : [...document.querySelectorAll(`[data-action="${action}"]`)];
+    buttons.forEach((button) => { button.disabled = true; });
+    card?.setAttribute("aria-busy", "true");
     try {
-      res = await api("/api/action", { action, params });
-    } catch {
-      // Offline fallback: queue action for automatic sync upon reconnection
-      enqueueAction(action, params);
-      haptic("light");
-      toast("Action queued offline. Will auto-sync when connected", "info");
-      return { ok: true, queued: true };
+      const res = await api("/api/action", { action, params });
+      if (res && res.authorized === false) {
+        maybePaywall(res);
+        return { ok: false, response: "Your access has changed. Reopen the app after the owner restores it." };
+      }
+      haptic(res && res.ok ? "ok" : "err");
+      latestState = null;
+      toast(res?.response || (res?.ok ? "Done" : "Failed"), res?.ok ? "ok" : "err");
+      await loadView(currentView);
+      updateClosingConfirmation();
+      return res;
+    } catch (error) {
+      if (navigator.onLine === false) {
+        const queued = enqueueAction(action, params);
+        const response = queued ? "Preference queued for this account. Reconnect to sync it." : "Offline: this action is not queued. Reconnect and check its result before trying again.";
+        toast(response, queued ? "info" : "err");
+        updateClosingConfirmation();
+        return { ok: false, queued, response };
+      }
+      const response = error.message || "The request failed. Refresh to check its result before trying again.";
+      toast(response, "err");
+      return { ok: false, response };
+    } finally {
+      buttons.forEach((button) => { button.disabled = false; });
+      card?.removeAttribute("aria-busy");
+      const content = card?.querySelector(".approval-card-content");
+      if (content) content.style.transform = "translateX(0)";
     }
-
-    if (res && res.authorized === false) return maybePaywall(res);
-    haptic(res && res.ok ? "ok" : "err");
-    toast(res && res.response ? res.response : (res && res.ok ? "Done" : "Failed"));
-    loadView(currentView);
-    return res;
   }
 
   async function runCmd(command) {
     haptic();
-    const res = await api("/api/cmd", { command });
+    let res;
+    try { res = await api("/api/cmd", { command }); }
+    catch (error) { res = { ok: false, response: error.message || "Could not run the command. Try again." }; }
+    latestState = null;
     if (res && res.authorized === false) return maybePaywall(res);
     haptic(res && res.ok ? "ok" : "err");
     openSheet(`/${command.split(" ")[0].slice(1)}`, formatStructuredAppResponse(res && res.response ? res.response : "No response."), [{ label: "Close" }]);
@@ -1919,7 +2200,11 @@
 
   function maybePaywall(res) {
     hideLoading();
-    if (!res || res.authorized === false) {
+    if (!res) { showConnectionError("The server could not be reached. Check your connection and try again."); return true; }
+    if (res.authorized === false) {
+      stopUpdates();
+      closeSheet(true);
+      $("connection-error").classList.add("hidden");
       $("app").classList.add("hidden");
       $("paywall").classList.remove("hidden");
       if (res && res.version) $("pay-version").textContent = `v${res.version}`;
@@ -1944,9 +2229,13 @@
   }
 
   function unlockApp(auth) {
+    const nextUserId = auth.user?.id || null;
+    if (activeUserId !== nextUserId) { stopUpdates(); activeUserId = nextUserId; }
+    updateSyncBadge();
     if (paywallPoll) { clearInterval(paywallPoll); paywallPoll = null; }
     hideLoading();
     $("paywall").classList.add("hidden");
+    $("connection-error").classList.add("hidden");
     $("app").classList.remove("hidden");
     const uName = auth.user && auth.user.name ? auth.user.name : "";
     if (uName) {
@@ -1956,24 +2245,25 @@
       $("whoami").innerHTML = "";
     }
     $("app-version").textContent = auth.version ? `v${auth.version}` : "";
+    $("settings-backup").classList.toggle("hidden", auth.is_main !== true);
+    canGiveFeedback = auth.can_feedback ?? auth.is_main === true;
+    $("settings-feedback").classList.toggle("hidden", !canGiveFeedback);
     if (!wired) {
       wired = true;
       wire();
-      initEventSource();
       const params = new URLSearchParams(location.search);
       showView(["overview", "chats", "persona", "approvals", "more"].includes(params.get("view")) ? params.get("view") : "overview");
-      setInterval(() => { if (currentView === "overview") refreshOverview(); }, 12000);
+    } else {
+      loadView(currentView);
     }
+    startUpdates();
   }
 
-  function initSheetGestures() {
+  function initSheetControls() {
     const sheet = $("sheet");
     if (!sheet) return;
 
-    const grip = sheet.querySelector(".sheet-grip");
-    const head = sheet.querySelector(".sheet-head");
     const expandBtn = $("sheet-expand");
-    const body = $("sheet-body");
 
     if (expandBtn) {
       expandBtn.addEventListener("click", (e) => {
@@ -1982,90 +2272,46 @@
       });
     }
 
-    if (grip) {
-      grip.addEventListener("click", () => {
-        toggleSheetExpanded();
-      });
-    }
-
-    let startY = 0;
-    let startX = 0;
-    let lastY = 0;
-    let lastX = 0;
-    let tracking = false;
-    let touchArea = null;
-
-    const onTouchStart = (e) => {
-      if (!e.touches || e.touches.length !== 1) return;
-      const t = e.touches[0];
-      startY = t.clientY;
-      startX = t.clientX;
-      lastY = startY;
-      lastX = startX;
-
-      if (grip && (e.target === grip || grip.contains(e.target))) {
-        touchArea = "grip";
-        tracking = true;
-      } else if (head && (e.target === head || head.contains(e.target))) {
-        if (e.target.closest("#sheet-close, #sheet-expand")) return;
-        touchArea = "head";
-        tracking = true;
-      }
-    };
-
-    const onTouchMove = (e) => {
-      if (!tracking || !e.touches || e.touches.length !== 1) return;
-      lastY = e.touches[0].clientY;
-      lastX = e.touches[0].clientX;
-    };
-
-    const onTouchEnd = () => {
-      if (!tracking) return;
-      tracking = false;
-      const diffY = lastY - startY;
-      const diffX = lastX - startX;
-
-      if (Math.abs(diffY) > 28 && Math.abs(diffY) > Math.abs(diffX) * 1.1) {
-        if (diffY < 0) {
-          // Swiped UP on grip or header -> expand to full screen
-          if (touchArea === "grip" || touchArea === "head") {
-            expandSheet();
-          }
-        } else {
-          // Swiped DOWN on grip or header
-          if (sheet.classList.contains("is-expanded")) {
-            collapseSheet();
-          } else if (diffY > 55) {
-            closeSheet();
-          }
-        }
-      }
-      touchArea = null;
-    };
-
-    sheet.addEventListener("touchstart", onTouchStart, { passive: true });
-    sheet.addEventListener("touchmove", onTouchMove, { passive: true });
-    sheet.addEventListener("touchend", onTouchEnd, { passive: true });
-    sheet.addEventListener("touchcancel", () => { tracking = false; touchArea = null; }, { passive: true });
+    sheet.addEventListener("cancel", (event) => { event.preventDefault(); closeSheet(); });
+    let pointerStart = null;
+    sheet.addEventListener("pointerdown", (event) => { pointerStart = { x: event.clientX, y: event.clientY }; });
+    sheet.addEventListener("pointercancel", () => { pointerStart = null; });
+    sheet.addEventListener("click", (event) => {
+      if (event.target !== sheet || !pointerStart) return;
+      const rect = sheet.getBoundingClientRect();
+      const outside = event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom;
+      if (outside && Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y) < 8) closeSheet();
+      pointerStart = null;
+    });
   }
 
   // ---------------------------------------------------------------- init
 
   function wire() {
-    document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.view)));
-    $("sheet-backdrop").addEventListener("click", (e) => {
-      if (e.target === $("sheet-backdrop")) {
-        closeSheet();
-      }
+    $("retry-view").addEventListener("click", () => loadView(currentView));
+    $("settings-history").addEventListener("toggle", () => { if ($("settings-history").open) refreshHistory(); });
+    $("settings-feedback").addEventListener("toggle", () => { if ($("settings-feedback").open) refreshFeedback(); });
+    $("feedback-filter").addEventListener("change", refreshFeedback);
+    $("feedback-refresh").addEventListener("click", refreshFeedback);
+    $("history-status").addEventListener("change", () => refreshHistory());
+    $("history-refresh").addEventListener("click", () => refreshHistory());
+    $("history-more").addEventListener("click", () => refreshHistory(false));
+    $("settings-export").addEventListener("click", exportSettings);
+    $("settings-file").addEventListener("change", previewSettingsFile);
+    document.addEventListener("input", (event) => {
+      const field = event.target;
+      if (!field.matches("input, textarea, select")) return;
+      field.dataset.dirty = String(field.value !== (field.dataset.syncedValue ?? field.defaultValue));
+      updateClosingConfirmation();
     });
-
+    document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.view)));
     const sheetCloseBtn = $("sheet-close");
     if (sheetCloseBtn) sheetCloseBtn.addEventListener("click", closeSheet);
 
-    initSheetGestures();
+    initSheetControls();
 
     const toastEl = $("toast");
-    if (toastEl) toastEl.addEventListener("click", () => toastEl.classList.add("hidden"));
+    if (toastEl) toastEl.addEventListener("click", hideToast);
 
     const beacon = $("live-beacon");
     if (beacon) {
@@ -2103,22 +2349,15 @@
       });
     });
 
-    // Close open sheet or popup with Escape key
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        closeSheet();
-      }
-    });
-
-    // Instant Tactile Haptic on buttons
-    document.addEventListener("pointerdown", (e) => {
-      const target = e.target.closest(".btn, .pay-btn, .pay-check-btn, .chip, .seg, .model-chip, .preset-chip, .clay-switch, .m3-nav-item, .sheet-close-btn, .sheet-icon-btn, .sheet-grip, .linklike, .kpi[data-goto], .usage-cell[data-goto], .help-btn, .clay-action-btn, .chat-capsule-card, .feed-clickable");
-      if (!target) return;
-      haptic("light");
-    }, { passive: true });
-
     // Global click delegation for links, cards, help buttons & feeds
     document.addEventListener("click", (e) => {
+      const ratingButton = e.target.closest("[data-feedback-message]");
+      if (ratingButton) {
+        e.preventDefault();
+        e.stopPropagation();
+        openFeedbackSheet(ratingButton.dataset.feedbackChat, ratingButton.dataset.feedbackMessage, ratingButton.dataset.feedbackRating);
+        return;
+      }
       const guideBtn = e.target.closest("#btn-all-behavior-help");
       if (guideBtn) {
         e.preventDefault();
@@ -2136,19 +2375,6 @@
         const key = helpBtn.dataset.help;
         if (key) openHelpSheet(key);
         return;
-      }
-
-      const chatCard = e.target.closest(".chat-capsule-card");
-      if (chatCard && !e.target.closest("button, a, input")) {
-        const cid = chatCard.dataset.cid;
-        if (cid) {
-          const c = chatCache.find((x) => String(x.id) === String(cid));
-          if (c) {
-            haptic("light");
-            openChatDetailSheet(c);
-            return;
-          }
-        }
       }
 
       const feedRow = e.target.closest(".feed-clickable");
@@ -2203,10 +2429,10 @@
       btnApproveAll.addEventListener("click", () => {
         const count = document.querySelectorAll(".approval-card-wrap").length;
         if (!count) return;
-        openSheet("Approve all drafts",
-          `<p>Send all <strong>${count} pending drafts</strong> to their chats now?</p>`,
+        openSheet("Approve pending batch",
+          `<p>Send these <strong>${count} pending drafts</strong> in the background? ${approvalTotal > count ? `${approvalTotal - count} more drafts will remain for review.` : ""}</p>`,
           [
-            { label: `Approve all (${count})`, kind: "primary", onClick: () => runAction("approve_all") },
+            { label: `Approve batch (${count})`, kind: "primary", onClick: () => runAction("approve_all") },
             { label: "Cancel" }
           ]);
       });
@@ -2215,7 +2441,7 @@
     const btnRejectAll = $("btn-reject-all");
     if (btnRejectAll) {
       btnRejectAll.addEventListener("click", () => {
-        const count = document.querySelectorAll(".approval-card-wrap").length;
+        const count = approvalTotal || document.querySelectorAll(".approval-card-wrap").length;
         if (!count) return;
         openSheet("Reject all drafts",
           `<p>Discard all <strong>${count} pending drafts</strong>?</p>`,
@@ -2227,18 +2453,27 @@
     }
 
     $("goto-activity").addEventListener("click", async () => {
-      const acts = await api("/api/activity");
-      const rows = acts.activity || [];
-      openSheet("Recent replies", rows.length ? rows.map(feedRowHtml).join("") : "<p>Nothing yet.</p>", [{ label: "Close" }]);
+      const button = $("goto-activity");
+      if (button.disabled) return;
+      button.disabled = true;
+      try {
+        const acts = await api("/api/activity");
+        if (acts.authorized === false) return maybePaywall(acts);
+        if (acts.ok === false) throw new Error(acts.response);
+        const rows = acts.activity || [];
+        openSheet("Recent replies", rows.length ? rows.map(feedRowHtml).join("") : "<p>Nothing yet.</p>", [{ label: "Close" }]);
+      } catch (error) { toast(error.message || "Could not load recent replies. Try again.", "err"); }
+      finally { button.disabled = false; }
     });
 
     $("allow-btn").addEventListener("click", async () => {
       const v = $("allow-id").value.trim();
       if (!v) return toast("Enter a chat ID");
-      $("allow-id").value = "";
       const res = await runAction("allow", { chat_id: v });
       if (res && res.ok) {
-        refreshChats();
+        $("allow-id").value = "";
+        $("allow-id").dataset.dirty = "false";
+        updateClosingConfirmation();
       }
     });
     $("allow-id").addEventListener("keydown", (e) => { if (e.key === "Enter") $("allow-btn").click(); });
@@ -2262,11 +2497,15 @@
     });
     $("pf-name").addEventListener("keydown", (e) => { if (e.key === "Enter") $("pf-name-save").click(); });
 
-    $("auth-add").addEventListener("click", () => {
+    $("auth-add").addEventListener("click", async () => {
       const v = $("auth-id").value.trim();
       if (!v) return toast("Enter a Telegram user ID or @username");
-      $("auth-id").value = "";
-      runAction("addauth", { user_id: v });
+      const res = await runAction("addauth", { user_id: v });
+      if (res?.ok) {
+        $("auth-id").value = "";
+        $("auth-id").dataset.dirty = "false";
+        updateClosingConfirmation();
+      }
     });
     $("auth-id").addEventListener("keydown", (e) => { if (e.key === "Enter") $("auth-add").click(); });
 
@@ -2276,59 +2515,6 @@
       runAction("model", { value: v });
     });
     $("ai-model").addEventListener("keydown", (e) => { if (e.key === "Enter") $("ai-model-save").click(); });
-
-    // Model Fallback Multi-Select Chips
-    function renderModelChips(modelsList, selectedOverride) {
-      const container = $("ai-model-chips");
-      if (!container) return;
-      if (!modelsList || !modelsList.length) {
-        container.innerHTML = '<div class="empty sm">No models loaded. Tap &ldquo;Fetch models&rdquo; to query your endpoint.</div>';
-        return;
-      }
-
-      let selectedList;
-      if (Array.isArray(selectedOverride)) {
-        selectedList = selectedOverride.map((s) => String(s).trim().replace(/^models\//, "")).filter(Boolean);
-      } else {
-        selectedList = ($("ai-model").value || "")
-          .split(/[,;]/)
-          .map((s) => s.trim().replace(/^models\//, ""))
-          .filter(Boolean);
-      }
-
-      container.innerHTML = modelsList.map((m) => {
-        const cleanM = String(m).replace(/^models\//, "").trim();
-        const idx = selectedList.indexOf(cleanM);
-        const isActive = idx !== -1;
-        const badgeHtml = isActive ? `<span class="chip-order-badge">${idx + 1}</span>` : "";
-        return `<button class="model-chip ${isActive ? "active" : ""}" data-model="${esc(cleanM)}" type="button">${badgeHtml}${esc(cleanM)}</button>`;
-      }).join("");
-
-      container.querySelectorAll(".model-chip").forEach((chip) => {
-        chip.addEventListener("click", () => {
-          haptic("light");
-          const modelName = chip.dataset.model;
-          let currentSelected = ($("ai-model").value || "")
-            .split(/[,;]/)
-            .map((s) => s.trim().replace(/^models\//, ""))
-            .filter(Boolean);
-
-          const existingIdx = currentSelected.indexOf(modelName);
-          if (existingIdx !== -1) {
-            currentSelected.splice(existingIdx, 1);
-            toast(`Removed ${modelName} from fallback chain (${currentSelected.length} active)`);
-          } else {
-            currentSelected.push(modelName);
-            toast(`Added ${modelName} as fallback #${currentSelected.length}`);
-          }
-
-          const newChain = currentSelected.join(",");
-          $("ai-model").value = newChain;
-          runAction("model", { value: newChain });
-          renderModelChips(modelsList, currentSelected);
-        });
-      });
-    }
 
     // Modal popup: Select which fetched models to add to available models
     function showFetchModelsPopup(models) {
@@ -2370,18 +2556,20 @@
           {
             label: "Confirm Selection",
             kind: "primary",
-            onClick: () => {
+            onClick: async () => {
               const cbs = Array.from(document.querySelectorAll(".model-popup-cb:checked"));
               const selected = cbs.map((cb) => cb.value.trim()).filter(Boolean);
               if (!selected.length) {
                 toast("Please select at least 1 model.");
-                return;
+                return false;
               }
+              const result = await runAction("save_available_models", { models: selected });
+              if (!result?.ok) return result;
               cachedEndpointModels = selected;
               $("models-fetched-count").textContent = `(${cachedEndpointModels.length})`;
               renderModelChips(cachedEndpointModels);
-              runAction("save_available_models", { models: selected });
               toast(`Loaded ${selected.length} model(s) into available models`);
+              return result;
             },
           },
           { label: "Cancel" },
@@ -2425,7 +2613,7 @@
             const isOk = !!r.ok;
             return `<div class="health-model-row ${isOk ? "is-ok" : "is-fail"}">
               <div class="health-model-left">
-                <input type="checkbox" class="health-result-cb" value="${esc(r.model)}" ${isOk ? "checked" : ""}>
+                <input type="checkbox" class="health-result-cb" value="${esc(r.model)}" ${isOk ? "checked" : "disabled"}>
                 <span class="health-model-name num">${esc(r.model)}</span>
               </div>
               <div class="health-model-right">
@@ -2446,18 +2634,20 @@
           {
             label: "Apply Selected to Rotation",
             kind: "primary",
-            onClick: () => {
+            onClick: async () => {
               const cbs = Array.from(document.querySelectorAll(".health-result-cb:checked"));
               const selected = cbs.map((cb) => cb.value.trim()).filter(Boolean);
               if (!selected.length) {
                 toast("Select at least 1 healthy model.");
-                return;
+                return false;
               }
               const newChain = selected.join(",");
+              const result = await runAction("model", { value: newChain });
+              if (!result?.ok) return result;
               $("ai-model").value = newChain;
-              runAction("model", { value: newChain });
               renderModelChips(cachedEndpointModels.length ? cachedEndpointModels : selected, selected);
               toast(`Set active rotation (${selected.length} model(s)): ${newChain}`);
+              return result;
             },
           },
           { label: "Close" },
@@ -2668,7 +2858,7 @@
           modelEl.textContent = `Replied: ${res.model_used || "OK"}`;
           replyEl.textContent = `"${res.reply}"`;
 
-          if (res.active_model) {
+          if (res.auto_applied && res.active_model) {
             $("ai-model").value = res.active_model;
             const workingArr = res.working_models || res.active_model.split(",");
             if (cachedEndpointModels.length) {
@@ -2687,7 +2877,7 @@
           });
           summaryEl.innerHTML = pills.join("");
 
-          if (res.failed_models && res.failed_models.length > 0) {
+          if (res.auto_applied && res.failed_models && res.failed_models.length > 0) {
             toast(`Auto-pruned ${res.failed_models.length} failing model(s). Working: ${res.active_model}`);
           } else {
             toast(`Working model verified: ${res.active_model}`);
@@ -2724,10 +2914,6 @@
       qhSave.addEventListener("click", () => {
         const start = ($("qh-start-input").value || "02:00").trim();
         const end = ($("qh-end-input").value || "08:00").trim();
-        if ($("qh-status-pill")) {
-          $("qh-status-pill").textContent = "Active";
-          $("qh-status-pill").className = "pill pill-positive";
-        }
         runAction("quiethours", { value: `on ${start} ${end}` });
       });
     }
@@ -2746,24 +2932,7 @@
       chip.addEventListener("click", () => {
         haptic("light");
         const qh = chip.dataset.qh;
-        if (qh === "off") {
-          if ($("qh-status-pill")) {
-            $("qh-status-pill").textContent = "Inactive";
-            $("qh-status-pill").className = "pill pill-inactive";
-          }
-          runAction("quiethours", { value: "off" });
-        } else {
-          const parts = qh.split(" ");
-          if ($("qh-start-input")) $("qh-start-input").value = parts[0];
-          if ($("qh-end-input")) $("qh-end-input").value = parts[1];
-          if ($("qh-status-pill")) {
-            $("qh-status-pill").textContent = "Active";
-            $("qh-status-pill").className = "pill pill-positive";
-          }
-          runAction("quiethours", { value: `on ${qh}` });
-        }
-        document.querySelectorAll("#qh-preset-carousel button").forEach((c) => c.classList.remove("active"));
-        chip.classList.add("active");
+        runAction("quiethours", { value: qh === "off" ? "off" : `on ${qh}` });
       });
     });
 
@@ -2773,9 +2942,6 @@
         haptic("light");
         const cur = sw.dataset.state || "off";
         const next = cur === "on" ? "off" : "on";
-        sw.dataset.state = next;
-        sw.className = `clay-switch ${next}`;
-        sw.textContent = next.toUpperCase();
         runAction(sw.dataset.action, { value: next });
       });
     });
@@ -2795,8 +2961,6 @@
         haptic("light");
         const param = b.dataset.param;
         const val = b.dataset.val;
-        b.parentElement.querySelectorAll(".seg").forEach((s) => s.classList.remove("active"));
-        b.classList.add("active");
         runAction(param, { value: val });
       });
     });
@@ -2806,11 +2970,11 @@
     if (addRuleBtn) {
       addRuleBtn.addEventListener("click", () => {
         openSheet("New Keyword Auto-Reply", `
-          <p class="field-hint" style="margin-top:0">When incoming message contains this keyword, reply instantly:</p>
+          <p class="field-hint" style="margin-top:0">When a message contains this keyword, the model rewrites your reply intent using this chat's prompt and context. Cooldowns still apply.</p>
           <label for="rule-kw-input" style="font-weight:600;font-size:13px;display:block;margin-top:8px">Keyword trigger</label>
           <input id="rule-kw-input" placeholder="e.g. pricing, help, contact">
-          <label for="rule-reply-input" style="font-weight:600;font-size:13px;display:block;margin-top:12px">Auto-reply message</label>
-          <textarea id="rule-reply-input" rows="3" placeholder="e.g. We are updating packages! DM @admin for urgent queries."></textarea>
+          <label for="rule-reply-input" style="font-weight:600;font-size:13px;display:block;margin-top:12px">Reply intent (rewritten by the model)</label>
+          <textarea id="rule-reply-input" rows="3" placeholder="e.g. Explain that the package information is being updated."></textarea>
         `, [
           {
             label: "Add Rule",
@@ -2818,8 +2982,8 @@
             onClick: () => {
               const kw = ($("rule-kw-input").value || "").trim();
               const rep = ($("rule-reply-input").value || "").trim();
-              if (!kw || !rep) return toast("Keyword and reply text cannot be empty", "err");
-              runAction("addrule", { value: `${kw} => ${rep}` });
+              if (!kw || !rep) return { ok: false, response: "Enter both a keyword and a reply." };
+              return runAction("addrule", { value: `${kw} => ${rep}` });
             }
           },
           { label: "Cancel" }
@@ -2873,49 +3037,114 @@
 
   function syncTelegramTheme() {
     if (!tg) return;
+    const background = getComputedStyle(document.documentElement).getPropertyValue("--ground").trim();
+    telegramCall("setHeaderColor", "6.1", background);
+    telegramCall("setBackgroundColor", "6.1", background);
+    telegramCall("setBottomBarColor", "7.10", background);
+  }
+
+  function telegramCall(method, version, ...args) {
+    if (!tg || typeof tg[method] !== "function" || (version && !tg.isVersionAtLeast?.(version))) return false;
+    try { tg[method](...args); return true; } catch { return false; }
+  }
+
+  function updateClosingConfirmation() {
+    const dirty = document.querySelector('.canvas [data-dirty="true"], #sheet[open] [data-dirty="true"]');
+    telegramCall(dirty || loadOfflineQueue().length ? "enableClosingConfirmation" : "disableClosingConfirmation", "6.2");
+  }
+
+  let viewportFrame = null;
+  let viewportBaseline = window.innerHeight;
+  function syncViewport() {
+    if (viewportFrame !== null) return;
+    viewportFrame = requestAnimationFrame(() => {
+      viewportFrame = null;
+      const root = document.documentElement;
+      const viewport = window.visualViewport;
+      const stable = tg?.viewportStableHeight || window.innerHeight;
+      const visible = Math.min(viewport?.height || window.innerHeight, stable);
+      const editing = document.activeElement?.matches("input, textarea, select");
+      if (!editing) viewportBaseline = visible;
+      root.style.setProperty("--app-height", `${stable}px`);
+      root.style.setProperty("--visual-height", `${visible}px`);
+      root.style.setProperty("--keyboard-inset", `${Math.max(0, window.innerHeight - visible - (viewport?.offsetTop || 0))}px`);
+      root.classList.toggle("keyboard-open", Boolean(editing && viewportBaseline - visible > 100));
+      for (const edge of ["top", "right", "bottom", "left"]) {
+        root.style.setProperty(`--tg-safe-area-inset-${edge}`, `${tg?.safeAreaInset?.[edge] || 0}px`);
+        root.style.setProperty(`--tg-content-safe-area-inset-${edge}`, `${tg?.contentSafeAreaInset?.[edge] || 0}px`);
+      }
+      $("fullscreen-button").classList.toggle("hidden", !tg?.isVersionAtLeast?.("8.0") || Boolean(tg.isFullscreen));
+    });
+  }
+
+  function showConnectionError(message) {
+    stopUpdates();
+    hideLoading();
+    $("connection-error-message").textContent = message;
+    $("connection-error").classList.remove("hidden");
+    $("paywall").classList.add("hidden");
+    $("app").classList.add("hidden");
+  }
+
+  async function authenticate() {
+    const retry = $("retry-connection");
+    retry.disabled = true;
     try {
-      const darkBg = (tg.themeParams && tg.themeParams.bg_color) || "#0B0E14";
-      if (tg.setHeaderColor) tg.setHeaderColor(darkBg);
-      if (tg.setBackgroundColor) tg.setBackgroundColor(darkBg);
-    } catch (_) {}
+      const auth = await api("/api/auth");
+      if (auth.ok === false) throw new Error(auth.response);
+      if (auth.authorized !== true) return maybePaywall(auth);
+      unlockApp(auth);
+      flushOfflineQueue();
+    } catch (error) { showConnectionError(error.message || "Check your connection and try again."); }
+    finally { retry.disabled = false; }
   }
 
   async function init() {
     updateSyncBadge();
+    $("retry-connection").addEventListener("click", authenticate);
+    $("fullscreen-button").addEventListener("click", () => telegramCall("requestFullscreen", "8.0"));
     window.addEventListener("online", () => {
-      flushOfflineQueue();
+      if (!$("connection-error").classList.contains("hidden")) authenticate();
+      else { flushOfflineQueue(); startUpdates(); }
     });
-
+    window.addEventListener("resize", syncViewport);
+    window.visualViewport?.addEventListener("resize", syncViewport);
+    document.addEventListener("focusin", syncViewport);
+    document.addEventListener("focusout", syncViewport);
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) stopUpdates();
+      else if (!$("app").classList.contains("hidden")) { startUpdates(); loadView(currentView); }
+    });
     if (tg) {
-      try {
-        tg.ready();
-        tg.expand();
-        syncTelegramTheme();
-        tg.onEvent("themeChanged", syncTelegramTheme);
-      } catch { /* older clients */ }
+      telegramCall("ready");
+      telegramCall("expand");
+      telegramCall("disableVerticalSwipes", "7.7");
+      telegramCall("requestFullscreen", "8.0");
+      syncTelegramTheme();
+      for (const event of ["viewportChanged", "safeAreaChanged", "contentSafeAreaChanged", "fullscreenChanged"]) tg.onEvent(event, syncViewport);
+      tg.onEvent("fullscreenFailed", () => { telegramCall("expand"); syncViewport(); });
+      tg.onEvent("themeChanged", syncTelegramTheme);
     }
-
-    let auth = null;
-    try { auth = await api("/api/auth"); } catch { /* no server (plain browser / file) → paywall */ }
-    if (!auth || auth.authorized !== true) { maybePaywall(auth); return; }
-
-    unlockApp(auth);
-    flushOfflineQueue();
+    syncViewport();
+    await authenticate();
   }
 
   function setConnectionStatus(status) {
     const beacon = $("live-beacon");
     if (!beacon) return;
+    const wasLive = beacon.classList.contains("live");
     beacon.className = `live-beacon ${status}`;
     beacon.title = status === "live"
       ? "Real-time engine connected"
       : (status === "connecting" ? "Connecting to engine…" : "Engine offline");
-    if (status === "live") {
+    if (status === "live" && !wasLive) {
       flushOfflineQueue();
     }
   }
 
   function initEventSource() {
+    if (DEMO) { setConnectionStatus("live"); return; }
+    if (eventSource) return;
     if (!window.EventSource) {
       setConnectionStatus("offline");
       return;
@@ -2924,6 +3153,9 @@
       const raw = initDataHeader();
       const q = raw ? `?initData=${encodeURIComponent(raw)}` : "";
       const es = new EventSource(`/api/events${q}`);
+      eventSource = es;
+      let lastRevision;
+      let lastHistoryRevision;
       es.onopen = () => {
         setConnectionStatus("live");
       };
@@ -2931,16 +3163,46 @@
         setConnectionStatus("live");
         try {
           const s = JSON.parse(e.data);
+          latestState = s;
           if (s && s.state) renderState(s);
+          if (s && currentView === "more" && !$("sheet").open) renderMoreControls(s);
+          if (s && s.history_revision !== lastHistoryRevision) {
+            lastHistoryRevision = s.history_revision;
+            if (currentView === "more" && $("settings-history").open) refreshHistory();
+          }
+          if (s && s.revision !== lastRevision) {
+            lastRevision = s.revision;
+            if (currentView !== "overview") loadView(currentView);
+          }
         } catch (_) {}
       });
       es.onerror = () => {
         setConnectionStatus("connecting");
+        api("/api/auth").then((auth) => { if (auth && auth.authorized === false) maybePaywall(auth); }).catch(() => {});
         // SSE reconnects automatically by browser spec
       };
     } catch (_) {
       setConnectionStatus("offline");
     }
+  }
+
+  let eventSource = null;
+  let refreshTimer = null;
+  function startUpdates() {
+    if (document.hidden || $("app").classList.contains("hidden")) return;
+    initEventSource();
+    if (refreshTimer !== null) return;
+    refreshTimer = setInterval(() => {
+      if (!$("sheet").open && (!eventSource || eventSource.readyState !== 1 || currentView === "overview")) loadView(currentView);
+    }, 15000);
+  }
+
+  function stopUpdates() {
+    eventSource?.close();
+    eventSource = null;
+    latestState = null;
+    clearInterval(refreshTimer);
+    refreshTimer = null;
   }
 
   // Register Service Worker for Instant PWA Offline Loading
@@ -2950,5 +3212,5 @@
     });
   }
 
-  init();
+  init().catch((error) => showConnectionError(error.message));
 })();

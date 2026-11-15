@@ -14,7 +14,7 @@ _BANNER_TEMPLATE = """
   \033[1;35m"Your Telegram account, powered by AI. 🤖"\033[0m
 
   \033[1;37mProduction-grade Telegram user-account automation with Google Gemini AI,\033[0m
-  \033[1;37mhuman alibi persona, custom keyword triggers, and zero-spam safety guards.\033[0m
+  \033[1;37mcontextual replies, custom keyword triggers, and conversation safety guards.\033[0m
 
   \033[1;34mRepository:\033[0m \033[1;36mhttps://github.com/mkr-infinity/TeleAutomator\033[0m
   \033[1;34mAuthor:    \033[0m \033[1;33mMohammad Kaif Raja (mkr-infinity)\033[0m

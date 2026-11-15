@@ -5,6 +5,8 @@ Single source of truth: `app/__init__.py` (`__version__`).
 
 What gets synced/checked:
   - pyproject.toml                       -> version = "X.Y.Z"
+  - CITATION.cff                         -> project version (not the CFF format version)
+  - miniapp/index.html, app.js, sw.js     -> metadata, demo fixtures, asset URLs and cache name
   - assets/banner.svg                    -> "TELEAUTOMATOR vX.Y" branding text
   - everything else is DYNAMIC by design (startup banner, welcome cards,
     /status, /prompt all read app.__version__ at runtime — never bump by hand)
@@ -32,7 +34,7 @@ SW_JS = ROOT / "miniapp" / "sw.js"
 BANNER_SVG = ROOT / "assets" / "banner.svg"
 
 # Files/dirs never scanned (venvs, caches, git internals)
-SCAN_EXCLUDES = {".git", ".venv", "__pycache__", "node_modules", ".pytest_cache", "data"}
+SCAN_EXCLUDES = {".git", ".venv", "__pycache__", "node_modules", ".pytest_cache", "data", ".agents", ".codex", ".aws", "logs", "backups"}
 
 
 def current_version() -> str:
@@ -80,6 +82,7 @@ def sync_static_copies(version: str) -> None:
     if INDEX_HTML.exists():
         html = INDEX_HTML.read_text(encoding="utf-8")
         updated_html = re.sub(r'("softwareVersion":\s*)"\d+\.\d+\.\d+"', rf'\1"{version}"', html, count=1)
+        updated_html = re.sub(r'((?:style\.css|app\.js)\?v=)\d+\.\d+\.\d+', rf'\g<1>{version}', updated_html)
         if updated_html != html:
             INDEX_HTML.write_text(updated_html, encoding="utf-8")
             print(f"✅ miniapp/index.html -> {version}")
@@ -100,6 +103,7 @@ def sync_static_copies(version: str) -> None:
     if SW_JS.exists():
         sw = SW_JS.read_text(encoding="utf-8")
         updated_sw = re.sub(r'(CACHE_NAME\s*=\s*"teleautomator-v)\d+\.\d+\.\d+"', rf'\g<1>{version}"', sw)
+        updated_sw = re.sub(r'((?:style\.css|app\.js)\?v=)\d+\.\d+\.\d+', rf'\g<1>{version}', updated_sw)
         if updated_sw != sw:
             SW_JS.write_text(updated_sw, encoding="utf-8")
             print(f"✅ miniapp/sw.js -> v{version}")
@@ -124,6 +128,11 @@ STALE_PATTERNS = [
     re.compile(r'__version__\s*=\s*"(\d+\.\d+\.\d+)"'),           # python version constants
     re.compile(r'(?<![\w.-])version\s*=\s*"(\d+\.\d+\.\d+)"'),    # pyproject/setup assignments
     re.compile(r"TeleAutomator[^\n]{0,40}?v(\d+\.\d+\.\d+)"),     # branding strings in any file
+    re.compile(r'"softwareVersion":\s*"(\d+\.\d+\.\d+)"'),
+    re.compile(r'\bversion:\s*"(\d+\.\d+\.\d+)"'),
+    re.compile(r'teleautomator-v(\d+\.\d+\.\d+)'),
+    re.compile(r'(?:style\.css|app\.js)\?v=(\d+\.\d+\.\d+)'),
+    re.compile(r'^version:\s*(\d+\.\d+\.\d+)'),
 ]
 
 
@@ -136,7 +145,9 @@ def scan_for_stale_versions(version: str) -> list[str]:
             continue
         if any(part in SCAN_EXCLUDES for part in path.parts):
             continue
-        if path.suffix not in {".py", ".md", ".toml", ".txt", ".yml", ".yaml", ".json", ".svg", ".cfg"}:
+        if path.relative_to(ROOT).parts[0] == "tests":
+            continue  # Migration fixtures deliberately contain historical version strings.
+        if path.suffix not in {".py", ".md", ".toml", ".txt", ".yml", ".yaml", ".json", ".svg", ".cfg", ".html", ".js", ".cff"}:
             continue
         if path.name == "update_version.py":  # this script's own docs/examples
             continue

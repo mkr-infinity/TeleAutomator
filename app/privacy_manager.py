@@ -42,6 +42,9 @@ class PrivacyManager:
         allowed = self._get_dynamic_set("dynamic_allowed_chats")
         allowed.add(chat_id)
         self._save_dynamic_set("dynamic_allowed_chats", allowed)
+        removed = self._get_dynamic_set("dynamic_removed_chats")
+        removed.discard(chat_id)
+        self._save_dynamic_set("dynamic_removed_chats", removed)
         # Remove from blocked if present
         blocked = self._get_dynamic_set("dynamic_blocked_chats")
         if chat_id in blocked:
@@ -53,6 +56,9 @@ class PrivacyManager:
         allowed = self._get_dynamic_set("dynamic_allowed_chats")
         allowed.discard(chat_id)
         self._save_dynamic_set("dynamic_allowed_chats", allowed)
+        removed = self._get_dynamic_set("dynamic_removed_chats")
+        removed.add(chat_id)
+        self._save_dynamic_set("dynamic_removed_chats", removed)
 
     def block_chat(self, chat_id: int) -> None:
         """Dynamically block a chat."""
@@ -73,37 +79,15 @@ class PrivacyManager:
             else:
                 all_private.add(cid)
 
-        return all_private, all_groups
+        excluded = (set(self.config.blocked_chats)
+                    | self._get_dynamic_set("dynamic_blocked_chats")
+                    | self._get_dynamic_set("dynamic_removed_chats"))
+        return all_private - excluded, all_groups - excluded
 
     def is_chat_allowed(self, chat_id: int, is_group: bool) -> bool:
         """Check if chat is explicitly permitted and not blocked."""
-        # Check static and dynamic blocklists first
-        if chat_id in self.config.blocked_chats or chat_id in self._get_dynamic_set("dynamic_blocked_chats"):
-            logger.debug(f"Chat {chat_id} is in BLOCKED_CHATS. Ignored.")
-            return False
-
-        # Dynamic allowlist check
-        dynamic_allowed = self._get_dynamic_set("dynamic_allowed_chats")
-        if chat_id in dynamic_allowed:
-            return True
-
-        # Explicit allowlist enforcement from config
-        if is_group:
-            if not self.config.allowed_groups:
-                logger.debug("No groups in ALLOWED_GROUPS. Group message ignored.")
-                return False
-            allowed = chat_id in self.config.allowed_groups
-            if not allowed:
-                logger.debug(f"Group {chat_id} not in ALLOWED_GROUPS. Ignored.")
-            return allowed
-        else:
-            if not self.config.allowed_private_chats:
-                logger.debug("No private chats in ALLOWED_PRIVATE_CHATS. Private message ignored.")
-                return False
-            allowed = chat_id in self.config.allowed_private_chats
-            if not allowed:
-                logger.debug(f"Private chat {chat_id} not in ALLOWED_PRIVATE_CHATS. Ignored.")
-            return allowed
+        private, groups = self.get_all_allowed_chats()
+        return chat_id in (groups if is_group else private)
 
     def is_user_allowed(self, user_id: int | None) -> bool:
         """Check if sender user ID is ignored."""

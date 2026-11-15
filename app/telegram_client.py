@@ -171,11 +171,9 @@ class TelegramService:
             except Exception as e:
                 logger.debug(f"Safe-mode recovery check error: {e}")
 
-            # Every 15 minutes, refresh AI-generated rolling context recaps for active chats
-            # (shortened interval so busy community groups keep a fresh memory; per-chat
-            # thresholds in refresh_group_summaries skip quiet chats anyway)
+            # Backstop for coalesced context workers; each chat has its own batch/rate guard.
             now = time.monotonic()
-            if now - self._last_summary_check >= 900.0:
+            if now - self._last_summary_check >= 60.0:
                 self._last_summary_check = now
                 try:
                     await self.reply_manager.refresh_group_summaries()
@@ -233,6 +231,8 @@ class TelegramService:
         """Gracefully disconnect and stop background tasks."""
         logger.info("Stopping Telegram service...")
         self._running = False
+
+        await self.reply_manager.close()
 
         if self._heartbeat_task:
             self._heartbeat_task.cancel()

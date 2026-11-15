@@ -296,7 +296,7 @@ def test_command_permissions_grant_revoke_enforcement(tmp_path: Path) -> None:
         return {"ok": True, "result": {}}
 
     manager = bot.reply_manager
-    async def fake_route(cmd: str):
+    async def fake_route(cmd: str, **_audit):
         routed.append(cmd)
         return f"ran {cmd}"
 
@@ -352,7 +352,7 @@ def test_approval_inline_buttons_flow(tmp_path: Path) -> None:
         return {"ok": True, "result": {}}
 
     manager = mgr
-    async def fake_route(cmd: str):
+    async def fake_route(cmd: str, **_audit):
         routed.append(cmd)
         return "✅ Draft sent to chat."
 

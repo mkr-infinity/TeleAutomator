@@ -10,6 +10,7 @@ from app.privacy_manager import PrivacyManager
 from app.reply_manager import ReplyManager
 from app.safety_manager import SafetyManager
 from app.storage.database import Database
+from tests.helpers import enable_auto_replies
 
 
 def test_prune_messages_older_than(tmp_path: Path):
@@ -41,7 +42,7 @@ def test_draft_only_mode(tmp_path: Path):
         db = Database(tmp_path / "app.db")
         safety = SafetyManager(cfg, db)
         privacy = PrivacyManager(cfg, database=db)
-        generator = ReplyGenerator(cfg)
+        generator = ReplyGenerator(cfg, provider=MagicMock(generate_reply=MagicMock(return_value="The release looks ready")))
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
         mock_client = AsyncMock()
@@ -82,7 +83,7 @@ def test_approval_mode_and_commands(tmp_path: Path):
         db = Database(tmp_path / "app.db")
         safety = SafetyManager(cfg, db)
         privacy = PrivacyManager(cfg, database=db)
-        generator = ReplyGenerator(cfg)
+        generator = ReplyGenerator(cfg, provider=MagicMock(generate_reply=MagicMock(return_value="The release looks ready")))
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
         mock_client = AsyncMock()
@@ -129,7 +130,8 @@ def test_approval_mode_and_commands(tmp_path: Path):
         db.add_approval(100, "Friend", 58, 123, "Query 4", "Draft 4")
         db.add_approval(100, "Friend", 59, 123, "Query 5", "Draft 5")
         app_res = await mgr.handle_control_command("/approve all")
-        assert "Batch approved: 2 sent" in app_res
+        assert "background" in app_res
+        await mgr._approval_batch_task
         assert len(db.list_pending_approvals()) == 0
 
         # 3. /stop and /resume
@@ -470,7 +472,7 @@ def test_cooldown_suppression_does_not_alert_saved_messages(tmp_path: Path):
     asyncio.run(_run())
 
 
-def test_mention_queue_never_skipped(tmp_path: Path):
+def test_mention_queue_never_skipped(tmp_path: Path, clock):
     """Verify that mentions are never skipped when cooldown is active; they are queued and sent."""
     async def _run():
         cfg = AppConfig(
@@ -489,13 +491,14 @@ def test_mention_queue_never_skipped(tmp_path: Path):
         safety = SafetyManager(cfg, db)
         safety.set_auto_authorization(True)
         privacy = PrivacyManager(cfg, database=db)
-        generator = ReplyGenerator(cfg)
+        generator = ReplyGenerator(cfg, provider=MagicMock(generate_reply=MagicMock(return_value="The release looks ready")))
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
         mock_client = AsyncMock()
         mgr.set_telegram_client(mock_client)
 
         # Active cooldown
+        enable_auto_replies(mgr, 100)
         safety.mark_reply_sent(100)
 
         # Incoming mention message arrives
@@ -509,8 +512,8 @@ def test_mention_queue_never_skipped(tmp_path: Path):
             is_mention=True,
         )
 
-        # Wait for deferred queue execution (1s cooldown + buffer)
-        await asyncio.sleep(2.2)
+        # Await the queued delivery, including its typing delay.
+        await mgr._pending_deferred_replies[100]
 
         # Verified message was sent to the chat after cooldown!
         assert mock_client.send_message.call_count >= 1
@@ -667,6 +670,7 @@ def test_reaction_randomized_interval_cooldown(tmp_path: Path):
         mgr.set_telegram_client(mock_client)
 
         # First reaction succeeds
+        enable_auto_replies(mgr, 100)
         sent1 = await mgr.maybe_send_reaction(chat_id=100, message_id=1, text="Haha this is hilarious")
         assert sent1 is True
         assert 3.0 <= mgr._next_reaction_cooldown <= 9.0
@@ -945,8 +949,8 @@ def test_pure_laughter_reaction_instead_of_text_message(tmp_path: Path):
     asyncio.run(_run())
 
 
-def test_swipe_to_reply_always_quotes_message(tmp_path: Path):
-    """Verify in groups and DMs, message always swipes to reply (reply_to_msg_id) to the message being answered."""
+def test_group_replies_never_quote_participants_but_dm_threading_remains(tmp_path: Path, clock):
+    """Group replies post plainly; only private chats retain quoted threading."""
     async def _run():
         cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
         db = Database(tmp_path / "test_unthreaded.db")
@@ -957,6 +961,9 @@ def test_swipe_to_reply_always_quotes_message(tmp_path: Path):
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
         sent_calls = []
+        enable_auto_replies(mgr, -100222, 12345)
+        db.set_state("max_chat_replies_per_minute", "10")
+        db.set_state("max_replies_per_minute", "20")
         async def mock_send(chat_id, text, **kwargs):
             sent_calls.append((chat_id, text, kwargs.get("reply_to")))
             m = MagicMock()
@@ -967,16 +974,16 @@ def test_swipe_to_reply_always_quotes_message(tmp_path: Path):
         mock_client.send_message = AsyncMock(side_effect=mock_send)
         mgr.set_telegram_client(mock_client)
 
-        # 1. Group reply without direct @mention: swipe-to-reply quotes the message being answered
+        # 1. Casual group contribution goes to the room.
         await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah true that", adaptive_delay=False, is_mention=False)
         assert len(sent_calls) == 1
         assert sent_calls[0][0] == -100222
-        assert sent_calls[0][2] == 77
+        assert sent_calls[0][2] is None
 
-        # 2. Group reply with mention: swipe-to-reply preserves reply_to
-        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah true that", adaptive_delay=False, is_mention=True)
+        # 2. Even a direct mention must not create another quoted notification.
+        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="yeah makes sense", adaptive_delay=False, is_mention=True)
         assert len(sent_calls) == 2
-        assert sent_calls[1][2] == 77
+        assert sent_calls[1][2] is None
 
         # 3. Private DM: reply_to is preserved
         await mgr._send_reply(chat_id=12345, reply_to_msg_id=55, text="sounds good", adaptive_delay=False, is_mention=False)
@@ -993,16 +1000,16 @@ def test_swipe_to_reply_always_quotes_message(tmp_path: Path):
         assert len(sent_calls) == 5
         assert sent_calls[4][2] is None
 
-        # 6. Group general greeting when explicitly mentioned: quotes the sender
-        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="good morning guys", adaptive_delay=False, is_mention=True)
+        # 6. An explicit mention still posts to the room.
+        await mgr._send_reply(chat_id=-100222, reply_to_msg_id=77, text="morning everyone", adaptive_delay=False, is_mention=True)
         assert len(sent_calls) == 6
-        assert sent_calls[5][2] == 77
+        assert sent_calls[5][2] is None
 
     asyncio.run(_run())
 
 
-def test_mandatory_mention_when_mentioned_by_peer(tmp_path: Path):
-    """Verify that when someone mentions us in a group, reply swipes to reply (reply_to_msg_id) and never writes names in text."""
+def test_group_addressed_reply_has_no_quote_or_typed_mention(tmp_path: Path):
+    """An addressed group message can be answered without pinging the sender."""
     async def _run():
         cfg = AppConfig(api_id=123, api_hash="dummy_hash", reply_mode="restricted_auto", auto_authorize=True, data_dir=tmp_path)
         db = Database(tmp_path / "test_peer_mention.db")
@@ -1041,9 +1048,8 @@ def test_mandatory_mention_when_mentioned_by_peer(tmp_path: Path):
         # Text must NEVER write user names or @usernames
         assert "@" not in text
         assert "Alice" not in text
-        assert text == "sounds good to me 👍"
-        # Must swipe-to-reply (quote message ID 404)
-        assert reply_to == 404
+        assert text == "Sounds good to me 👍"
+        assert reply_to is None
 
     asyncio.run(_run())
 
@@ -1067,6 +1073,7 @@ def test_multi_sentiment_reactions(tmp_path: Path):
         mgr.set_telegram_client(mock_client)
 
         # 1. Excitement / congrats
+        enable_auto_replies(mgr, 1001, 1002, 1003, 1004)
         mgr._next_reaction_cooldown = 0.0
         mgr._last_reaction_time = 0.0
         mgr._next_reaction_time_by_chat.clear()
@@ -1497,9 +1504,9 @@ def test_prompt_command_displays_full_text(tmp_path: Path):
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
         res = await mgr.handle_control_command("/prompt")
-        assert "CRITICAL TEXTING RULES" in res
-        assert "NEVER USE QUESTION MARKS" in res
-        assert "NO REPETITION / NO SPAM" in res
+        assert "DECIDE WHETHER TO REPLY FIRST" in res
+        assert "WRITE THE USEFUL PART ONLY" in res
+        assert "Silence is an intended result" in res
         assert len(res) > 1200
 
     asyncio.run(_run())
@@ -1534,6 +1541,7 @@ def test_reactions_only_for_relative_sentiment(tmp_path: Path):
         mgr.set_telegram_client(mock_client)
 
         # 1. Neutral message without sentiment: reaction is skipped (False)
+        enable_auto_replies(mgr, 101)
         neutral_res = await mgr.maybe_send_reaction(101, 1, "the table has four legs")
         assert neutral_res is False
 
@@ -1669,14 +1677,14 @@ def test_allowchat_details_with_name_and_username(tmp_path: Path):
     asyncio.run(_run())
 
 
-def test_typing_indicator_while_ai_generates(tmp_path: Path):
-    """Verify typing indicator action is triggered while AI generates response in restricted_auto mode."""
+def test_typing_indicator_before_model_generated_reply(tmp_path: Path, clock):
+    """Verify the typing indicator before actual delivery, after a model generated a reply."""
     async def _run():
         cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
         db = Database(tmp_path / "typing_ind.db")
         safety = SafetyManager(cfg, db)
         privacy = PrivacyManager(cfg, database=db)
-        generator = ReplyGenerator(cfg, database=db)
+        generator = ReplyGenerator(cfg, provider=MagicMock(generate_reply=MagicMock(return_value="Release ready today")), database=db)
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
         mgr.set_mode("restricted_auto")
 
@@ -1693,7 +1701,7 @@ def test_typing_indicator_while_ai_generates(tmp_path: Path):
         mock_client.send_message = AsyncMock(return_value=MagicMock(id=999))
         mgr.set_telegram_client(mock_client)
 
-        privacy.allow_chat(12345)
+        enable_auto_replies(mgr, 12345)
         # Handle message in restricted_auto mode
         await mgr.handle_incoming_eligible_message(
             chat_id=12345,
@@ -1711,7 +1719,7 @@ def test_typing_indicator_while_ai_generates(tmp_path: Path):
     asyncio.run(_run())
 
 
-def test_typing_rhythm_and_pause_bursts(tmp_path: Path):
+def test_typing_rhythm_and_pause_bursts(tmp_path: Path, clock):
     """Verify typing duration >= 3.5s produces realistic pause bursts."""
     async def _run():
         cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
@@ -1721,6 +1729,7 @@ def test_typing_rhythm_and_pause_bursts(tmp_path: Path):
         generator = ReplyGenerator(cfg, database=db)
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
         mgr.typing_delay = 5.0
+        enable_auto_replies(mgr, 123)
 
         actions = []
         class MockActionContext:
@@ -1742,7 +1751,7 @@ def test_typing_rhythm_and_pause_bursts(tmp_path: Path):
     asyncio.run(_run())
 
 
-def test_typo_injection_and_auto_correction(tmp_path: Path):
+def test_typo_injection_and_auto_correction(tmp_path: Path, clock):
     """Verify typo injection and *correction follow-up message simulation."""
     # 1. Verification of typo logic
     orig = "sounds good bro"
@@ -1787,15 +1796,16 @@ def test_typo_injection_and_auto_correction(tmp_path: Path):
         mgr.set_telegram_client(mock_client)
 
         # Force typo injection in _send_reply by temporarily patching probability to 1.0
+        enable_auto_replies(mgr, 555)
         orig_maybe = mgr.maybe_inject_typo_correction
         mgr.maybe_inject_typo_correction = lambda t, **kw: orig_maybe(t, probability=1.0)
 
         await mgr._send_reply(chat_id=555, reply_to_msg_id=0, text="sounds good bro", adaptive_delay=False)
         assert len(sent_messages) == 1
         # The sent message initially had the typo
-        assert sent_messages[0] != "sounds good bro"
+        assert sent_messages[0] != "Sounds good bro"
         # The message was edited in-place clean (never sending *word)
-        mock_client.edit_message.assert_awaited_once_with(555, 1, "sounds good bro")
+        mock_client.edit_message.assert_awaited_once_with(555, 1, "Sounds good bro")
 
     asyncio.run(_run())
 
@@ -1979,7 +1989,7 @@ def test_goodnight_signoff_ai_generated_only(tmp_path: Path):
     assert gen2.generate_goodnight_signoff() == "retrying sleep schedule, goodnight guys"
 
 
-def test_floodwait_and_peerflood_handling(tmp_path: Path):
+def test_floodwait_and_peerflood_handling(tmp_path: Path, clock):
     """Verify Telegram FloodWaitError pauses automation and PeerFloodError activates emergency stop."""
     async def _run():
         cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
@@ -2000,6 +2010,7 @@ def test_floodwait_and_peerflood_handling(tmp_path: Path):
                 raise MockFloodWait()
 
         mgr.set_telegram_client(FloodClient())
+        enable_auto_replies(mgr, 101)
 
         # FloodWait triggers timed pause
         sent1 = await mgr._send_reply(101, 1, "test message", adaptive_delay=False)
@@ -2021,7 +2032,7 @@ def test_floodwait_and_peerflood_handling(tmp_path: Path):
     asyncio.run(_run())
 
 
-def test_spontaneous_followup_command_and_execution(tmp_path: Path):
+def test_spontaneous_followup_command_and_execution(tmp_path: Path, clock):
     """Verify /followup command and spontaneous delayed follow-up behavior."""
     async def _run():
         cfg = AppConfig(
@@ -2037,10 +2048,12 @@ def test_spontaneous_followup_command_and_execution(tmp_path: Path):
         db = Database(tmp_path / "followup.db")
         safety = SafetyManager(cfg, db)
         privacy = PrivacyManager(cfg, database=db)
-        generator = ReplyGenerator(cfg, database=db)
+        generator = ReplyGenerator(cfg, provider=MagicMock(generate_reply=MagicMock(return_value="The release looks ready")), database=db)
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
         # 1. /followup command tests
+        enable_auto_replies(mgr, 1234, 5678)
+        db.set_state("spontaneous_followup_enabled", "1")
         res1 = await mgr.handle_control_command("/followup")
         assert "Spontaneous follow-ups" in res1
         assert "ENABLED" in res1
@@ -2103,7 +2116,7 @@ def test_incoming_burst_debouncer(tmp_path: Path):
         db = Database(tmp_path / "debounce.db")
         safety = SafetyManager(cfg, db)
         privacy = PrivacyManager(cfg, database=db)
-        generator = ReplyGenerator(cfg, database=db)
+        generator = ReplyGenerator(cfg, provider=MagicMock(generate_reply=MagicMock(return_value="The release looks ready")), database=db)
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
         # 1. /debounce command checks
@@ -2124,7 +2137,7 @@ def test_incoming_burst_debouncer(tmp_path: Path):
         mock_client.send_message = AsyncMock(return_value=MagicMock(id=999))
         mgr.set_telegram_client(mock_client)
         # Authorize auto
-        safety.set_auto_authorization(True)
+        enable_auto_replies(mgr, 4444)
 
         # Set 0.15s debounce window
         db.set_state("debounce_enabled", "1")
@@ -2160,7 +2173,7 @@ def test_incoming_burst_debouncer(tmp_path: Path):
     asyncio.run(_run())
 
 
-def test_multibubble_splitting_and_controls(tmp_path: Path):
+def test_multibubble_splitting_and_controls(tmp_path: Path, clock):
     """Verify multi-bubble splitting controls and rapid sequential sending."""
     async def _run():
         cfg = AppConfig(
@@ -2208,6 +2221,7 @@ def test_multibubble_splitting_and_controls(tmp_path: Path):
         mgr.set_telegram_client(mock_client)
 
         chat_id = 9999
+        enable_auto_replies(mgr, chat_id)
         await mgr._send_reply(
             chat_id=chat_id,
             reply_to_msg_id=10,
@@ -2217,7 +2231,7 @@ def test_multibubble_splitting_and_controls(tmp_path: Path):
         # Should have sent 2 sequential message bubbles
         assert mock_client.send_message.call_count == 2
         calls = [c[0][1] for c in mock_client.send_message.call_args_list]
-        assert calls == ["sounds good", "will let you know"]
+        assert calls == ["Sounds good", "Will let you know"]
 
         # Now test with multibubble disabled
         db.set_state("multibubble_enabled", "0")
@@ -2230,7 +2244,7 @@ def test_multibubble_splitting_and_controls(tmp_path: Path):
         )
         # Should have sent only 1 message bubble
         assert mock_client.send_message.call_count == 1
-        assert mock_client.send_message.call_args[0][1] == "sounds good... will let you know"
+        assert mock_client.send_message.call_args[0][1] == "Sounds good... will let you know"
 
     asyncio.run(_run())
 
@@ -2261,7 +2275,7 @@ def test_group_broadcast_and_human_engagement(tmp_path: Path):
         db = Database(tmp_path / "group_engage.db")
         safety = SafetyManager(cfg, db)
         privacy = PrivacyManager(cfg, database=db)
-        generator = ReplyGenerator(cfg, database=db)
+        generator = ReplyGenerator(cfg, provider=MagicMock(generate_reply=MagicMock(return_value="The release looks ready")), database=db)
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
         safety.set_auto_authorization(True)
 
@@ -2360,8 +2374,8 @@ def test_event_handler_group_broadcast_engagement(tmp_path: Path):
         with patch("random.random", return_value=0.1):
             await callback(event)
 
-        # Account engaged in the group with text reply
-        assert mock_client.send_message.call_count >= 1
+        # A generic room greeting does not demand a text reply.
+        mock_client.send_message.assert_not_awaited()
 
     asyncio.run(_run())
 
@@ -2390,6 +2404,7 @@ def test_self_edit_fix_simulation(tmp_path: Path):
         mgr._client = client
 
         original = "bro my phone glitched hard"
+        enable_auto_replies(mgr, -100)
         with patch("app.reply_manager.random.random", return_value=0.05), \
                 patch("app.reply_manager.random.uniform", return_value=0.0), \
                 patch("app.reply_manager.asyncio.sleep", new=AsyncMock(return_value=None)):
@@ -2398,8 +2413,8 @@ def test_self_edit_fix_simulation(tmp_path: Path):
         assert ok is True
         # Exactly one bubble was sent, and a fast same-message edit followed with the clean original text
         sent_text = client.send_message.await_args.args[1]
-        assert sent_text != original  # typo'd version went out first
-        client.edit_message.assert_awaited_once_with(-100, 734, original)
+        assert sent_text != "Bro my phone glitched hard"  # typo'd version went out first
+        client.edit_message.assert_awaited_once_with(-100, 734, "Bro my phone glitched hard")
 
     asyncio.run(_run())
 
@@ -2450,6 +2465,7 @@ def test_recent_replies_persist_across_restart(tmp_path: Path):
         client = MagicMock()
         client.send_message = AsyncMock(return_value=SimpleNamespace(id=9))
         mgr._client = client
+        enable_auto_replies(mgr, 55)
 
         with patch("app.reply_manager.random.random", return_value=0.99), \
                 patch("app.reply_manager.random.uniform", return_value=0.0), \
@@ -2460,7 +2476,7 @@ def test_recent_replies_persist_across_restart(tmp_path: Path):
 
         # Simulate restart: new manager loads persisted history
         mgr2 = ReplyManager(cfg, db, safety, privacy, generator)
-        assert "shipping todays build now on main" in mgr2._recent_replies_history[55]
+        assert "Shipping todays build now on main" in mgr2._recent_replies_history[55]
         # Duplicate reply is suppressed after the restart
         assert mgr2._prevent_duplicate_reply(55, "shipping todays build now on main") == ""
 
@@ -2601,11 +2617,11 @@ def test_per_chat_prompt_and_context_passed_to_generator(tmp_path: Path):
         assert call_kwargs["persona_override"] == "Custom prompt: always mention @admin when asked"
         assert "no advertising allowed" in call_kwargs["permanent_context"]
 
-        # Check reply was sent with swipe-to-reply (reply_to=305) even though is_mention=False
+        # A useful group contribution posts without a quote.
         assert len(sent_calls) == 1
         chat_id, text, reply_to = sent_calls[0]
         assert chat_id == -100999
-        assert reply_to == 305
+        assert reply_to is None
         assert "lead" in text
 
     asyncio.run(_run())

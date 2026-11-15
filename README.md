@@ -13,7 +13,7 @@
 [![Setup Requirements](https://img.shields.io/badge/Setup-Requirements%20Guide-blueviolet.svg)](REQUIREMENTS.md)
 [![Telegram Mini App](https://img.shields.io/badge/GUI-Telegram%20Mini%20App-0088cc.svg)](miniapp/)
 [![License](https://img.shields.io/badge/license-Source--Available-red.svg)](LICENSE)
-[![Tests Passing](https://img.shields.io/badge/tests-191%2F191%20passed-brightgreen.svg)](test.sh)
+[![Tests](https://img.shields.io/badge/tests-pytest-blue.svg)](test.sh)
 
 > 🔑 **First Time Setup & Requirements Guide**  
 > Wondering which API keys, Telegram IDs, and environment settings are required? Read **[REQUIREMENTS.md](REQUIREMENTS.md)** for a beginner-friendly walkthrough on where to get your `TG_API_ID`, `TG_API_HASH`, bot token, and free AI key.
@@ -57,6 +57,9 @@ TeleAutomator includes a built-in Telegram Mini App running concurrently on the 
 - **Chats & Memory Management**: Capsule-style chat cards showing profile initials, titles, allowlist status, per-chat custom personas, voice profiles, and isolated disk context files (`data/contexts/{chat_id}.json`).
 - **AI Engine & Testing Playground**: Custom base URL configuration, live model fetch from `/models` endpoints, multi-model selection with automatic fallback rotation, and an interactive test playground.
 - **Draft Approvals**: Approve or reject drafts with in-place card updates (zero message deletions on Telegram).
+- **Action History & Diagnostics**: More → Action history shows sent, skipped, blocked, and failed actions with filters and live engine details. It keeps at most 1,100 metadata entries, excluding message bodies and command arguments.
+- **Reply Feedback & Stages**: Rate automated messages from Overview → Recent replies as helpful, unneeded, off-topic, or a style mismatch. More → Reply feedback & stages shows the ratings, filters, and context/writer/local-check stages. Ratings guide only their own chat, and rejected replies are checked before sending again.
+- **Preference Export & Import**: The main owner can download a JSON backup and preview a merge before applying it. Reply settings, keyword rules, and separate chat profiles are included; credentials, access permissions, and conversation history are excluded. Keep exported prompts and notes private.
 - **Access Control & Paywall**: Multi-user permissions with an automated authorization note (100 Stars or 1 TON to `@mkr_infinity`).
 
 ---
@@ -102,6 +105,7 @@ Manage your automation straight from your phone by texting your **Control Bot**:
 | **`/removechat <id>`** | Removes a chat from allowlist | `/removechat 123456789` |
 | **`/mentiononly <on\|off>`** | Reply in groups only when tagged or replied to | `/mentiononly on` |
 | **`/miniapp`** | Launches the TeleAutomator Mini App control panel | `/miniapp` |
+| **`/feedback [chat_id message_id rating]`** | Review ratings or rate an automated reply; `helpful`, `unnecessary`, `off_topic`, `style`, `clear` | `/feedback -100123 42 off_topic` |
 
 ### AI Models, Quota & Cooldowns
 | Command | Action | Example |
@@ -122,6 +126,14 @@ Manage your automation straight from your phone by texting your **Control Bot**:
 | **`/stop`** | **Emergency kill switch**: immediately halts all outgoing messages | `/stop` |
 | **`/resume`** | Resumes automation and clears all stops/pauses | `/resume` |
 
+Custom chat cooldowns override the default range; resetting a chat restores the default. Each outgoing bubble follows the current cooldown and safety controls. Removed chats and revoked users stay removed after a restart, including entries originally configured in the environment.
+
+Only allowed chats are processed or cached. `/clearcontext` clears that chat's rolling history and recap while keeping its permanent notes, pins, persona, and voice profile. In-flight summaries and history fetches cannot restore cleared memory. The Mini App enforces the same command grants as the control bot.
+
+Group participation samples relevant conversations using the per-chat rate or global default (15% unless configured). Other people's reply threads and routine closers are ignored. Group messages post without quoted replies. The master prompt permits `NONE` for intentional silence; custom personas inherit the same rules. Outgoing checks block @tags, links, and known participant names, including keyword replies and approvals. Unfamiliar names still rely on the prompt. Identity and automation questions stay silent for the account owner to answer.
+
+Reply preparation has three stages. A background context worker observes safe messages from allowed chats even in mention-only mode, coalesces updates to `data/contexts/{chat_id}.json`, and batches model recaps after new messages. Automatic recap attempts are at least 60 seconds apart per chat, with at most two recap jobs running together. The writer uses current messages, that chat’s notes/persona/voice, and recent owner feedback. A local final stage enforces text rules without another model call; stale unsolicited group drafts and drafts made before a memory reset are discarded. Feedback also applies to approved and keyword replies at delivery. Up to 500 ratings are retained, separately from the rolling message cache; clearing chat memory clears its ratings too. Model relevance still requires real-chat review.
+
 ---
 
 ## 🧪 Testing & Verification
@@ -132,7 +144,13 @@ Run the automated test suite locally:
 # Or via universal runner:
 python run.py --test
 ```
-**191 passing unit tests** covering configuration, safety guards, quiet hours, randomized cooldowns, permanent context caching, pinned message syncing, adaptive typing, and mock MTProto workflows.
+Tests cover configuration, authorization, safety guards, quiet hours, live custom cooldowns, isolated chat memory, duplicate approvals, and mocked Telegram/AI workflows. Install Node.js to include the Mini App JavaScript workflow checks; pytest skips that check when Node.js is unavailable. No live Telegram account or AI API key is needed.
+
+With Playwright and Chromium installed, pytest also checks the real Mini App in a mobile browser: popup scrolling, small swipes, fullscreen compatibility, keyboard resizing, failed saves, repeated taps, preserved drafts, and reconnects across six window sizes. These checks use local fixtures. `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` can select an existing Chromium binary.
+
+The Mini App requests fullscreen on supported Telegram clients, respects Telegram/system safe areas, and disables body swipes that would minimize it. Telegram still controls its native header gestures. Settings use expandable sections; popups keep failed edits visible and require confirmation before discarding unsaved input. Public assets are cached separately from authenticated API responses.
+
+Automated outgoing messages start with a capital letter, including each separate bubble and approved draft. Remaining casing, such as `API` and `iPhone`, is preserved.
 
 ---
 

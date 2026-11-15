@@ -1,10 +1,10 @@
-/* TeleAutomator Service Worker - Always Fresh (Network-First) with Offline Cache Fallback */
-const CACHE_NAME = "teleautomator-v3.0.4";
+/* Cache public assets only. API responses and Telegram credentials stay on the network. */
+const CACHE_NAME = "teleautomator-v3.0.9";
 const ASSETS_TO_CACHE = [
   "./",
   "./index.html",
-  "./style.css",
-  "./app.js",
+  "./style.css?v=3.0.9",
+  "./app.js?v=3.0.9",
   "./logo.svg"
 ];
 
@@ -22,7 +22,7 @@ self.addEventListener("activate", (event) => {
     caches.keys().then((keys) => {
       return Promise.all(
         keys.map((key) => {
-          if (key !== CACHE_NAME) {
+          if (key.startsWith("teleautomator-") && key !== CACHE_NAME) {
             return caches.delete(key);
           }
         })
@@ -37,26 +37,21 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(req.url);
 
-  // Dynamic API endpoints and SSE event streams always bypass cache
-  if (url.pathname.includes("/api/")) return;
-
-  // Network-First strategy: always fetch freshest assets from server; fall back to cache when offline
-  event.respondWith(
-    fetch(req)
-      .then((networkResponse) => {
-        if (networkResponse && networkResponse.status === 200) {
-          const clone = networkResponse.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(req, clone));
-        }
-        return networkResponse;
-      })
-      .catch(() => {
-        return caches.match(req).then((cached) => {
-          if (cached) return cached;
-          if (req.mode === "navigate") {
-            return caches.match("./index.html");
-          }
-        });
-      })
-  );
+  if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
+  if (req.mode !== "navigate" && !["/app.js", "/style.css", "/logo.svg"].includes(url.pathname)) return;
+  event.respondWith((async () => {
+    const cache = await caches.open(CACHE_NAME).catch(() => null);
+    const cached = await cache?.match(req.mode === "navigate" ? "./index.html" : req).catch(() => null);
+    if (cached && req.mode !== "navigate") return cached;
+    const network = fetch(req).then(async (response) => {
+      if (response.ok && cache) await cache.put(req.mode === "navigate" ? "./index.html" : req, response.clone()).catch(() => {});
+      return response;
+    });
+    if (!cached) return network;
+    event.waitUntil(network.catch(() => {}));
+    return Promise.race([
+      network.then(response => response.ok ? response : cached).catch(() => cached),
+      new Promise(resolve => setTimeout(() => resolve(cached), 2500)),
+    ]);
+  })());
 });

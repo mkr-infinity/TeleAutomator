@@ -86,7 +86,7 @@ def test_chatty_card_lists_per_chat_overrides(tmp_path: Path):
     mgr = _make_manager(tmp_path)
     card = asyncio.run(mgr.handle_control_command("/chatty"))
     assert "Group Banter Rate" in card
-    assert "30" in card and "60" in card  # default band documented
+    assert "15%" in card and "follow the global rate" in card
 
     mgr.privacy.allow_chat(-100777)
     mgr.db.set_state("chat_chatty_-100777", "0.5")
@@ -140,7 +140,7 @@ def test_chatty_picker_markup_and_callback_routing(tmp_path: Path):
     calls.clear()
     asyncio.run(bot._handle_callback(cb("chatty:-100777:show")))
     answered = [p for m, p in calls if m == "answerCallbackQuery"]
-    assert answered and "default band" in answered[0]["text"]
+    assert answered and "global default" in answered[0]["text"]
 
     # Unauthorized user cannot change anything
     calls.clear()
@@ -301,7 +301,7 @@ def test_per_group_custom_prompt_isolation_and_default_fallback():
     assert "DEFAULT LANGUAGE (ENGLISH)" in inst_a  # language was not mentioned -> default English
     assert "NATURAL MESSAGE LENGTH" in inst_a      # word limit was not mentioned -> default length
     assert "STRICT ON-TOPIC MANDATE" in inst_a     # on-topic rule retained
-    assert "HUMAN ALIBI" in inst_a                 # anti-AI alibi retained
+    assert "MANDATORY REPLY POLICY" in inst_a      # abstention and privacy apply to every persona
     assert "NO CODE" in inst_a                     # no code retained
 
     # 2. Group B has NO custom prompt set (persona_override is None/empty)
@@ -310,13 +310,14 @@ def test_per_group_custom_prompt_isolation_and_default_fallback():
     # Group B strictly uses default instructions — NEVER inherits Group A or global custom prompt
     assert "Solana" not in inst_b
     assert "GLOBAL_FALLBACK_PERSONA" not in inst_b
-    assert "Real human friend chatting on mobile" in inst_b
+    assert "normal conversational voice" in inst_b
 
 
 def test_init_chat_context_creates_disk_file_and_memory(tmp_path: Path):
     """Verify init_chat_context immediately creates disk file and initializes permanent context for a new chat."""
     mgr = _make_manager(tmp_path)
     new_grp = -100777888
+    mgr.privacy.allow_chat(new_grp)
 
     # Initialize context for new chat
     asyncio.run(mgr.init_chat_context(new_grp))

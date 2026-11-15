@@ -85,7 +85,8 @@ def test_reply_generator_with_history(tmp_path: Path):
         data_dir=tmp_path,
         ai_enabled=False,  # Uses LocalRuleProvider
     )
-    generator = ReplyGenerator(cfg, provider=LocalRuleProvider())
+    from unittest.mock import MagicMock
+    generator = ReplyGenerator(cfg, provider=MagicMock(generate_reply=MagicMock(return_value="The release looks ready")))
     assert generator.style == "casual"
     generator.set_style("concise")
     assert generator.style == "concise"
@@ -145,8 +146,9 @@ def test_system_prompt_word_limit():
     words = [w for w in content.split() if not w.startswith("#")]
     # Sweet spot is under 350 words to avoid instruction dilution
     assert len(words) <= 350
-    assert "BREVITY" in content
-    assert "HUMAN ALIBI" in content
+    assert "NONE" in content
+    assert "short" in content
+    assert "Do not invent a human denial" in content
 
 
 def test_openai_provider_candidate_models_and_fallback():
@@ -186,7 +188,8 @@ def test_openai_provider_candidate_models_and_fallback():
         result = provider.generate_reply("Hi", "Be brief")
         assert result == "Fallback reply from mercury-3"
         # Verified provider switched active model to the working fallback
-        assert provider.model == "mercury-3"
+        assert provider.active_model == "mercury-3"
+        assert provider.model == "non_existent_model"
         assert call_count == 2
 
 
@@ -231,7 +234,8 @@ def test_custom_prompt_wrapping_and_anti_ai_guardrails():
     assert "crypto trader and gamer" in instructions
     # Core anti-AI guardrails are strictly preserved
     assert "NATURAL MESSAGE LENGTH" in instructions
-    assert "HUMAN ALIBI" in instructions
+    assert "Automation or bot/human verification questions are left to the account owner" in instructions
+    assert "MANDATORY REPLY POLICY" in instructions
     assert "SLANG" in instructions
     assert "NO CODE" in instructions
 
@@ -426,8 +430,8 @@ def test_clean_reply_suppresses_none_and_word_repetition():
     assert pm.clean_reply("cool cool cool") == "cool"
 
 
-def test_natural_emoji_rule_and_active_group_engagement():
-    """Verify the unlimited natural emoji rule and active group engagement instructions are in prompt."""
+def test_natural_emoji_rule_and_selective_group_engagement():
+    """Relevant participation is optional; emoji instructions never force a reply."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
     prompt = pm.build_user_prompt(sender_name="Alex", incoming_text="anyone working on the bot", is_group=True)
     sys_inst = pm.system_instructions
@@ -443,9 +447,9 @@ def test_natural_emoji_rule_and_active_group_engagement():
     assert "USE THE GROUP MEMORY" in prompt
     assert "generic filler" in prompt
 
-    # Active group engagement instruction present
-    assert "active Telegram user" in prompt
-    assert "understand discussions" in prompt or "chime in naturally" in prompt
+    assert "occasionally join a relevant open conversation" in prompt
+    assert "ignore other people's threads" in prompt
+    assert "output exactly NONE" in prompt
 
 
 def test_strict_word_limits_and_hard_cap():
@@ -549,7 +553,7 @@ def test_reply_generator_end_to_end_with_custom_prompt():
     """Verify ReplyGenerator.generate_reply works end-to-end without NameError on 're'."""
     from unittest.mock import MagicMock
     cfg = MagicMock()
-    provider = LocalRuleProvider()
+    provider = MagicMock(generate_reply=MagicMock(return_value="The release looks ready"))
     generator = ReplyGenerator(config=cfg, provider=provider)
 
     reply = generator.generate(

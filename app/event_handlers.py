@@ -9,7 +9,7 @@ from typing import Any
 from telethon import events
 
 from app.logger import setup_logger
-from app.message_filter import MessageFilter
+from app.message_filter import MessageFilter, is_account_addressed
 from app.reply_manager import ReplyManager
 
 logger = setup_logger(__name__)
@@ -18,15 +18,15 @@ logger = setup_logger(__name__)
 def adjust_engagement_for_room_heat(base_prob: float, recent_messages: int) -> float:
     """Scale group chime-in probability by how active the room is (5-minute window).
 
-    A present human talks more when the room is buzzing and stays quiet when it is
-    dead — engaging without ever becoming spammy:
-    - busy room (>=3 recent messages): boost by 1.4x, capped at 0.55
-    - dead room (<=1 recent message): dampen to 0.6x (floor 0.02)
+    Busy rooms never increase the configured chance; quiet rooms dampen it.
+    A zero setting always remains zero.
     """
+    if base_prob <= 0:
+        return 0.0
     if recent_messages >= 3:
-        return min(0.55, base_prob * 1.4)
+        return min(1.0, base_prob)
     if recent_messages <= 1:
-        return max(0.02, base_prob * 0.6)
+        return base_prob * 0.6
     return base_prob
 
 
@@ -53,7 +53,9 @@ def is_thread_ender(text: str) -> bool:
     t = (text or "").strip().lower()
     if not t:
         return False
-    words = re.findall(r"[a-z]+", t)
+    if "?" in t or "？" in t:
+        return False
+    words = re.findall(r"[^\W\d_]+", t)
     if not words:
         # emoji-only or punctuation-only message: a reaction, not an opening
         return True
@@ -67,12 +69,9 @@ def is_thread_ender(text: str) -> bool:
 
 
 def decide_thread_end_action(is_group: bool, roll: float) -> str:
-    """Policy for conversation-closer messages: groups let the thread die (maybe a small
-    reaction); DMs allow a tiny acknowledgment sometimes, else react or leave on read."""
+    """Conversation closers never trigger another text reply."""
     if is_group:
         return "reaction" if roll < 0.20 else "silent"
-    if roll < 0.40:
-        return "reply"
     if roll < 0.65:
         return "reaction"
     return "silent"
@@ -87,6 +86,9 @@ def record_own_outgoing_message(reply_manager: ReplyManager, event: Any, my_user
     text = (getattr(event, "raw_text", "") or "").strip()
     if chat_id is None or not text:
         return
+    if not reply_manager.privacy.is_chat_allowed(chat_id, chat_id < 0) or reply_manager.safety.is_sensitive(text):
+        return
+    text = reply_manager.privacy.sanitize_text(text)
     if reply_manager.db.has_chat_message(chat_id, getattr(event, "id", None)):
         return
     try:
@@ -98,6 +100,7 @@ def record_own_outgoing_message(reply_manager: ReplyManager, event: Any, my_user
             text=text,
             is_outgoing=True,
         )
+        reply_manager.context_agent.observe(chat_id)
     except Exception:
         pass
 
@@ -125,6 +128,8 @@ def register_handlers(
         )
         if is_saved_messages:
             return
+        if chat_id is None or not reply_manager.privacy.is_chat_allowed(chat_id, getattr(event, "is_group", False)):
+            return
 
         # Context continuity: always record the owner's own manually-typed outgoing messages
         # so the AI remembers what the account itself said (not just what it received).
@@ -132,16 +137,9 @@ def register_handlers(
             record_own_outgoing_message(reply_manager, event, my_user_id)
 
         # Regular incoming message handling
-        is_eligible, reason = message_filter.evaluate(event)
+        is_eligible, reason = message_filter.evaluate_context(event)
         if not is_eligible:
-            # Helper log for users: shows the Chat ID so they can easily copy it into .env
-            if "not allowlisted" in reason and chat_id:
-                logger.info(
-                    f"[CHAT DETECTED] Received message from Chat ID: {chat_id}. "
-                    f"To allow replies for this contact/group, add {chat_id} to ALLOWED_PRIVATE_CHATS in .env"
-                )
-            else:
-                logger.debug(f"Message ignored: {reason}")
+            logger.debug(f"Message ignored: {reason}")
             return
 
         is_group = getattr(event, "is_group", False)
@@ -154,20 +152,19 @@ def register_handlers(
         is_reply_to_me = False
         is_reply_to_other = False
         reply_target_name = ""
+        owner_name = reply_manager.db.get_state("owner_name", "") or ""
+        my_username = message_filter.my_username or ""
 
         if is_group and reply_manager.db:
-            raw_text_lower = text.lower()
             my_username = (message_filter.my_username or "").lower()
             owner_name = (reply_manager.db.get_state("owner_name", "") or "").strip().lower()
 
-            if message_obj and getattr(message_obj, "mentioned", False):
-                is_explicitly_mentioned = True
-            elif my_username and f"@{my_username}" in raw_text_lower:
-                is_explicitly_mentioned = True
-            elif owner_name and len(owner_name) >= 3 and re.search(r"\b" + re.escape(owner_name) + r"\b", raw_text_lower):
-                is_explicitly_mentioned = True
+            is_explicitly_mentioned = is_account_addressed(text, my_username, owner_name,
+                                                          bool(message_obj and getattr(message_obj, "mentioned", False)))
 
             if getattr(event, "is_reply", False):
+                # An unresolved quote must not be treated as an open room invitation.
+                is_reply_to_other = True
                 try:
                     reply_msg = await event.get_reply_message()
                     if reply_msg:
@@ -175,6 +172,7 @@ def register_handlers(
                         reply_out = getattr(reply_msg, "out", False)
                         if reply_out or reply_sender_id == my_user_id:
                             is_reply_to_me = True
+                            is_reply_to_other = False
                         else:
                             is_reply_to_other = True
                             try:
@@ -187,6 +185,9 @@ def register_handlers(
                     pass
 
         is_mention = not is_group or (is_explicitly_mentioned or is_reply_to_me)
+        addressless_text = re.sub(r"@\w+", "", text)
+        if owner_name:
+            addressless_text = re.sub(r"\b" + re.escape(owner_name) + r"\b", "", addressless_text, flags=re.IGNORECASE)
 
         # Resolve chat title and sender name safely
         chat_title = f"Chat {chat_id}"
@@ -214,26 +215,31 @@ def register_handlers(
                 pass
 
         sender_name = "User"
+        sender_label = sender_name
         sender_id = getattr(event, "sender_id", None)
         try:
             sender = await event.get_sender()
-            if hasattr(sender, "first_name") and sender.first_name:
-                sender_name = sender.first_name
-            elif hasattr(sender, "username") and sender.username:
-                sender_name = f"@{sender.username}"
+            full_name = " ".join(value for value in (getattr(sender, "first_name", ""), getattr(sender, "last_name", "")) if isinstance(value, str) and value)
+            username = getattr(sender, "username", "")
+            username = username if isinstance(username, str) else ""
+            sender_name = full_name or (f"@{username}" if username else "User")
+            sender_label = f"{sender_name} (@{username})" if full_name and username else sender_name
         except Exception:
             pass
 
         # Cache current incoming message into local SQLite database with reply target context
-        recorded_sender = f"{sender_name} (to {reply_target_name})" if reply_target_name else sender_name
+        if not reply_manager.privacy.is_chat_allowed(chat_id, is_group):
+            return
+        recorded_sender = f"{sender_label} (to {reply_target_name})" if reply_target_name else sender_label
         reply_manager.db.record_chat_message(
             chat_id=chat_id,
             message_id=message_id,
             sender_id=sender_id,
             sender_name=recorded_sender,
-            text=text,
+            text=reply_manager.privacy.sanitize_text(text),
             is_outgoing=False,
         )
+        reply_manager.context_agent.observe(chat_id)
 
         # Group smart engagement decision
         if is_group and reply_manager.db:
@@ -243,42 +249,22 @@ def register_handlers(
                 logger.debug(f"Group message in {chat_id} ignored: strict mention-only active.")
                 return
 
-            is_broadcast_or_greeting = reply_manager.is_group_broadcast_or_greeting(text)
+            if not is_mention and (is_reply_to_other or re.search(r"@\w+", text)):
+                reply_manager.db.record_action("automation", "reply", "skipped", "Message addresses another participant", chat_id=chat_id)
+                return
+
+            if is_thread_ender(addressless_text):
+                reply_manager.db.record_action("automation", "reply", "skipped", "Conversation already ended", chat_id=chat_id)
+                return
 
             if is_mention:
-                # Direct mention or reply to our account: always reply
+                # Addressed messages can proceed; the model may still choose NONE.
                 reply_manager.mark_group_activity(chat_id)
-            elif is_broadcast_or_greeting:
-                # Group-wide greeting or open callout (e.g. "hi guys", "hello everyone", "gm all", "anyone free"):
-                # Active human engagement: acknowledge group greetings (~85% reply, ~10% emoji reaction)
-                roll = random.random()
-                if roll < 0.85:
-                    logger.info(f"[GROUP GREETING ENGAGEMENT] Message in {chat_id} addressed the group ('{text[:30]}'). Replying as human.")
-                    reply_manager.mark_group_activity(chat_id)
-                elif roll < 0.95:
-                    logger.info(f"[GROUP GREETING REACTION] Reacting with emoji to group greeting in chat {chat_id}.")
-                    await reply_manager.maybe_send_reaction(chat_id, message_id, text)
-                    reply_manager.mark_group_activity(chat_id)
-                    return
-                else:
-                    logger.debug(f"Group broadcast message in {chat_id} acknowledged silently.")
-                    return
             else:
-                # Natural conversation endings: someone else's "gn bro" / "ok cool" / laughter
-                # closes THEIR thread — a real human doesn't chime in; maybe a small reaction.
-                if is_thread_ender(text):
-                    action = decide_thread_end_action(is_group=True, roll=random.random())
-                    if action == "reaction":
-                        logger.info(f"[THREAD END] Reacting with emoji to conversation closer in group {chat_id}.")
-                        await reply_manager.maybe_send_reaction(chat_id, message_id, text)
-                        reply_manager.mark_group_activity(chat_id)
-                    else:
-                        logger.debug(f"Group thread ended in {chat_id} ('{text[:30]}') — letting it die naturally.")
+                if not reply_manager.is_group_message_relevant(chat_id, text, chat_title):
+                    reply_manager.db.record_action("automation", "reply", "skipped", "No relevant contribution requested", chat_id=chat_id)
                     return
-
-                # Active group conversation (even when replying to another member or sending into group stream):
-                # Engages dynamically based on chatty rate without waiting 20 minutes!
-                # Priority: custom prompt ratio (e.g. '6 times in 10 sends') → per-chat override (inline picker) → explicitly-set global → human default band 30-60%.
+                # Frequencies are ceilings for relevant messages, not permission to interrupt other threads.
                 prompt_chatty = None
                 try:
                     chat_p_text = reply_manager.db.get_chat_prompt(chat_id) if hasattr(reply_manager.db, "get_chat_prompt") else reply_manager.db.get_state(f"chat_prompt_{chat_id}")
@@ -302,32 +288,27 @@ def register_handlers(
 
                 per_chat_chatty = reply_manager.db.get_state(f"chat_chatty_{chat_id}")
                 global_chatty_raw = reply_manager.db.get_state("chatty_probability")
-                band_prob = random.uniform(0.30, 0.60)
-                if prompt_chatty is not None:
-                    chatty_prob = prompt_chatty
-                    effective_prob = prompt_chatty
-                    logger.info(f"[PROMPT RATIO ENGAGEMENT] Group {chat_id} following custom prompt ratio: {prompt_chatty:.2f} (from instructions).")
-                elif per_chat_chatty:
+                band_prob = float(getattr(reply_manager.config, "chatty_probability", 0.15))
+                if per_chat_chatty:
                     try:
                         chatty_prob = float(per_chat_chatty)
                     except ValueError:
                         chatty_prob = band_prob
-                    is_relevant = reply_manager.is_group_message_relevant(chat_id, text, chat_title)
-                    effective_prob = max(chatty_prob, 0.40) if is_relevant else chatty_prob
+                    effective_prob = chatty_prob
+                elif prompt_chatty is not None:
+                    effective_prob = prompt_chatty
+                    logger.info(f"[PROMPT RATIO ENGAGEMENT] Group {chat_id} following custom prompt ratio: {prompt_chatty:.2f} (from instructions).")
                 elif global_chatty_raw:
                     try:
                         chatty_prob = float(global_chatty_raw)
                     except ValueError:
                         chatty_prob = band_prob
-                    is_relevant = reply_manager.is_group_message_relevant(chat_id, text, chat_title)
-                    effective_prob = max(chatty_prob, 0.40) if is_relevant else chatty_prob
+                    effective_prob = chatty_prob
                 else:
                     chatty_prob = band_prob
-                    is_relevant = reply_manager.is_group_message_relevant(chat_id, text, chat_title)
-                    effective_prob = max(chatty_prob, 0.40) if is_relevant else chatty_prob
+                    effective_prob = chatty_prob
 
-                # Hot-chat adaptive engagement: talk more when the room is buzzing,
-                # stay quiet when it is dead — active but never spammy.
+                # Quiet rooms can reduce the configured chance, never increase it.
                 try:
                     recent_active = len(reply_manager.db.get_recent_chat_messages(
                         chat_id, limit=6, max_age_seconds=300
@@ -335,10 +316,6 @@ def register_handlers(
                 except Exception:
                     recent_active = 0
                 effective_prob = adjust_engagement_for_room_heat(effective_prob, recent_active)
-
-                # If replying to another member specifically, slightly moderate chime-in rate unless relevant
-                if is_reply_to_other and not is_relevant:
-                    effective_prob = effective_prob * 0.70
 
                 if effective_prob > 0.0 and random.random() < effective_prob:
                     # Decide between text reply (~80%) and emoji reaction (~20%)
@@ -351,13 +328,14 @@ def register_handlers(
                         reply_manager.mark_group_activity(chat_id)
                         return
                 else:
+                    reply_manager.db.record_action("automation", "reply", "skipped", "Occasional participation limit", chat_id=chat_id)
                     logger.debug(f"Group message in {chat_id} read silently (prob: {effective_prob:.2f}).")
                     return
 
         # Natural conversation endings (DMs & direct replies): when the other person closes the
         # loop ("gn", "ok cool", "thanks bro", laughter, emoji-only), a real human mostly reacts
         # or goes quiet instead of forcing another line. Real questions are never thread enders.
-        if not is_group and not is_mention and is_thread_ender(text):
+        if not is_group and is_thread_ender(addressless_text):
             action = decide_thread_end_action(is_group=False, roll=random.random())
             if action == "reaction":
                 logger.info(f"[THREAD END] Reacting with emoji to conversation closer in chat {chat_id}.")
@@ -366,9 +344,6 @@ def register_handlers(
             if action == "silent":
                 logger.info(f"[THREAD END] Left on read — conversation closed naturally in chat {chat_id}.")
                 return
-            logger.info("[THREAD END] Tiny acknowledgment to a conversation closer.")
-            reply_manager.mark_group_activity(chat_id)
-            # fall through to the normal reply flow (prompt rules keep it tiny)
 
         # Natural emoji reaction across sentiment spectrum (humor, excitement, agreement, surprise, warmth)
         if not is_group or not is_reply_to_other:
@@ -388,14 +363,15 @@ def register_handlers(
         max_age_secs = int(ttl_hours * 3600) if ttl_hours > 0 else None
         history_limit = 40 if getattr(event, "is_group", False) else 15
         conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=history_limit, max_age_seconds=max_age_secs)
-        if len(conversation_history) <= 2:
+        memory_epoch = reply_manager.db.get_state(f"chat_memory_epoch_{chat_id}")
+        if len(conversation_history) <= 2 and not memory_epoch:
             try:
                 recent_msgs = await client.get_messages(chat_id, limit=15)
                 if recent_msgs:
                     for m in reversed(recent_msgs):
                         m_id = getattr(m, "id", None)
                         m_text = (getattr(m, "raw_text", "") or "").strip()
-                        if not m_text:
+                        if not m_text or reply_manager.safety.is_sensitive(m_text):
                             continue
                         m_out = getattr(m, "out", False)
                         m_sender_id = getattr(m, "sender_id", None)
@@ -407,12 +383,15 @@ def register_handlers(
                                     s_name = s_obj.first_name
                             except Exception:
                                 pass
+                        if (not reply_manager.privacy.is_chat_allowed(chat_id, is_group)
+                                or reply_manager.db.get_state(f"chat_memory_epoch_{chat_id}") != memory_epoch):
+                            break
                         reply_manager.db.record_chat_message(
                             chat_id=chat_id,
                             message_id=m_id,
                             sender_id=m_sender_id,
                             sender_name=s_name,
-                            text=m_text,
+                            text=reply_manager.privacy.sanitize_text(m_text),
                             is_outgoing=m_out,
                         )
                     conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=history_limit, max_age_seconds=max_age_secs)
