@@ -298,6 +298,7 @@ class PromptManager:
         custom_limit: Optional[int] = None,
         allow_mentions: bool = False,
         incoming_text: Optional[str] = None,
+        use_global_limit: bool = True,
     ) -> str:
         """Remove any accidental AI meta-commentary, labels, brackets, or robotic filler."""
         text = raw_text.strip().strip('"').strip("'")
@@ -404,7 +405,7 @@ class PromptManager:
         # NATURAL LENGTH ENFORCEMENT: humans sometimes split a thought across 2 short lines,
         # so a short 2-line reply is kept intact; longer output falls back to one line.
         # Hard word caps stop essays without stiff word truncation.
-        custom_cap = custom_limit if custom_limit is not None else self.get_custom_word_limit()
+        custom_cap = custom_limit if custom_limit is not None else (self.get_custom_word_limit() if use_global_limit else None)
         if custom_cap is not None:
             words = text.split()
             if len(words) > custom_cap:

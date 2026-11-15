@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import math
 import random
 import re
 import time
@@ -369,25 +370,49 @@ class SafetyManager:
             return True, f"Quiet hours active (sleep schedule {start_str} - {end_str})"
         return False, f"Outside quiet hours ({start_str} - {end_str})"
 
-    def can_reply(self, chat_id: int, text: str) -> tuple[bool, str]:
-        """Verify whether an outgoing reply is safe and permitted."""
+    def action_block_reason(self, allow_quiet_hours: bool = False) -> str:
         if self.is_emergency_stopped:
-            return False, "Emergency stop active"
+            return "Emergency stop active"
 
         remaining_pause = self.get_remaining_pause_seconds()
         if remaining_pause > 0:
             mins = int(remaining_pause // 60)
             secs = int(remaining_pause % 60)
-            return False, f"Client is paused ({mins}m {secs}s remaining)"
+            return f"Client is paused ({mins}m {secs}s remaining)"
 
         # Quiet hours (sleep schedule)
         is_quiet, quiet_reason = self.is_in_quiet_hours()
-        if is_quiet:
-            return False, quiet_reason
+        if is_quiet and not allow_quiet_hours:
+            return quiet_reason
 
         now = time.time()
         if now < self._error_pause_until:
-            return False, f"Safety pause active for {int(self._error_pause_until - now)}s"
+            return f"Safety pause active for {int(self._error_pause_until - now)}s"
+        return ""
+
+    def cooldown_remaining(self, chat_id: int) -> tuple[float, str]:
+        now = time.time()
+        lo, hi = self._get_chat_cooldown_range(chat_id)
+        last_chat = self._last_chat_reply_time.get(chat_id)
+        if last_chat is None:
+            last_chat = self.db.get_last_reply_timestamp(chat_id)
+            self._last_chat_reply_time[chat_id] = last_chat
+        target = self._next_chat_cooldown.get(chat_id)
+        if target is None or not lo <= target <= hi:
+            target = self._pick_random_chat_cooldown(chat_id)
+            self._next_chat_cooldown[chat_id] = target
+        chat_wait = max(0.0, target - (now - last_chat)) if last_chat > 0 else 0.0
+        if not self.min_global_cooldown <= self._next_global_cooldown <= self.max_global_cooldown:
+            self._next_global_cooldown = self._pick_random_global_cooldown()
+        global_wait = max(0.0, self._next_global_cooldown - (now - self._last_global_reply_time)) if self._last_global_reply_time > 0 and (lo > 0 or hi > 0) else 0.0
+        return (chat_wait, f"Per-chat cooldown active for chat {chat_id}") if chat_wait >= global_wait else (global_wait, "Global cooldown active")
+
+    def can_reply(self, chat_id: int, text: str, *, allow_quiet_hours: bool = False) -> tuple[bool, str]:
+        """Verify whether an outgoing reply is safe and permitted."""
+        blocked = self.action_block_reason(allow_quiet_hours)
+        if blocked:
+            return False, blocked
+        now = time.time()
 
         if self.is_sensitive(text):
             return False, "Message matches sensitive/OTP content pattern"
@@ -411,53 +436,9 @@ class SafetyManager:
                 if recent_chat_min >= self.max_chat_replies_per_minute:
                     return False, f"Anti-spam chat burst limit reached ({recent_chat_min}/{self.max_chat_replies_per_minute} replies in last 60s for chat {chat_id})"
 
-        chat_min, chat_max = self._get_chat_cooldown_range(chat_id)
-        zero_chat_cooldown = (chat_min <= 0.0 and chat_max <= 0.0)
-        zero_global_cooldown = (self.min_global_cooldown <= 0.0 and self.max_global_cooldown <= 0.0)
-
-        # 1. Per-chat cooldown check (custom per-chat range or global floor + randomized interval)
-        if not zero_chat_cooldown:
-            last_chat_time = self._last_chat_reply_time.get(chat_id)
-            if last_chat_time is None:
-                last_chat_time = (
-                    self.db.get_last_reply_timestamp(chat_id)
-                    if (self.db and hasattr(self.db, "get_last_reply_timestamp"))
-                    else 0.0
-                )
-                self._last_chat_reply_time[chat_id] = last_chat_time
-            time_since_chat = now - last_chat_time
-
-            # Strict check: NEVER send before chat_min seconds have passed
-            if chat_min > 0 and time_since_chat < chat_min:
-                wait_time = max(1, int(round(chat_min - time_since_chat)))
-                return False, f"Per-chat cooldown active for chat {chat_id} ({wait_time}s remaining)"
-
-            next_chat = self._next_chat_cooldown.get(chat_id)
-            if next_chat is None or next_chat < chat_min or (chat_max > chat_min and next_chat > chat_max):
-                next_chat = self._pick_random_chat_cooldown(chat_id)
-                self._next_chat_cooldown[chat_id] = next_chat
-
-            target_cd = max(chat_min, next_chat)
-            if target_cd > 0 and time_since_chat < target_cd:
-                wait_time = max(1, int(round(target_cd - time_since_chat)))
-                return False, f"Per-chat cooldown active for chat {chat_id} ({wait_time}s remaining)"
-
-        # 2. Global cooldown check (skipped if zero cooldown configured: sending requires no wait)
-        if not zero_chat_cooldown and not zero_global_cooldown:
-            time_since_global = now - self._last_global_reply_time
-            if self.min_global_cooldown > 0 and time_since_global < self.min_global_cooldown:
-                wait_time = max(1, int(round(self.min_global_cooldown - time_since_global)))
-                return False, f"Global cooldown active ({wait_time}s remaining)"
-
-            next_global = self._next_global_cooldown
-            if next_global is None or next_global < self.min_global_cooldown:
-                next_global = self._pick_random_global_cooldown()
-                self._next_global_cooldown = next_global
-
-            target_global = max(self.min_global_cooldown, next_global)
-            if target_global > 0 and time_since_global < target_global:
-                wait_time = max(1, int(round(target_global - time_since_global)))
-                return False, f"Global cooldown active ({wait_time}s remaining)"
+        wait, reason = self.cooldown_remaining(chat_id)
+        if wait > 0:
+            return False, f"{reason} ({max(1, math.ceil(wait))}s remaining)"
 
         return True, "OK"
 

@@ -65,6 +65,7 @@ class FakeReplyManager:
     config = type("C", (), {"reply_mode": "restricted_auto"})()
 
     def __init__(self):
+        self.config = type("C", (), {"reply_mode": "restricted_auto"})()
         self.commands = []
 
     async def handle_control_command(self, command):
@@ -757,6 +758,7 @@ def test_chat_cooldown_action_and_chats_payload(tmp_path):
 def test_handle_activity_includes_msg_url(tmp_path):
     ctx, _ = make_ctx(tmp_path, authorized=(555000111,))
     api = MiniAppAPI(ctx)
+    ctx.privacy.get_all_allowed_chats = lambda: ({111}, {-1001987654321})
 
     # Record outgoing message with username in known_chats
     ctx.db.record_chat_metadata(-1001987654321, title="Startup Supergroup", username="startupindia", chat_type="supergroup")

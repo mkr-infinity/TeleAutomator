@@ -13,7 +13,7 @@
 [![Setup Requirements](https://img.shields.io/badge/Setup-Requirements%20Guide-blueviolet.svg)](REQUIREMENTS.md)
 [![Telegram Mini App](https://img.shields.io/badge/GUI-Telegram%20Mini%20App-0088cc.svg)](miniapp/)
 [![License](https://img.shields.io/badge/license-Source--Available-red.svg)](LICENSE)
-[![Tests Passing](https://img.shields.io/badge/tests-191%2F191%20passed-brightgreen.svg)](test.sh)
+[![Tests](https://img.shields.io/badge/tests-pytest-blue.svg)](test.sh)
 
 > 🔑 **First Time Setup & Requirements Guide**  
 > Wondering which API keys, Telegram IDs, and environment settings are required? Read **[REQUIREMENTS.md](REQUIREMENTS.md)** for a beginner-friendly walkthrough on where to get your `TG_API_ID`, `TG_API_HASH`, bot token, and free AI key.
@@ -122,6 +122,10 @@ Manage your automation straight from your phone by texting your **Control Bot**:
 | **`/stop`** | **Emergency kill switch**: immediately halts all outgoing messages | `/stop` |
 | **`/resume`** | Resumes automation and clears all stops/pauses | `/resume` |
 
+Custom chat cooldowns override the default range; resetting a chat restores the default. Each outgoing bubble follows the current cooldown and safety controls. Removed chats and revoked users stay removed after a restart, including entries originally configured in the environment.
+
+Only allowed chats are processed or cached. `/clearcontext` clears that chat's rolling history and recap while keeping its permanent notes, pins, persona, and voice profile. In-flight summaries and history fetches cannot restore cleared memory. The Mini App enforces the same command grants as the control bot.
+
 ---
 
 ## 🧪 Testing & Verification
@@ -132,7 +136,7 @@ Run the automated test suite locally:
 # Or via universal runner:
 python run.py --test
 ```
-**191 passing unit tests** covering configuration, safety guards, quiet hours, randomized cooldowns, permanent context caching, pinned message syncing, adaptive typing, and mock MTProto workflows.
+Tests cover configuration, authorization, safety guards, quiet hours, live custom cooldowns, isolated chat memory, duplicate approvals, and mocked Telegram/AI workflows. Install Node.js to include the Mini App JavaScript workflow checks; pytest skips that check when Node.js is unavailable. No live Telegram account or AI API key is needed.
 
 ---
 

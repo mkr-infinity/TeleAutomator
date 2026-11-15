@@ -10,6 +10,7 @@ from app.privacy_manager import PrivacyManager
 from app.reply_manager import ReplyManager
 from app.safety_manager import SafetyManager
 from app.storage.database import Database
+from tests.helpers import enable_auto_replies
 
 
 def test_prune_messages_older_than(tmp_path: Path):
@@ -470,7 +471,7 @@ def test_cooldown_suppression_does_not_alert_saved_messages(tmp_path: Path):
     asyncio.run(_run())
 
 
-def test_mention_queue_never_skipped(tmp_path: Path):
+def test_mention_queue_never_skipped(tmp_path: Path, clock):
     """Verify that mentions are never skipped when cooldown is active; they are queued and sent."""
     async def _run():
         cfg = AppConfig(
@@ -496,6 +497,7 @@ def test_mention_queue_never_skipped(tmp_path: Path):
         mgr.set_telegram_client(mock_client)
 
         # Active cooldown
+        enable_auto_replies(mgr, 100)
         safety.mark_reply_sent(100)
 
         # Incoming mention message arrives
@@ -509,8 +511,8 @@ def test_mention_queue_never_skipped(tmp_path: Path):
             is_mention=True,
         )
 
-        # Wait for deferred queue execution (1s cooldown + buffer)
-        await asyncio.sleep(2.2)
+        # Await the queued delivery, including its typing delay.
+        await mgr._pending_deferred_replies[100]
 
         # Verified message was sent to the chat after cooldown!
         assert mock_client.send_message.call_count >= 1
@@ -667,6 +669,7 @@ def test_reaction_randomized_interval_cooldown(tmp_path: Path):
         mgr.set_telegram_client(mock_client)
 
         # First reaction succeeds
+        enable_auto_replies(mgr, 100)
         sent1 = await mgr.maybe_send_reaction(chat_id=100, message_id=1, text="Haha this is hilarious")
         assert sent1 is True
         assert 3.0 <= mgr._next_reaction_cooldown <= 9.0
@@ -945,7 +948,7 @@ def test_pure_laughter_reaction_instead_of_text_message(tmp_path: Path):
     asyncio.run(_run())
 
 
-def test_swipe_to_reply_always_quotes_message(tmp_path: Path):
+def test_swipe_to_reply_always_quotes_message(tmp_path: Path, clock):
     """Verify in groups and DMs, message always swipes to reply (reply_to_msg_id) to the message being answered."""
     async def _run():
         cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
@@ -957,6 +960,9 @@ def test_swipe_to_reply_always_quotes_message(tmp_path: Path):
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
         sent_calls = []
+        enable_auto_replies(mgr, -100222, 12345)
+        db.set_state("max_chat_replies_per_minute", "10")
+        db.set_state("max_replies_per_minute", "20")
         async def mock_send(chat_id, text, **kwargs):
             sent_calls.append((chat_id, text, kwargs.get("reply_to")))
             m = MagicMock()
@@ -1067,6 +1073,7 @@ def test_multi_sentiment_reactions(tmp_path: Path):
         mgr.set_telegram_client(mock_client)
 
         # 1. Excitement / congrats
+        enable_auto_replies(mgr, 1001, 1002, 1003, 1004)
         mgr._next_reaction_cooldown = 0.0
         mgr._last_reaction_time = 0.0
         mgr._next_reaction_time_by_chat.clear()
@@ -1534,6 +1541,7 @@ def test_reactions_only_for_relative_sentiment(tmp_path: Path):
         mgr.set_telegram_client(mock_client)
 
         # 1. Neutral message without sentiment: reaction is skipped (False)
+        enable_auto_replies(mgr, 101)
         neutral_res = await mgr.maybe_send_reaction(101, 1, "the table has four legs")
         assert neutral_res is False
 
@@ -1711,7 +1719,7 @@ def test_typing_indicator_while_ai_generates(tmp_path: Path):
     asyncio.run(_run())
 
 
-def test_typing_rhythm_and_pause_bursts(tmp_path: Path):
+def test_typing_rhythm_and_pause_bursts(tmp_path: Path, clock):
     """Verify typing duration >= 3.5s produces realistic pause bursts."""
     async def _run():
         cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
@@ -1721,6 +1729,7 @@ def test_typing_rhythm_and_pause_bursts(tmp_path: Path):
         generator = ReplyGenerator(cfg, database=db)
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
         mgr.typing_delay = 5.0
+        enable_auto_replies(mgr, 123)
 
         actions = []
         class MockActionContext:
@@ -1742,7 +1751,7 @@ def test_typing_rhythm_and_pause_bursts(tmp_path: Path):
     asyncio.run(_run())
 
 
-def test_typo_injection_and_auto_correction(tmp_path: Path):
+def test_typo_injection_and_auto_correction(tmp_path: Path, clock):
     """Verify typo injection and *correction follow-up message simulation."""
     # 1. Verification of typo logic
     orig = "sounds good bro"
@@ -1787,6 +1796,7 @@ def test_typo_injection_and_auto_correction(tmp_path: Path):
         mgr.set_telegram_client(mock_client)
 
         # Force typo injection in _send_reply by temporarily patching probability to 1.0
+        enable_auto_replies(mgr, 555)
         orig_maybe = mgr.maybe_inject_typo_correction
         mgr.maybe_inject_typo_correction = lambda t, **kw: orig_maybe(t, probability=1.0)
 
@@ -1979,7 +1989,7 @@ def test_goodnight_signoff_ai_generated_only(tmp_path: Path):
     assert gen2.generate_goodnight_signoff() == "retrying sleep schedule, goodnight guys"
 
 
-def test_floodwait_and_peerflood_handling(tmp_path: Path):
+def test_floodwait_and_peerflood_handling(tmp_path: Path, clock):
     """Verify Telegram FloodWaitError pauses automation and PeerFloodError activates emergency stop."""
     async def _run():
         cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path)
@@ -2000,6 +2010,7 @@ def test_floodwait_and_peerflood_handling(tmp_path: Path):
                 raise MockFloodWait()
 
         mgr.set_telegram_client(FloodClient())
+        enable_auto_replies(mgr, 101)
 
         # FloodWait triggers timed pause
         sent1 = await mgr._send_reply(101, 1, "test message", adaptive_delay=False)
@@ -2021,7 +2032,7 @@ def test_floodwait_and_peerflood_handling(tmp_path: Path):
     asyncio.run(_run())
 
 
-def test_spontaneous_followup_command_and_execution(tmp_path: Path):
+def test_spontaneous_followup_command_and_execution(tmp_path: Path, clock):
     """Verify /followup command and spontaneous delayed follow-up behavior."""
     async def _run():
         cfg = AppConfig(
@@ -2041,6 +2052,8 @@ def test_spontaneous_followup_command_and_execution(tmp_path: Path):
         mgr = ReplyManager(cfg, db, safety, privacy, generator)
 
         # 1. /followup command tests
+        enable_auto_replies(mgr, 1234, 5678)
+        db.set_state("spontaneous_followup_enabled", "1")
         res1 = await mgr.handle_control_command("/followup")
         assert "Spontaneous follow-ups" in res1
         assert "ENABLED" in res1
@@ -2124,7 +2137,7 @@ def test_incoming_burst_debouncer(tmp_path: Path):
         mock_client.send_message = AsyncMock(return_value=MagicMock(id=999))
         mgr.set_telegram_client(mock_client)
         # Authorize auto
-        safety.set_auto_authorization(True)
+        enable_auto_replies(mgr, 4444)
 
         # Set 0.15s debounce window
         db.set_state("debounce_enabled", "1")
@@ -2160,7 +2173,7 @@ def test_incoming_burst_debouncer(tmp_path: Path):
     asyncio.run(_run())
 
 
-def test_multibubble_splitting_and_controls(tmp_path: Path):
+def test_multibubble_splitting_and_controls(tmp_path: Path, clock):
     """Verify multi-bubble splitting controls and rapid sequential sending."""
     async def _run():
         cfg = AppConfig(
@@ -2208,6 +2221,7 @@ def test_multibubble_splitting_and_controls(tmp_path: Path):
         mgr.set_telegram_client(mock_client)
 
         chat_id = 9999
+        enable_auto_replies(mgr, chat_id)
         await mgr._send_reply(
             chat_id=chat_id,
             reply_to_msg_id=10,
@@ -2390,6 +2404,7 @@ def test_self_edit_fix_simulation(tmp_path: Path):
         mgr._client = client
 
         original = "bro my phone glitched hard"
+        enable_auto_replies(mgr, -100)
         with patch("app.reply_manager.random.random", return_value=0.05), \
                 patch("app.reply_manager.random.uniform", return_value=0.0), \
                 patch("app.reply_manager.asyncio.sleep", new=AsyncMock(return_value=None)):
@@ -2450,6 +2465,7 @@ def test_recent_replies_persist_across_restart(tmp_path: Path):
         client = MagicMock()
         client.send_message = AsyncMock(return_value=SimpleNamespace(id=9))
         mgr._client = client
+        enable_auto_replies(mgr, 55)
 
         with patch("app.reply_manager.random.random", return_value=0.99), \
                 patch("app.reply_manager.random.uniform", return_value=0.0), \

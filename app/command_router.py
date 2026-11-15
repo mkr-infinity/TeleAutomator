@@ -20,6 +20,7 @@ import time
 from typing import Optional, Any
 
 from app.logger import setup_logger
+from app.ai.provider import normalize_base_url
 
 logger = setup_logger(__name__)
 from app.miniapp_server import resolve_miniapp_url
@@ -284,6 +285,7 @@ class CommandRouterMixin:
                 )
             new_model = cmd_parts[1].strip()
             self.db.set_state("ai_model", new_model)
+            self.db.set_state("models_manually_set", "1")
             self.generator.reload_provider()
             return f"✅ AI model switched to *{new_model}* (provider reloaded)."
 
@@ -418,13 +420,8 @@ class CommandRouterMixin:
                 failed_count = 0
                 for item in pending:
                     approval_id = item["id"]
-                    can_send, reason = self.safety.can_reply(item["chat_id"], item["draft_text"])
-                    if not can_send:
-                        failed_count += 1
-                        continue
-                    success = await self._send_reply(item["chat_id"], item["reply_to_msg_id"], item["draft_text"], adaptive_delay=False)
+                    success, _ = await self._approve_draft(approval_id)
                     if success:
-                        self.db.update_approval_status(approval_id, "sent")
                         sent_count += 1
                     else:
                         failed_count += 1
@@ -439,24 +436,8 @@ class CommandRouterMixin:
                     "Fix: /approve <id> (e.g. /approve 1) or /approve all"
                 )
 
-            item = self.db.get_pending_approval(approval_id)
-            if not item:
-                return (
-                    f"❌ Draft #{approval_id} no longer exists.\n"
-                    "Missing: Active pending draft\n"
-                    "Fix: /pending to see current drafts."
-                )
-
-            can_send, reason = self.safety.can_reply(item["chat_id"], item["draft_text"])
-            if not can_send:
-                return f"⚠️ Cannot send draft #{approval_id}: {reason}"
-
-            success = await self._send_reply(item["chat_id"], item["reply_to_msg_id"], item["draft_text"], adaptive_delay=False)
-            if success:
-                self.db.update_approval_status(approval_id, "sent")
-                return f"✅ Draft #{approval_id} sent successfully."
-            else:
-                return f"❌ Failed to send draft #{approval_id}."
+            _, response = await self._approve_draft(approval_id)
+            return response
 
         if cmd == "/reject":
             if len(cmd_parts) < 2:
@@ -471,7 +452,7 @@ class CommandRouterMixin:
                     return "No drafts currently pending approval."
                 count = len(pending)
                 for item in pending:
-                    self.db.update_approval_status(item["id"], "rejected")
+                    self.db.update_approval_status(item["id"], "rejected", expected_status="pending")
                 return f"🗑️ Batch rejected: {count} drafts discarded."
 
             try:
@@ -491,10 +472,24 @@ class CommandRouterMixin:
                     "Fix: /pending to see current drafts."
                 )
 
-            self.db.update_approval_status(approval_id, "rejected")
+            if not self.db.update_approval_status(approval_id, "rejected", expected_status="pending"):
+                return f"❌ Draft #{approval_id} is already being handled."
             return f"🗑️ Draft #{approval_id} rejected and discarded."
 
         return None
+
+    async def _approve_draft(self, approval_id: int) -> tuple[bool, str]:
+        item = self.db.claim_approval(approval_id)
+        if not item:
+            return False, f"❌ Draft #{approval_id} no longer exists or is already being handled. Use /pending to see current drafts."
+        try:
+            sent = await self._send_reply(item["chat_id"], item["reply_to_msg_id"], item["draft_text"], adaptive_delay=False, approved=True)
+        except BaseException:
+            # An interrupted send has an unknown delivery outcome; never retry it automatically.
+            self.db.update_approval_status(approval_id, "failed", expected_status="sending")
+            raise
+        self.db.update_approval_status(approval_id, "sent" if sent else "pending", expected_status="sending")
+        return sent, (f"✅ Draft #{approval_id} sent successfully." if sent else f"⚠️ Cannot send draft #{approval_id}: check chat access, pause, quiet hours, and rate limits.")
 
     async def _resolve_chat_id(self, raw_target: str) -> tuple[Optional[int], Optional[dict], Optional[str]]:
         """Resolve a chat ID, @username, or link to (chat_id, metadata, error_msg)."""
@@ -1733,7 +1728,7 @@ class CommandRouterMixin:
                     "Missing: Active provider supporting live model verification\n"
                     "Fix: Live model verification is supported on Gemini, OpenAI, and Inception custom providers."
                 )
-            results = self.generator.provider.check_working_models()
+            results = await asyncio.to_thread(self.generator.provider.check_working_models)
             lines = ["🔍 *Model Live Health Check:*"]
             healthy_models: list[str] = []
             for m, ok, detail in results:
@@ -1766,7 +1761,13 @@ class CommandRouterMixin:
                 )
             raw_url = " ".join(cmd_parts[1:]).strip()
             target_url = "" if raw_url.lower() == "default" else raw_url
+            try:
+                if target_url:
+                    target_url = normalize_base_url(target_url)
+            except ValueError as e:
+                return f"❌ Invalid API base URL: {e}"
             self.db.set_state("ai_base_url", target_url)
+            self.db.set_state("available_models", "[]")
             self.generator.reload_provider()
             return f"✅ AI base URL updated to: `{target_url or 'default'}` (provider reloaded)."
 
@@ -1785,6 +1786,8 @@ class CommandRouterMixin:
             target = cmd_parts[1].lower().strip()
             if target in ("gemini", "openai", "nvidia", "custom", "groq", "together", "deepseek", "local", "inception"):
                 self.db.set_state("ai_provider", target)
+                self.db.set_state("available_models", "[]")
+                self.db.set_state("ai_enabled", "0" if target == "local" else "1")
                 self.generator.reload_provider()
                 return f"🧠 AI provider switched to *{target.upper()}* (provider reloaded)."
             return (
@@ -1832,12 +1835,16 @@ class CommandRouterMixin:
                     f"• `/provider <name>` — Switch provider"
                 )
             p = cmd_parts[1].lower().strip()
+            if p not in ("mercury", "inception", "gemini", "openai", "nvidia", "custom", "groq", "together", "deepseek", "local"):
+                return "❌ Unsupported AI provider. Use /provider to see supported providers."
             if p in ("mercury", "inception") and len(cmd_parts) >= 3:
                 k = cmd_parts[2].strip()
                 self.db.set_state("ai_provider", "custom")
+                self.db.set_state("ai_enabled", "1")
                 self.db.set_state("ai_api_key", k)
                 self.db.set_state("ai_base_url", "https://api.inceptionlabs.ai/v1")
                 self.db.set_state("ai_model", "mercury-3,mercury-3-preview-1014,mercury-3-preview-1002")
+                self.db.set_state("available_models", "[]")
                 self.generator.reload_provider()
                 return (
                     f"✅ *Inception Labs Mercury Configured & Activated!*\n\n"
@@ -1848,11 +1855,16 @@ class CommandRouterMixin:
                 )
             elif len(cmd_parts) >= 4:
                 k = cmd_parts[2].strip()
-                u = cmd_parts[3].strip()
+                try:
+                    u = normalize_base_url(cmd_parts[3].strip())
+                except ValueError as e:
+                    return f"❌ Invalid API base URL: {e}"
                 m = cmd_parts[4].strip() if len(cmd_parts) >= 5 else ""
                 self.db.set_state("ai_provider", p)
+                self.db.set_state("ai_enabled", "0" if p == "local" else "1")
                 self.db.set_state("ai_api_key", k)
                 self.db.set_state("ai_base_url", u)
+                self.db.set_state("available_models", "[]")
                 if m:
                     self.db.set_state("ai_model", m)
                 self.generator.reload_provider()

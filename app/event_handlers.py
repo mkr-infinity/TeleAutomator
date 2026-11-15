@@ -53,7 +53,7 @@ def is_thread_ender(text: str) -> bool:
     t = (text or "").strip().lower()
     if not t:
         return False
-    words = re.findall(r"[a-z]+", t)
+    words = re.findall(r"[^\W\d_]+", t)
     if not words:
         # emoji-only or punctuation-only message: a reaction, not an opening
         return True
@@ -87,6 +87,9 @@ def record_own_outgoing_message(reply_manager: ReplyManager, event: Any, my_user
     text = (getattr(event, "raw_text", "") or "").strip()
     if chat_id is None or not text:
         return
+    if not reply_manager.privacy.is_chat_allowed(chat_id, chat_id < 0) or reply_manager.safety.is_sensitive(text):
+        return
+    text = reply_manager.privacy.sanitize_text(text)
     if reply_manager.db.has_chat_message(chat_id, getattr(event, "id", None)):
         return
     try:
@@ -125,6 +128,8 @@ def register_handlers(
         )
         if is_saved_messages:
             return
+        if chat_id is None or not reply_manager.privacy.is_chat_allowed(chat_id, getattr(event, "is_group", False)):
+            return
 
         # Context continuity: always record the owner's own manually-typed outgoing messages
         # so the AI remembers what the account itself said (not just what it received).
@@ -134,14 +139,7 @@ def register_handlers(
         # Regular incoming message handling
         is_eligible, reason = message_filter.evaluate(event)
         if not is_eligible:
-            # Helper log for users: shows the Chat ID so they can easily copy it into .env
-            if "not allowlisted" in reason and chat_id:
-                logger.info(
-                    f"[CHAT DETECTED] Received message from Chat ID: {chat_id}. "
-                    f"To allow replies for this contact/group, add {chat_id} to ALLOWED_PRIVATE_CHATS in .env"
-                )
-            else:
-                logger.debug(f"Message ignored: {reason}")
+            logger.debug(f"Message ignored: {reason}")
             return
 
         is_group = getattr(event, "is_group", False)
@@ -225,13 +223,15 @@ def register_handlers(
             pass
 
         # Cache current incoming message into local SQLite database with reply target context
+        if not reply_manager.privacy.is_chat_allowed(chat_id, is_group):
+            return
         recorded_sender = f"{sender_name} (to {reply_target_name})" if reply_target_name else sender_name
         reply_manager.db.record_chat_message(
             chat_id=chat_id,
             message_id=message_id,
             sender_id=sender_id,
             sender_name=recorded_sender,
-            text=text,
+            text=reply_manager.privacy.sanitize_text(text),
             is_outgoing=False,
         )
 
@@ -280,6 +280,7 @@ def register_handlers(
                 # Engages dynamically based on chatty rate without waiting 20 minutes!
                 # Priority: custom prompt ratio (e.g. '6 times in 10 sends') → per-chat override (inline picker) → explicitly-set global → human default band 30-60%.
                 prompt_chatty = None
+                is_relevant = reply_manager.is_group_message_relevant(chat_id, text, chat_title)
                 try:
                     chat_p_text = reply_manager.db.get_chat_prompt(chat_id) if hasattr(reply_manager.db, "get_chat_prompt") else reply_manager.db.get_state(f"chat_prompt_{chat_id}")
                     perm_ctx = reply_manager.db.get_permanent_context(chat_id) if hasattr(reply_manager.db, "get_permanent_context") else {}
@@ -357,7 +358,7 @@ def register_handlers(
         # Natural conversation endings (DMs & direct replies): when the other person closes the
         # loop ("gn", "ok cool", "thanks bro", laughter, emoji-only), a real human mostly reacts
         # or goes quiet instead of forcing another line. Real questions are never thread enders.
-        if not is_group and not is_mention and is_thread_ender(text):
+        if not is_group and is_thread_ender(text):
             action = decide_thread_end_action(is_group=False, roll=random.random())
             if action == "reaction":
                 logger.info(f"[THREAD END] Reacting with emoji to conversation closer in chat {chat_id}.")
@@ -388,14 +389,15 @@ def register_handlers(
         max_age_secs = int(ttl_hours * 3600) if ttl_hours > 0 else None
         history_limit = 40 if getattr(event, "is_group", False) else 15
         conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=history_limit, max_age_seconds=max_age_secs)
-        if len(conversation_history) <= 2:
+        memory_epoch = reply_manager.db.get_state(f"chat_memory_epoch_{chat_id}")
+        if len(conversation_history) <= 2 and not memory_epoch:
             try:
                 recent_msgs = await client.get_messages(chat_id, limit=15)
                 if recent_msgs:
                     for m in reversed(recent_msgs):
                         m_id = getattr(m, "id", None)
                         m_text = (getattr(m, "raw_text", "") or "").strip()
-                        if not m_text:
+                        if not m_text or reply_manager.safety.is_sensitive(m_text):
                             continue
                         m_out = getattr(m, "out", False)
                         m_sender_id = getattr(m, "sender_id", None)
@@ -407,12 +409,15 @@ def register_handlers(
                                     s_name = s_obj.first_name
                             except Exception:
                                 pass
+                        if (not reply_manager.privacy.is_chat_allowed(chat_id, is_group)
+                                or reply_manager.db.get_state(f"chat_memory_epoch_{chat_id}") != memory_epoch):
+                            break
                         reply_manager.db.record_chat_message(
                             chat_id=chat_id,
                             message_id=m_id,
                             sender_id=m_sender_id,
                             sender_name=s_name,
-                            text=m_text,
+                            text=reply_manager.privacy.sanitize_text(m_text),
                             is_outgoing=m_out,
                         )
                     conversation_history = reply_manager.db.get_recent_chat_messages(chat_id, limit=history_limit, max_age_seconds=max_age_secs)

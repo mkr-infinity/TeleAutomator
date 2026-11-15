@@ -8,6 +8,7 @@ import json
 import os
 import signal
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
@@ -56,7 +57,7 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
 
     # Apply runtime CLI overrides if provided
     if mode_override:
-        config.reply_mode = mode_override
+        config = replace(config, reply_mode=mode_override)
         db.set_state("reply_mode", mode_override)
         logger.info(f"CLI mode override active: {mode_override}")
 

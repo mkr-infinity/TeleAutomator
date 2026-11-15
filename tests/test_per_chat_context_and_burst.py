@@ -317,6 +317,7 @@ def test_init_chat_context_creates_disk_file_and_memory(tmp_path: Path):
     """Verify init_chat_context immediately creates disk file and initializes permanent context for a new chat."""
     mgr = _make_manager(tmp_path)
     new_grp = -100777888
+    mgr.privacy.allow_chat(new_grp)
 
     # Initialize context for new chat
     asyncio.run(mgr.init_chat_context(new_grp))

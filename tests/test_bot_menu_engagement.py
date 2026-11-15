@@ -135,6 +135,7 @@ class _FakeEvent:
 
 def test_own_outgoing_recorded_and_not_duplicated(tmp_path: Path):
     mgr = _make_manager(tmp_path)
+    mgr.privacy.allow_chat(555)
     event = _FakeEvent(chat_id=555, msg_id=101, text="brb grabbing coffee")
     record_own_outgoing_message(mgr, event, my_user_id=999)
 

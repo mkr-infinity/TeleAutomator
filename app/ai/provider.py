@@ -16,6 +16,19 @@ from app.logger import setup_logger
 logger = setup_logger(__name__)
 
 
+def normalize_base_url(value: str, default: str = "https://api.openai.com/v1") -> str:
+    url = (value or default).strip().rstrip("/")
+    if "://" not in url:
+        url = "https://" + url
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.query or parsed.fragment or parsed.username:
+        raise ValueError("Use an HTTP(S) API base URL without credentials, query parameters, or fragments.")
+    for suffix in ("/chat/completions", "/models"):
+        if url.endswith(suffix):
+            url = url[:-len(suffix)].rstrip("/")
+    return url
+
+
 class AIProvider(ABC):
     """Abstract interface for AI draft generation backends."""
 
@@ -58,12 +71,15 @@ class LocalRuleProvider(AIProvider):
 class GeminiProvider(AIProvider):
     """Google Gemini API provider using standard library urllib."""
 
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash", usage_callback: Optional[Any] = None):
+    def __init__(self, api_key: str, model: str = "gemini-2.5-flash", usage_callback: Optional[Any] = None,
+                 temperature: float = 0.6, max_tokens: Optional[int] = None):
         self.api_key = api_key
         raw = (model or "gemini-2.5-flash").strip()
         cleaned_parts = [p.strip().removeprefix("models/") for p in raw.replace(";", ",").split(",") if p.strip()]
         self.model = ",".join(cleaned_parts) if cleaned_parts else "gemini-2.5-flash"
         self.usage_callback = usage_callback
+        self.temperature = temperature
+        self.max_tokens = max_tokens
 
     def get_candidate_models(self) -> list[str]:
         configured = [m.strip().removeprefix("models/") for m in self.model.replace(";", ",").split(",") if m.strip()]
@@ -134,8 +150,10 @@ class GeminiProvider(AIProvider):
         payload = {
             "system_instruction": {"parts": [{"text": system_instructions}]},
             "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.6},
+            "generationConfig": {"temperature": self.temperature},
         }
+        if self.max_tokens is not None:
+            payload["generationConfig"]["maxOutputTokens"] = self.max_tokens
         data = json.dumps(payload).encode("utf-8")
 
         last_error = None
@@ -202,10 +220,8 @@ class OpenAIProvider(AIProvider):
     ):
         self.api_key = api_key
         self.model = model or "gpt-4o-mini"
-        raw_url = (base_url or "https://api.openai.com/v1").strip().rstrip("/")
-        if not raw_url.endswith("/chat/completions"):
-            raw_url = f"{raw_url}/chat/completions"
-        self.endpoint_url = raw_url
+        self.active_model = ""
+        self.endpoint_url = normalize_base_url(base_url) + "/chat/completions"
         self.usage_callback = usage_callback
         self.reasoning_effort = reasoning_effort
         self.temperature = temperature
@@ -275,9 +291,7 @@ class OpenAIProvider(AIProvider):
                             logger.warning(f"OpenAI-compatible model '{m}' returned empty/None content. Trying next candidate...")
                             continue
                         content = str(raw_content).strip().strip('"')
-                        if m != self.model:
-                            logger.info(f"AI model automatically switched from '{self.model}' to working fallback '{m}'.")
-                            self.model = m
+                        self.active_model = m
 
                         usage = body.get("usage", {})
                         if self.usage_callback and usage:
@@ -302,7 +316,7 @@ class OpenAIProvider(AIProvider):
         """Ping all candidate models with a minimal test prompt to verify live availability."""
         candidates = self.get_candidate_models()
         results: list[tuple[str, bool, str]] = []
-        first_working: Optional[str] = None
+        working: list[str] = []
         is_inception = "inceptionlabs" in self.endpoint_url.lower()
 
         for m in candidates:
@@ -329,8 +343,7 @@ class OpenAIProvider(AIProvider):
                     body = json.loads(resp.read().decode("utf-8"))
                     if body.get("choices"):
                         results.append((m, True, "200 OK"))
-                        if not first_working:
-                            first_working = m
+                        working.append(m)
                     else:
                         results.append((m, False, "Empty choices"))
             except urllib.error.HTTPError as e:
@@ -338,6 +351,6 @@ class OpenAIProvider(AIProvider):
             except Exception as e:
                 results.append((m, False, str(e)[:30]))
 
-        if first_working:
-            self.model = first_working
+        if working:
+            self.model = ",".join(working)
         return results

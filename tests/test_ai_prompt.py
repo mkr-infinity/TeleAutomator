@@ -186,7 +186,8 @@ def test_openai_provider_candidate_models_and_fallback():
         result = provider.generate_reply("Hi", "Be brief")
         assert result == "Fallback reply from mercury-3"
         # Verified provider switched active model to the working fallback
-        assert provider.model == "mercury-3"
+        assert provider.active_model == "mercury-3"
+        assert provider.model == "non_existent_model"
         assert call_count == 2
 
 

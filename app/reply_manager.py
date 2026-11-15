@@ -63,6 +63,7 @@ class ReplyManager(CommandRouterMixin):
         self._debounce_last_time: dict[int, float] = {}
         self._debounce_first_time: dict[int, float] = {}
         self._chat_send_locks: dict[int, asyncio.Lock] = {}
+        self._outgoing_lock = asyncio.Lock()
         self._pending_deferred_replies: dict[int, asyncio.Task] = {}
         self._alert_send_lock: asyncio.Lock = asyncio.Lock()
         self._last_alert_time: float = 0.0
@@ -111,6 +112,38 @@ class ReplyManager(CommandRouterMixin):
     def set_telegram_client(self, client: Any) -> None:
         """Attach the active Telethon client."""
         self._client = client
+
+    def _outgoing_allowed(self, chat_id: int, approved: bool = False, allow_quiet_hours: bool = False) -> bool:
+        return (
+            self.privacy.is_chat_allowed(chat_id, chat_id < 0)
+            and not self.safety.action_block_reason(allow_quiet_hours)
+            and (approved or (self.current_mode == "restricted_auto" and self.safety.is_auto_authorized
+                              and self.db.get_state("safe_mode_active", "0") != "1"))
+        )
+
+    async def _deliver_message(self, chat_id: int, text: str, reply_to=None, *, approved: bool = False, allow_quiet_hours: bool = False):
+        while True:
+            async with self._outgoing_lock:
+                if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours):
+                    return None
+                can_send, reason = self.safety.can_reply(chat_id, text, allow_quiet_hours=allow_quiet_hours)
+                wait = self.safety.burst_wait_needed(chat_id)
+                if not can_send:
+                    if "cooldown" not in reason.lower():
+                        return None
+                    wait = max(wait, self.safety.cooldown_remaining(chat_id)[0])
+                if can_send and wait <= 0:
+                    try:
+                        message = await self._client.send_message(chat_id, text, reply_to=reply_to)
+                    except Exception as e:
+                        if not reply_to or "reply" not in str(e).lower() or not self._outgoing_allowed(chat_id, approved, allow_quiet_hours):
+                            raise
+                        message = await self._client.send_message(chat_id, text)
+                    self.safety.mark_reply_sent(chat_id)
+                    self.safety.record_burst_send(chat_id)
+                    return message
+            # Release the account lock while waiting so another chat can proceed.
+            await asyncio.sleep(min(1.0, max(0.01, wait)))
 
     def _get_chat_send_lock(self, chat_id: int) -> asyncio.Lock:
         """Return a per-chat send lock ensuring sequential, non-overlapping message delivery."""
@@ -165,7 +198,7 @@ class ReplyManager(CommandRouterMixin):
 
     async def sync_pinned_context_from_telegram(self, chat_id: int) -> Optional[str]:
         """Fetch pinned messages from Telegram for chat_id, distill with AI, and store permanently."""
-        if not self._client:
+        if not self._client or not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
             return None
         try:
             from telethon.tl.types import InputMessagesFilterPinned
@@ -195,7 +228,7 @@ class ReplyManager(CommandRouterMixin):
 
     async def generate_chat_voice_profile(self, chat_id: int, min_messages: int = 45) -> Optional[str]:
         """Fetch 40+ recent messages of a group, AI learns how its people talk, store permanently."""
-        if not self._client or chat_id >= 0:
+        if not self._client or chat_id >= 0 or not self.privacy.is_chat_allowed(chat_id, True):
             logger.debug(f"Voice profile skipped for chat {chat_id}: client attached={bool(self._client)}, is_group={chat_id < 0}")
             return None
         try:
@@ -205,7 +238,7 @@ class ReplyManager(CommandRouterMixin):
             lines: list[str] = []
             for m in msgs:
                 txt = (getattr(m, "text", "") or "").strip()
-                if not txt:
+                if not txt or self.safety.is_sensitive(txt):
                     continue
                 sender = "someone"
                 try:
@@ -369,6 +402,10 @@ class ReplyManager(CommandRouterMixin):
         is_mention: bool = False,
     ) -> None:
         """Process a single or stitched incoming message."""
+        if not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
+            return
+        if self.current_mode == "restricted_auto" and self.safety.action_block_reason():
+            return
         # Sanitize incoming text before passing to generator
         clean_text = self.privacy.sanitize_text(text)
 
@@ -430,6 +467,8 @@ class ReplyManager(CommandRouterMixin):
                 chat_persona = self.db.get_chat_prompt(chat_id)
 
                 async def _do_generate():
+                    if not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
+                        return ""
                     return await asyncio.to_thread(
                         self.generator.generate,
                         sender_name=sender_name,
@@ -598,13 +637,6 @@ class ReplyManager(CommandRouterMixin):
                     # Sleep schedule active: quietly suppress auto-reply without disturbing Saved Messages
                     return
                 if "cooldown" in reason.lower() or "limit" in reason.lower():
-                    # Schedule deferred reply after cooldown/rate-limit so reply is strictly sent after cooldown period
-                    m = re.search(r"\((\d+)s remaining\)", reason)
-                    wait_secs = float(m.group(1)) if m else 5.0
-                    chat_min, _ = self.safety._get_chat_cooldown_range(chat_id)
-                    if chat_min > 0:
-                        wait_secs = max(wait_secs, chat_min)
-
                     # Cancel any existing pending deferred reply for this chat to avoid double-sends
                     old_task = self._pending_deferred_replies.get(chat_id)
                     if old_task and not old_task.done():
@@ -615,11 +647,11 @@ class ReplyManager(CommandRouterMixin):
                         )
 
                     logger.info(
-                        f"[REPLY QUEUED] Cooldown/rate-limit active for chat {chat_id} ({wait_secs:.1f}s). "
-                        f"Scheduling deferred reply so the message is sent after the min cooldown period."
+                        f"[REPLY QUEUED] Cooldown/rate-limit active for chat {chat_id}. "
+                        f"Waiting for the current limits before sending."
                     )
                     task = asyncio.create_task(
-                        self._schedule_deferred_reply(chat_id, message_id, draft, wait_secs, is_mention=is_mention)
+                        self._schedule_deferred_reply(chat_id, message_id, draft, is_mention=is_mention)
                     )
                     self._pending_deferred_replies[chat_id] = task
                     return
@@ -643,14 +675,18 @@ class ReplyManager(CommandRouterMixin):
             if sent:
                 asyncio.create_task(self.refresh_single_chat_summary(chat_id))
 
-    async def refresh_single_chat_summary(self, chat_id: int, min_new_messages: int = 4, force: bool = False) -> None:
+    async def refresh_single_chat_summary(self, chat_id: int, min_new_messages: int = 4, force: bool = False, max_payload: int = 40) -> None:
         """Dynamically update AI context memory for a single chat after recent messages."""
+        if not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
+            return
         try:
+            epoch = self.db.get_state(f"chat_memory_epoch_{chat_id}")
+            latest = self.db.latest_chat_message_row_id(chat_id)
             marker = int(self.db.get_state(f"chat_summary_marker_{chat_id}", "0"))
             new_count = self.db.count_chat_messages_since(chat_id, marker)
             if not force and new_count < min_new_messages:
                 return
-            raw = self.db.get_chat_messages_since_text(chat_id, 0 if force else marker, limit=40)
+            raw = self.db.get_chat_messages_since_text(chat_id, 0 if force else marker, limit=max_payload)
             if not raw:
                 return
             meta = self.db.get_chat_metadata(chat_id) or {}
@@ -662,9 +698,8 @@ class ReplyManager(CommandRouterMixin):
                 raw,
                 is_group=(chat_id < 0),
             )
-            if summary:
-                self.db.set_chat_summary(chat_id, summary)
-                self.db.set_state(f"chat_summary_marker_{chat_id}", str(self.db.latest_chat_message_row_id(chat_id)))
+            if summary and self.privacy.is_chat_allowed(chat_id, chat_id < 0):
+                self.db.set_chat_summary(chat_id, summary, epoch=epoch, marker=latest)
                 logger.info(f"[AI CHAT MEMORY] Auto-updated rolling context memory for chat {chat_id} ({new_count} new messages).")
         except Exception as e:
             logger.debug(f"[AI CHAT MEMORY] Could not update memory for chat {chat_id}: {e}")
@@ -673,6 +708,8 @@ class ReplyManager(CommandRouterMixin):
         """Immediately initialize, fetch, and build the isolated context file for a newly added chat or group.
         Ensures AI has full context (pins, recent messages, voice profile, recap) before sending any message.
         """
+        if not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
+            return
         try:
             title = ""
             username = ""
@@ -707,12 +744,13 @@ class ReplyManager(CommandRouterMixin):
             # Fetch recent history from Telegram into local SQLite database if empty
             if self.db and self._client and hasattr(self._client, "get_messages"):
                 existing_count = self.db.count_chat_messages(chat_id)
-                if existing_count < 5:
+                memory_epoch = self.db.get_state(f"chat_memory_epoch_{chat_id}")
+                if existing_count < 5 and not memory_epoch:
                     try:
                         recent_msgs = await self._client.get_messages(chat_id, limit=20)
                         for m in reversed(recent_msgs):
                             m_text = getattr(m, "message", None) or getattr(m, "text", None) or ""
-                            if not m_text.strip():
+                            if not m_text.strip() or self.safety.is_sensitive(m_text):
                                 continue
                             sender_name = "Contact"
                             try:
@@ -721,13 +759,16 @@ class ReplyManager(CommandRouterMixin):
                                     sender_name = getattr(s, "first_name", "") or getattr(s, "title", "") or "Contact"
                             except Exception:
                                 pass
+                            if (not self.privacy.is_chat_allowed(chat_id, chat_id < 0)
+                                    or self.db.get_state(f"chat_memory_epoch_{chat_id}") != memory_epoch):
+                                break
                             self.db.record_chat_message(
                                 chat_id=chat_id,
                                 message_id=m.id,
+                                sender_id=getattr(m, "sender_id", None),
                                 sender_name=sender_name,
-                                text=m_text,
+                                text=self.privacy.sanitize_text(m_text),
                                 is_outgoing=bool(getattr(m, "out", False)),
-                                reply_to_msg_id=getattr(m, "reply_to_msg_id", None),
                             )
                     except Exception as e:
                         logger.debug(f"[INIT CONTEXT] Backfilling recent messages for {chat_id}: {e}")
@@ -752,38 +793,28 @@ class ReplyManager(CommandRouterMixin):
         chat_id: int,
         message_id: int,
         draft: str,
-        wait_seconds: float,
         is_mention: bool = False,
     ) -> None:
         """Queue and send a deferred reply after cooldown expires so no reply is sent prematurely or dropped."""
         try:
-            chat_min, _ = self.safety._get_chat_cooldown_range(chat_id)
-            effective_wait = max(wait_seconds, chat_min if chat_min > 0 else 0.0)
-            await asyncio.sleep(max(1.0, effective_wait))
-            if self.safety.is_emergency_stopped or self.safety.get_remaining_pause_seconds() > 0:
-                logger.warning(f"Deferred reply to chat {chat_id} aborted: emergency stop or pause active.")
-                return
-
-            can_send, reason = self.safety.can_reply(chat_id, draft)
-            if not can_send:
-                if "cooldown" in reason.lower() or "limit" in reason.lower():
-                    m = re.search(r"\((\d+)s remaining\)", reason)
-                    retry_wait = float(m.group(1)) if m else 3.0
-                    await asyncio.sleep(retry_wait + 0.5)
-                    if self.safety.is_emergency_stopped or self.safety.get_remaining_pause_seconds() > 0:
-                        return
-                    can_send, reason = self.safety.can_reply(chat_id, draft)
-                    if not can_send:
-                        logger.warning(f"Deferred reply to chat {chat_id} aborted: {reason}")
-                        return
-                else:
+            while True:
+                if not self._outgoing_allowed(chat_id):
+                    return
+                can_send, reason = self.safety.can_reply(chat_id, draft)
+                if can_send:
+                    break
+                if "cooldown" not in reason.lower() and "limit" not in reason.lower():
                     logger.warning(f"Deferred reply to chat {chat_id} aborted: {reason}")
                     return
+                # Re-read live settings so a shortened or reset cooldown takes effect promptly.
+                await asyncio.sleep(1.0)
 
-            sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=False, is_mention=is_mention)
+            if self._pending_deferred_replies.get(chat_id) is asyncio.current_task():
+                self._pending_deferred_replies.pop(chat_id, None)
+            sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True, is_mention=is_mention)
             if sent:
                 asyncio.create_task(self.refresh_single_chat_summary(chat_id))
-            logger.info(f"[DEFERRED REPLY SENT] Successfully replied to chat {chat_id} after cooldown.")
+                logger.info(f"[DEFERRED REPLY SENT] Successfully replied to chat {chat_id} after cooldown.")
         except asyncio.CancelledError:
             logger.debug(f"[DEFERRED REPLY CANCELLED] Deferred reply task for chat {chat_id} was cancelled.")
         except Exception as e:
@@ -804,10 +835,7 @@ class ReplyManager(CommandRouterMixin):
             await asyncio.sleep(delay)
 
             # Safety checks
-            if self.safety.is_emergency_stopped or self.safety.get_remaining_pause_seconds() > 0:
-                return
-            is_quiet, _ = self.safety.is_in_quiet_hours()
-            if is_quiet:
+            if not self._outgoing_allowed(chat_id) or self.db.get_state("spontaneous_followup_enabled", "1") != "1":
                 return
 
             # Check if contact messaged in the meantime; if so, never interrupt
@@ -868,8 +896,9 @@ class ReplyManager(CommandRouterMixin):
             if self.safety.is_emergency_stopped:
                 return
 
-            sent_msg = await self._client.send_message(chat_id, followup_clean)
-            self.safety.mark_reply_sent(chat_id)
+            sent_msg = await self._deliver_message(chat_id, followup_clean)
+            if sent_msg is None:
+                return
             sent_id = getattr(sent_msg, "id", 0)
             if not isinstance(sent_id, int):
                 sent_id = 0
@@ -1329,8 +1358,12 @@ class ReplyManager(CommandRouterMixin):
     async def maybe_send_reaction(
         self, chat_id: int, message_id: int, text: str, allow_any_emoji: bool = False
     ) -> bool:
+        async with self._outgoing_lock:
+            return await self._send_reaction_unlocked(chat_id, message_id, text, allow_any_emoji)
+
+    async def _send_reaction_unlocked(self, chat_id: int, message_id: int, text: str, allow_any_emoji: bool) -> bool:
         """Add an emoji reaction to the message if reaction features and cooldown permit."""
-        if not self._client:
+        if not self._client or not self._outgoing_allowed(chat_id):
             return False
 
         # Check if reactions are enabled
@@ -1435,6 +1468,8 @@ class ReplyManager(CommandRouterMixin):
             from telethon.tl.types import ReactionEmoji
 
             peer = await self._client.get_input_entity(chat_id)
+            if not self._outgoing_allowed(chat_id):
+                return False
             await self._client(SendReactionRequest(peer=peer, msg_id=message_id, reaction=[ReactionEmoji(emoticon=chosen)]))
             now = time.time()
             self.db.record_reaction(now)
@@ -1553,47 +1588,22 @@ class ReplyManager(CommandRouterMixin):
             groups.update(private_set)
         except Exception:
             pass
-        if not groups:
-            try:
-                known = self.db.get_known_chats()
-                groups = {c["chat_id"] for c in known if c.get("chat_id", 0) < 0 and self.privacy.is_chat_allowed(c["chat_id"], True)}
-            except Exception:
-                return
         # Also private chats are summarized when active
         for cid in list(groups):
             try:
-                marker = int(self.db.get_state(f"chat_summary_marker_{cid}", "0"))
-                new_count = self.db.count_chat_messages_since(cid, marker)
                 # Busy community groups recap sooner: when the chat produced >=5 messages in the
                 # last 2 minutes, summarize from ~8 new messages; quieter chats need the full 15.
                 try:
                     threshold = 8 if self.db.get_recent_message_count(120.0, chat_id=cid) >= 5 else min_new_messages
                 except Exception:
                     threshold = min_new_messages
-                if new_count < threshold:
-                    continue
-                raw = self.db.get_chat_messages_since_text(cid, marker, limit=max_payload)
-                if not raw:
-                    continue
-                meta = self.db.get_chat_metadata(cid) or {}
-                title = meta.get("title") or ("this group" if cid < 0 else "this chat")
-                summary = await asyncio.to_thread(
-                    self.generator.summarize_chat_history,
-                    title,
-                    self.db.get_chat_summary(cid),
-                    raw,
-                )
-                if not summary:
-                    continue
-                self.db.set_chat_summary(cid, summary)
-                self.db.set_state(f"chat_summary_marker_{cid}", str(self.db.latest_chat_message_row_id(cid)))
-                logger.info(f"[AI CONTEXT SUMMARY] Updated rolling recap for chat {cid} ({new_count} new messages).")
+                await self.refresh_single_chat_summary(cid, min_new_messages=threshold, max_payload=max_payload)
             except Exception as e:
                 logger.debug(f"[AI CONTEXT SUMMARY] Could not summarize chat {cid}: {e}")
 
     async def maybe_send_quiet_hours_goodnight(self, force: bool = False) -> None:
         """Before or upon entering quiet hours (2:00 AM IST), write bye/goodnight to active allowlisted groups like a human."""
-        if not self._client or (not self.safety.quiet_hours_enabled and not force):
+        if not self._client or self.current_mode != "restricted_auto" or (not self.safety.quiet_hours_enabled and not force):
             return
 
         ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -1622,11 +1632,9 @@ class ReplyManager(CommandRouterMixin):
                 allowed_groups = list(allowed_groups)
             except Exception:
                 allowed_groups = []
-            if not allowed_groups:
-                known = self.db.get_known_chats()
-                allowed_groups = [c["chat_id"] for c in known if c.get("chat_id", 0) < 0 and self.privacy.is_chat_allowed(c["chat_id"], True)]
-
             if allowed_groups:
+                if not any(self._outgoing_allowed(gid, allow_quiet_hours=True) for gid in allowed_groups):
+                    return
                 # Goodnight text is AI-generated (never hardcoded); skip if the AI fails
                 try:
                     text = await asyncio.to_thread(self.generator.generate_goodnight_signoff)
@@ -1637,10 +1645,7 @@ class ReplyManager(CommandRouterMixin):
                     return
                 for gid in allowed_groups:
                     try:
-                        peer = await self._client.get_input_entity(gid)
-                        await self._client.send_message(peer, text)
-                        logger.info(f"[QUIET HOURS SIGN-OFF] Sent goodnight message to group {gid}: '{text}'")
-                        await asyncio.sleep(random.uniform(2.0, 4.0))
+                        await self._send_reply(gid, 0, text, allow_quiet_hours=True)
                     except Exception as e:
                         logger.debug(f"Could not send goodnight to group {gid}: {e}")
 
@@ -1653,10 +1658,16 @@ class ReplyManager(CommandRouterMixin):
         text: str,
         adaptive_delay: bool = True,
         is_mention: bool = False,
+        approved: bool = False,
+        allow_quiet_hours: bool = False,
     ) -> bool:
         """Send message using Telethon client with adaptive human reading/typing delay and error handling."""
         if not self._client:
             logger.error("Cannot send reply: Telegram client is not attached.")
+            return False
+        if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours):
+            return False
+        if self.safety.is_sensitive(text):
             return False
 
         async with self._get_chat_send_lock(chat_id):
@@ -1666,13 +1677,6 @@ class ReplyManager(CommandRouterMixin):
             if old_task and old_task is not curr_task and not old_task.done():
                 old_task.cancel()
                 self._pending_deferred_replies.pop(chat_id, None)
-
-            # Human burst guard: never machine-gun >3 reply sequences into one chat within 10s.
-            # Counts one sequence per _send_reply call (multi-bubble parts stay inside the same moment).
-            burst_wait = self.safety.burst_wait_needed(chat_id)
-            if burst_wait > 0:
-                logger.info(f"[BURST GUARD] Pausing {burst_wait:.1f}s before next reply in chat {chat_id} (human burst cap {self.safety.burst_max_sends}/{self.safety.burst_window_seconds:.0f}s).")
-                await asyncio.sleep(burst_wait)
 
             # Anti-Flooding: In group chats (chat_id < 0), NEVER send multiple message bubbles simultaneously.
             # Multi-bubble splitting is strictly restricted to private 1-on-1 DMs (chat_id > 0).
@@ -1695,6 +1699,7 @@ class ReplyManager(CommandRouterMixin):
                     edit_fix_original = first_part
                     first_part = typo_variant
 
+            sent_any = False
             try:
                 chat_min, _ = self.safety._get_chat_cooldown_range(chat_id)
 
@@ -1818,15 +1823,6 @@ class ReplyManager(CommandRouterMixin):
                             logger.debug(f"[TYPING ACTION] Error: {e}")
                             await asyncio.sleep(typing_duration)
 
-                # Strict final guarantee: verify min cooldown has 100% elapsed before sending
-                if last_reply_t > 0 and chat_min > 0:
-                    remaining_sec = chat_min - (time.time() - last_reply_t)
-                    if remaining_sec > 0:
-                        logger.info(
-                            f"[COOLDOWN STRICT WAIT] Enforcing strict remaining {remaining_sec:.1f}s cooldown before sending to chat {chat_id}."
-                        )
-                        await asyncio.sleep(remaining_sec)
-
                 # Send first message part
                 # In DMs always swipe-to-reply; in groups swipe-to-reply to message being answered,
                 # except for room broadcasts / greetings for everyone (e.g. "good morning", "gm", "gn")
@@ -1837,7 +1833,7 @@ class ReplyManager(CommandRouterMixin):
                         actual_reply_to = reply_to_msg_id
                     else:
                         # Group chat: check if message is a general greeting or broadcast intended for everyone
-                        clean_lower = first_part.strip().lower()
+                        clean_lower = msg_parts[0].strip().lower()
                         is_room_broadcast = bool(re.search(
                             r"\b(?:good\s*morning|good\s*night|good\s*afternoon|good\s*evening|gm|gn|hello\s+everyone|hey\s+everyone|hi\s+everyone|sup\s+everyone|hello\s+guys|hey\s+guys|hi\s+guys|bye\s+guys|bye\s+all|goodbye\s+all|gg\s+all|gm\s+all|gn\s+all)\b",
                             clean_lower
@@ -1849,18 +1845,10 @@ class ReplyManager(CommandRouterMixin):
                             actual_reply_to = None
                         else:
                             actual_reply_to = reply_to_msg_id
-                try:
-                    first_sent = await self._client.send_message(chat_id, first_part, reply_to=actual_reply_to)
-                except Exception as send_err:
-                    if actual_reply_to and "reply" in str(send_err).lower():
-                        logger.warning(
-                            f"Failed to reply_to message {actual_reply_to} in chat {chat_id} (deleted?), retrying without reply_to: {send_err}"
-                        )
-                        first_sent = await self._client.send_message(chat_id, first_part)
-                    else:
-                        raise
-                self.safety.mark_reply_sent(chat_id)
-                self.safety.record_burst_send(chat_id)
+                first_sent = await self._deliver_message(chat_id, first_part, actual_reply_to, approved=approved, allow_quiet_hours=allow_quiet_hours)
+                if first_sent is None:
+                    return False
+                sent_any = True
                 self._last_sent_reply_by_chat[chat_id] = first_part
                 if chat_id not in self._recent_replies_history:
                     self._recent_replies_history[chat_id] = []
@@ -1900,6 +1888,8 @@ class ReplyManager(CommandRouterMixin):
                     if self._recent_replies_history.get(chat_id):
                         self._recent_replies_history[chat_id][-1] = edit_fix_original
                     await asyncio.sleep(random.uniform(1.5, 3.0))
+                    if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours):
+                        return True
                     try:
                         await self._client.edit_message(chat_id, first_msg_id, edit_fix_original)
                         logger.info(f"[SELF EDIT] Edited own message {first_msg_id} in chat {chat_id} to fix the typo.")
@@ -1972,8 +1962,9 @@ class ReplyManager(CommandRouterMixin):
                     except Exception:
                         await asyncio.sleep(followup_typing)
 
-                    sub_sent = await self._client.send_message(chat_id, part)
-                    self.safety.mark_reply_sent(chat_id)
+                    sub_sent = await self._deliver_message(chat_id, part, approved=approved, allow_quiet_hours=allow_quiet_hours)
+                    if sub_sent is None:
+                        break
                     sub_msg_id = getattr(sub_sent, "id", 0)
                     if not isinstance(sub_msg_id, int):
                         sub_msg_id = 0
@@ -2005,7 +1996,7 @@ class ReplyManager(CommandRouterMixin):
                         incoming_text=text,
                         message_id=reply_to_msg_id,
                     )
-                    return False
+                    return sent_any
 
                 # Check for Telegram PeerFloodError (account restricted by Telegram anti-spam)
                 if (PeerFloodError and isinstance(e, PeerFloodError)) or "peerflood" in e.__class__.__name__.lower():
@@ -2022,7 +2013,7 @@ class ReplyManager(CommandRouterMixin):
                         incoming_text=text,
                         message_id=reply_to_msg_id,
                     )
-                    return False
+                    return sent_any
 
                 self.safety.record_error()
                 logger.error(f"Failed to send message to chat {chat_id}: {e}")
@@ -2034,4 +2025,4 @@ class ReplyManager(CommandRouterMixin):
                     incoming_text=text,
                     message_id=reply_to_msg_id,
                 )
-                return False
+                return sent_any

@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
+import tempfile
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from app.logger import setup_logger
 from app.session_manager import ensure_secure_dir, ensure_secure_file
@@ -20,16 +24,22 @@ class Database:
 
     def __init__(self, db_path: Path):
         self.db_path = db_path
+        self._context_lock = threading.RLock()
         ensure_secure_dir(db_path.parent)
         self.contexts_dir = db_path.parent / "contexts"
         ensure_secure_dir(self.contexts_dir)
         self._init_db()
         ensure_secure_file(self.db_path)
 
-    def _get_connection(self) -> sqlite3.Connection:
+    @contextmanager
+    def _get_connection(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init_db(self) -> None:
         with self._get_connection() as conn:
@@ -159,11 +169,25 @@ class Database:
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def update_approval_status(self, approval_id: int, status: str) -> bool:
+    def claim_approval(self, approval_id: int) -> Optional[Dict[str, Any]]:
         with self._get_connection() as conn:
+            claimed = conn.execute(
+                "UPDATE pending_approvals SET status = 'sending' WHERE id = ? AND status = 'pending'",
+                (approval_id,),
+            )
+            if not claimed.rowcount:
+                return None
+            return dict(conn.execute("SELECT * FROM pending_approvals WHERE id = ?", (approval_id,)).fetchone())
+
+    def update_approval_status(self, approval_id: int, status: str, expected_status: Optional[str] = None) -> bool:
+        with self._get_connection() as conn:
+            query = "UPDATE pending_approvals SET status = ? WHERE id = ?"
+            params = (status, approval_id)
+            if expected_status is not None:
+                query += " AND status = ?"
+                params += (expected_status,)
             cursor = conn.execute(
-                "UPDATE pending_approvals SET status = ? WHERE id = ?",
-                (status, approval_id),
+                query, params,
             )
             return cursor.rowcount > 0
 
@@ -188,6 +212,10 @@ class Database:
                 "INSERT INTO runtime_state (key, value) VALUES (?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (key, value),
+            )
+            conn.execute(
+                "INSERT INTO runtime_state (key, value) VALUES ('state_revision', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (str(time.time_ns()),),
             )
 
     def get_state(self, key: str, default: str = "") -> str:
@@ -507,6 +535,8 @@ class Database:
         summary = self.get_state(f"chat_summary_{chat_id}", "")
         if summary:
             return summary
+        if self.get_state(f"chat_memory_epoch_{chat_id}"):
+            return ""
         # Fallback to isolated context file on disk
         file_path = self._get_context_file_path(chat_id)
         if file_path.exists():
@@ -514,8 +544,7 @@ class Database:
                 data = json.loads(file_path.read_text(encoding="utf-8"))
                 memory = data.get("ai_memory") or ""
                 if memory:
-                    self.set_state(f"chat_summary_{chat_id}", memory)
-                    return memory
+                    return memory if self.set_chat_summary(chat_id, memory, epoch="") else ""
             except Exception:
                 pass
         return ""
@@ -546,10 +575,18 @@ class Database:
             ).fetchone()
             return int(row[0]) if row else 0
 
-    def set_chat_summary(self, chat_id: int, summary: str) -> None:
+    def set_chat_summary(self, chat_id: int, summary: str, *, epoch: Optional[str] = None, marker: Optional[int] = None) -> bool:
         """Store the AI-generated rolling recap for chat_id and sync to isolated context file."""
-        self.set_state(f"chat_summary_{chat_id}", (summary or "").strip())
-        self.sync_chat_context_file(chat_id)
+        with self._context_lock:
+            if epoch is not None and self.get_state(f"chat_memory_epoch_{chat_id}") != epoch:
+                return False
+            if marker is not None and int(self.get_state(f"chat_summary_marker_{chat_id}", "0")) > marker:
+                return False
+            self.set_state(f"chat_summary_{chat_id}", (summary or "").strip())
+            if marker is not None:
+                self.set_state(f"chat_summary_marker_{chat_id}", str(marker))
+            self.sync_chat_context_file(chat_id)
+            return True
 
     def prune_messages_older_than(self, max_age_seconds: float) -> int:
         """Delete locally cached chat messages older than max_age_seconds (context aging purge).
@@ -570,9 +607,17 @@ class Database:
         CRITICAL SAFETY: This ONLY clears local SQLite context cache used for AI prompts;
         it NEVER deletes any Telegram messages on Telegram servers.
         """
-        with self._get_connection() as conn:
-            cursor = conn.execute("DELETE FROM chat_messages WHERE chat_id = ?", (chat_id,))
-            return cursor.rowcount
+        with self._context_lock:
+            with self._get_connection() as conn:
+                count = conn.execute("DELETE FROM chat_messages WHERE chat_id = ?", (chat_id,)).rowcount
+                conn.executemany(
+                    "INSERT INTO runtime_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    [(f"chat_summary_{chat_id}", ""), (f"chat_summary_marker_{chat_id}", "0"),
+                     (f"chat_memory_epoch_{chat_id}", str(time.time_ns()))],
+                )
+            self.sync_chat_context_file(chat_id)
+            self.set_state("state_revision", str(time.time_ns()))
+            return count
 
     def clear_all_chat_context(self) -> int:
         """Clear locally cached conversation context and summaries across all chats.
@@ -580,13 +625,15 @@ class Database:
         CRITICAL SAFETY: This ONLY clears local SQLite context cache used for AI prompts;
         it NEVER deletes any Telegram messages on Telegram servers.
         """
-        with self._get_connection() as conn:
-            cursor = conn.execute("DELETE FROM chat_messages")
-            try:
-                conn.execute("DELETE FROM chat_summaries")
-            except Exception:
-                pass
-            return cursor.rowcount
+        with self._context_lock:
+            with self._get_connection() as conn:
+                chats = {r[0] for r in conn.execute(
+                    "SELECT chat_id FROM known_chats UNION SELECT chat_id FROM chat_messages UNION SELECT chat_id FROM permanent_chat_context"
+                )}
+                keys = [r[0] for r in conn.execute("SELECT key FROM runtime_state WHERE key LIKE 'chat_summary_%'")]
+            chats.update(int(k.rsplit("_", 1)[-1]) for k in keys if k.rsplit("_", 1)[-1].lstrip("-").isdigit())
+            chats.update(int(p.stem) for p in self.contexts_dir.glob("*.json") if p.stem.lstrip("-").isdigit())
+            return sum(self.clear_chat_context(cid) for cid in chats)
 
     def prune_chat_messages(self, chat_id: int, keep_last: int = 50) -> None:
         """Prune old cached chat context keeping only the last N messages."""
@@ -675,8 +722,12 @@ class Database:
                 "style": self.get_state(f"chat_style_{chat_id}") or "",
                 "updated_at": time.time(),
             }
-            file_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            ensure_secure_file(file_path)
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.contexts_dir, delete=False) as tmp:
+                tmp.write(json.dumps(data, indent=2))
+            try:
+                os.replace(tmp.name, file_path)
+            finally:
+                Path(tmp.name).unlink(missing_ok=True)
         except Exception as e:
             logger.debug(f"Failed to write context file for chat {chat_id} to disk: {e}")
 

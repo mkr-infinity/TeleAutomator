@@ -8,7 +8,8 @@ from typing import Any, Dict, List, Optional
 from app.ai.prompt_manager import PromptManager
 from app.ai.provider import AIProvider, GeminiProvider, LocalRuleProvider, OpenAIProvider
 from app.config import AppConfig
-from app.logger import setup_logger
+from app.logger import redact_secrets, register_secret, setup_logger
+from app.safety_manager import SENSITIVE_CONTENT_PATTERNS
 
 logger = setup_logger(__name__)
 
@@ -17,6 +18,8 @@ def create_ai_provider(config: AppConfig, database: Optional[Any] = None) -> AIP
     """Factory creating the configured AI provider backend with runtime DB overrides."""
     active_provider = (database.get_state("ai_provider", config.ai_provider) if database else config.ai_provider).strip().lower()
     active_enabled = config.ai_enabled if active_provider == config.ai_provider else (active_provider != "local")
+    if database and database.get_state("ai_enabled") in ("0", "1"):
+        active_enabled = database.get_state("ai_enabled") == "1"
 
     if not active_enabled or active_provider == "local":
         logger.info("Using LocalRuleProvider (offline, privacy-preserving draft mode).")
@@ -24,8 +27,20 @@ def create_ai_provider(config: AppConfig, database: Optional[Any] = None) -> AIP
 
     usage_callback = database.record_token_usage if database else None
     active_api_key = (database.get_state("ai_api_key", config.ai_api_key) if database else config.ai_api_key).strip()
+    register_secret(active_api_key)
     active_model = (database.get_state("ai_model", config.ai_model) if database else config.ai_model).strip()
     active_base_url = (database.get_state("ai_base_url", config.ai_base_url) if database else config.ai_base_url).strip()
+    reasoning_effort = config.ai_reasoning_effort
+    temperature, max_tokens = 0.6, None
+    if database:
+        reasoning_effort = database.get_state("ai_reasoning_effort", config.ai_reasoning_effort)
+        try:
+            temperature = float(database.get_state("ai_temperature", "0.6"))
+        except ValueError:
+            pass
+        raw_mtok = database.get_state("ai_max_tokens", "")
+        if raw_mtok.isdigit() and int(raw_mtok) > 0:
+            max_tokens = int(raw_mtok)
 
     if active_provider == "gemini":
         logger.info("Initializing Google Gemini AI provider.")
@@ -33,6 +48,8 @@ def create_ai_provider(config: AppConfig, database: Optional[Any] = None) -> AIP
             api_key=active_api_key,
             model=active_model or "gemini-2.5-flash",
             usage_callback=usage_callback,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
 
     if active_provider in ("openai", "custom", "nvidia", "groq", "together", "deepseek", "inception"):
@@ -45,19 +62,6 @@ def create_ai_provider(config: AppConfig, database: Optional[Any] = None) -> AIP
             default_model = "mercury-3,mercury-3-preview-1014,mercury-3-preview-1002"
             if not default_base_url:
                 default_base_url = "https://api.inceptionlabs.ai/v1"
-
-        reasoning_effort = "default"
-        temperature = 0.6
-        max_tokens = None
-        if database:
-            reasoning_effort = database.get_state("ai_reasoning_effort", "default")
-            try:
-                temperature = float(database.get_state("ai_temperature", "0.6"))
-            except ValueError:
-                pass
-            raw_mtok = database.get_state("ai_max_tokens", "")
-            if raw_mtok and raw_mtok.strip().isdigit() and int(raw_mtok.strip()) > 0:
-                max_tokens = int(raw_mtok.strip())
 
         logger.info(f"Initializing {target_name} OpenAI-compatible AI provider (base_url: {default_base_url or 'default'}).")
         return OpenAIProvider(
@@ -105,6 +109,14 @@ class ReplyGenerator:
         """Reload and rebuild the active AI provider using current database and config settings."""
         self.provider = create_ai_provider(self.config, database=self.db)
 
+    def _generate_reply(self, prompt: str, instructions: str) -> str:
+        # History, pins, summaries and voice profiles need the same filtering as new messages.
+        prompt = "\n".join(
+            "[sensitive content omitted]" if any(p.search(line) for p in SENSITIVE_CONTENT_PATTERNS)
+            else redact_secrets(line) for line in prompt.splitlines()
+        )
+        return self.provider.generate_reply(prompt, redact_secrets(instructions))
+
     def set_language(self, language: str) -> None:
         """Set language rule (dynamic, english, hindi, etc.)."""
         self.prompt_manager.set_language(language)
@@ -150,9 +162,9 @@ class ReplyGenerator:
             is_group=is_group,
         )
         try:
-            draft = self.provider.generate_reply(prompt, instructions)
-            custom_limit = self.prompt_manager.get_custom_word_limit(persona_override)
+            draft = self._generate_reply(prompt, instructions)
             active_custom = (persona_override or "").strip() or (self.prompt_manager.custom_prompt if not is_group else "")
+            custom_limit = self.prompt_manager.get_custom_word_limit(active_custom)
             allow_mentions = bool(active_custom and re.search(r"\b(?:mention|tag|@\w+)\b", active_custom, re.IGNORECASE))
             return self.prompt_manager.clean_reply(
                 draft,
@@ -160,6 +172,7 @@ class ReplyGenerator:
                 custom_limit=custom_limit,
                 allow_mentions=allow_mentions,
                 incoming_text=incoming_text,
+                use_global_limit=False,
             )
         except Exception as e:
             logger.error(f"Failed to generate draft reply: {e}")
@@ -185,7 +198,7 @@ class ReplyGenerator:
             f"Output ONLY the updated permanent memory text, no preamble."
         )
         try:
-            draft = self.provider.generate_reply(prompt, "You are a concise chat-memory system. Output only the updated recap.")
+            draft = self._generate_reply(prompt, "You are a concise chat-memory system. Output only the updated recap.")
             return draft.strip()[:1500]
         except Exception as e:
             logger.error(f"Failed to summarize chat history: {e}")
@@ -202,7 +215,7 @@ class ReplyGenerator:
             f"Reply as {self.prompt_manager.owner_name} speaking to the group. Output ONLY the line."
         )
         instructions = self.prompt_manager.get_system_instructions()
-        draft = self.provider.generate_reply(prompt, instructions)
+        draft = self._generate_reply(prompt, instructions)
         return self.prompt_manager.clean_reply(draft)
 
     def generate_voice_profile(self, chat_title: str, raw_text: str) -> str:
@@ -228,7 +241,7 @@ class ReplyGenerator:
         )
         system_inst = "You are a chat-behavior analyst. Output only the requested profile text."
         try:
-            draft = self.provider.generate_reply(prompt, system_inst)
+            draft = self._generate_reply(prompt, system_inst)
             return draft.strip()[:1500]
         except Exception as e:
             logger.error(f"Failed to generate voice profile: {e}")
@@ -253,7 +266,7 @@ class ReplyGenerator:
         )
         system_inst = "You are a factual context summarizer. Be extremely concise, factual, and direct."
         try:
-            summary = self.provider.generate_reply(prompt, system_inst)
+            summary = self._generate_reply(prompt, system_inst)
             clean_summary = summary.strip()
             if clean_summary:
                 return clean_summary

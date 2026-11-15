@@ -1577,9 +1577,41 @@
 
   // ----------------------------------------------------------------- more
 
+  function renderModelChips(modelsList, selectedOverride) {
+    const container = $("ai-model-chips");
+    if (!container) return;
+    if (!modelsList || !modelsList.length) {
+      container.innerHTML = '<div class="empty sm">No models loaded. Tap &ldquo;Fetch models&rdquo; to query your endpoint.</div>';
+      return;
+    }
+    const selectedList = (Array.isArray(selectedOverride) ? selectedOverride : ($("ai-model").value || "").split(/[,;]/))
+      .map((s) => String(s).trim().replace(/^models\//, "")).filter(Boolean);
+    container.innerHTML = modelsList.map((m) => {
+      const cleanM = String(m).replace(/^models\//, "").trim();
+      const idx = selectedList.indexOf(cleanM);
+      const badge = idx === -1 ? "" : `<span class="chip-order-badge">${idx + 1}</span>`;
+      return `<button class="model-chip ${idx === -1 ? "" : "active"}" data-model="${esc(cleanM)}" type="button">${badge}${esc(cleanM)}</button>`;
+    }).join("");
+    container.querySelectorAll(".model-chip").forEach((chip) => {
+      chip.addEventListener("click", async () => {
+        const selected = [...selectedList];
+        const idx = selected.indexOf(chip.dataset.model);
+        if (idx === -1) selected.push(chip.dataset.model);
+        else selected.splice(idx, 1);
+        if (!selected.length) return toast("Keep at least one active model", "err");
+        const res = await runAction("model", { value: selected.join(",") });
+        if (res && res.ok) {
+          $("ai-model").value = selected.join(",");
+          renderModelChips(modelsList, selected);
+        }
+      });
+    });
+  }
+
   async function refreshMore() {
     const data = await api("/api/access");
     if (!data || data.authorized === false) return maybePaywall(data);
+    if (data.ok === false) return toast(data.response, "err");
     $("access-list").innerHTML = (data.users || []).length
       ? data.users.map((u) => {
           const initials = u.initials || (u.name || "U").slice(0, 2).toUpperCase();
@@ -1616,20 +1648,21 @@
         [{ label: "Remove", kind: "danger", onClick: () => runAction("removeauth", { user_id: btn.dataset.unauth }) }, { label: "Cancel" }])));
 
     const s = await api("/api/state");
+    if (s && s.ok === false) return toast(s.response, "err");
     if (s && s.authorized !== false) {
-      if (document.activeElement !== $("ai-model") && s.ai_model) $("ai-model").value = s.ai_model;
-      if (document.activeElement !== $("ai-baseurl") && s.ai_base_url) $("ai-baseurl").value = s.ai_base_url;
-      if (s.available_models && Array.isArray(s.available_models) && s.available_models.length) {
-        cachedEndpointModels = s.available_models;
-        $("models-fetched-count").textContent = `(${cachedEndpointModels.length})`;
-        renderModelChips(cachedEndpointModels);
-      }
       renderMoreControls(s);
     }
   }
 
   function renderMoreControls(s) {
     if (!s) return;
+    if (document.activeElement !== $("ai-model") && s.ai_model !== undefined) $("ai-model").value = s.ai_model;
+    if (document.activeElement !== $("ai-baseurl") && s.ai_base_url !== undefined) $("ai-baseurl").value = s.ai_base_url;
+    if (Array.isArray(s.available_models)) {
+      cachedEndpointModels = s.available_models;
+      $("models-fetched-count").textContent = `(${cachedEndpointModels.length})`;
+      renderModelChips(cachedEndpointModels);
+    }
 
     // 1. Quiet Hours & Sleep (Phase 7)
     const qhStatus = $("qh-status-pill");
@@ -1691,7 +1724,7 @@
     setSegActive("seg-thinking", s.thinking || "default");
     setSegActive("seg-temp", s.temperature || "0.7");
     setSegActive("seg-lang", s.lang || "english");
-    setSegActive("seg-maxtokens", s.max_tokens || "512");
+    setSegActive("seg-maxtokens", s.max_tokens || "default");
 
     if (!cachedEndpointModels.length && s.ai_model) {
       const curModels = s.ai_model.split(/[,;]/).map((x) => x.trim().replace(/^models\//, "")).filter(Boolean);
@@ -1740,7 +1773,7 @@
 
     const emergBtn = $("btn-emergency-toggle");
     if (emergBtn) {
-      const isStopped = s.emergency_stopped || s.status === "stopped";
+      const isStopped = s.emergency || s.state === "stopped";
       emergBtn.textContent = isStopped ? "Resume Engine" : "Halt Engine";
       emergBtn.className = `btn small ${isStopped ? "primary" : "danger"}`;
     }
@@ -1799,11 +1832,12 @@
     isFlushingQueue = true;
     const remaining = [];
     let synced = 0;
-    for (const item of q) {
+    for (let index = 0; index < q.length; index++) {
+      const item = q[index];
       try {
         const res = await api("/api/action", { action: item.action, params: item.params });
         if (res && res.authorized === false) {
-          remaining.push(item);
+          remaining.push(...q.slice(index));
           break;
         }
         if (res && res.ok) {
@@ -1812,11 +1846,12 @@
           remaining.push(item);
         }
       } catch {
-        remaining.push(item);
+        remaining.push(...q.slice(index));
         break; // Network dropped or still offline
       }
     }
-    saveOfflineQueue(remaining);
+    const originalIds = new Set(q.map((item) => item.id));
+    saveOfflineQueue(remaining.concat(loadOfflineQueue().filter((item) => !originalIds.has(item.id))));
     updateSyncBadge();
     isFlushingQueue = false;
     if (synced > 0) {
@@ -2277,59 +2312,6 @@
     });
     $("ai-model").addEventListener("keydown", (e) => { if (e.key === "Enter") $("ai-model-save").click(); });
 
-    // Model Fallback Multi-Select Chips
-    function renderModelChips(modelsList, selectedOverride) {
-      const container = $("ai-model-chips");
-      if (!container) return;
-      if (!modelsList || !modelsList.length) {
-        container.innerHTML = '<div class="empty sm">No models loaded. Tap &ldquo;Fetch models&rdquo; to query your endpoint.</div>';
-        return;
-      }
-
-      let selectedList;
-      if (Array.isArray(selectedOverride)) {
-        selectedList = selectedOverride.map((s) => String(s).trim().replace(/^models\//, "")).filter(Boolean);
-      } else {
-        selectedList = ($("ai-model").value || "")
-          .split(/[,;]/)
-          .map((s) => s.trim().replace(/^models\//, ""))
-          .filter(Boolean);
-      }
-
-      container.innerHTML = modelsList.map((m) => {
-        const cleanM = String(m).replace(/^models\//, "").trim();
-        const idx = selectedList.indexOf(cleanM);
-        const isActive = idx !== -1;
-        const badgeHtml = isActive ? `<span class="chip-order-badge">${idx + 1}</span>` : "";
-        return `<button class="model-chip ${isActive ? "active" : ""}" data-model="${esc(cleanM)}" type="button">${badgeHtml}${esc(cleanM)}</button>`;
-      }).join("");
-
-      container.querySelectorAll(".model-chip").forEach((chip) => {
-        chip.addEventListener("click", () => {
-          haptic("light");
-          const modelName = chip.dataset.model;
-          let currentSelected = ($("ai-model").value || "")
-            .split(/[,;]/)
-            .map((s) => s.trim().replace(/^models\//, ""))
-            .filter(Boolean);
-
-          const existingIdx = currentSelected.indexOf(modelName);
-          if (existingIdx !== -1) {
-            currentSelected.splice(existingIdx, 1);
-            toast(`Removed ${modelName} from fallback chain (${currentSelected.length} active)`);
-          } else {
-            currentSelected.push(modelName);
-            toast(`Added ${modelName} as fallback #${currentSelected.length}`);
-          }
-
-          const newChain = currentSelected.join(",");
-          $("ai-model").value = newChain;
-          runAction("model", { value: newChain });
-          renderModelChips(modelsList, currentSelected);
-        });
-      });
-    }
-
     // Modal popup: Select which fetched models to add to available models
     function showFetchModelsPopup(models) {
       if (!models || !models.length) {
@@ -2668,7 +2650,7 @@
           modelEl.textContent = `Replied: ${res.model_used || "OK"}`;
           replyEl.textContent = `"${res.reply}"`;
 
-          if (res.active_model) {
+          if (res.auto_applied && res.active_model) {
             $("ai-model").value = res.active_model;
             const workingArr = res.working_models || res.active_model.split(",");
             if (cachedEndpointModels.length) {
@@ -2687,7 +2669,7 @@
           });
           summaryEl.innerHTML = pills.join("");
 
-          if (res.failed_models && res.failed_models.length > 0) {
+          if (res.auto_applied && res.failed_models && res.failed_models.length > 0) {
             toast(`Auto-pruned ${res.failed_models.length} failing model(s). Working: ${res.active_model}`);
           } else {
             toast(`Working model verified: ${res.active_model}`);
@@ -2924,6 +2906,7 @@
       const raw = initDataHeader();
       const q = raw ? `?initData=${encodeURIComponent(raw)}` : "";
       const es = new EventSource(`/api/events${q}`);
+      let lastRevision;
       es.onopen = () => {
         setConnectionStatus("live");
       };
@@ -2932,10 +2915,18 @@
         try {
           const s = JSON.parse(e.data);
           if (s && s.state) renderState(s);
+          if (s && currentView === "more") renderMoreControls(s);
+          if (s && s.revision !== lastRevision) {
+            lastRevision = s.revision;
+            if (currentView === "chats") refreshChats().catch(() => {});
+            if (currentView === "persona") refreshPersona().catch(() => {});
+          }
+          if (s && currentView === "approvals") refreshApprovals().catch(() => {});
         } catch (_) {}
       });
       es.onerror = () => {
         setConnectionStatus("connecting");
+        api("/api/auth").then((auth) => { if (auth && auth.authorized === false) maybePaywall(auth); }).catch(() => {});
         // SSE reconnects automatically by browser spec
       };
     } catch (_) {
