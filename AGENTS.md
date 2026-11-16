@@ -160,8 +160,11 @@ Paths below are repository-relative. Read actual code before using this map as a
 | `tests/test_bot_control.py` | Bot authorization, permissions, callbacks, and controls. |
 | `tests/test_bot_menu_engagement.py` | Menu uniqueness, engagement policy, and outgoing context. |
 | `tests/test_config.py` | Configuration validation. |
+| `tests/test_context_recovery.py` | Context file locking, disk recovery, and oldest-first summary batches. |
+| `tests/test_control_atomicity.py` | Atomic access changes, command grants, imports, health readiness, and bounded HTTP reads. |
 | `tests/test_cooldown_and_antiflood.py` | Cooldown, typing, serialized delivery, and group anti-flood behavior. |
 | `tests/test_deferred_delay_budget.py` | Queue/lock time credited toward reading without skipping typing or Stop. |
+| `tests/test_delivery_integrity.py` | Delivery retry guards, stale drafts, chatty parsing, approval batches, and sleep pauses. |
 | `tests/test_frontend.py` | Pytest wrappers for Node and browser workflow tests. |
 | `tests/test_logger.py` | Log redaction. |
 | `tests/test_message_filter.py` | Message eligibility. |
@@ -171,12 +174,16 @@ Paths below are repository-relative. Read actual code before using this map as a
 | `tests/test_per_chat_context_and_burst.py` | Chat isolation, profiles, context, and burst controls. |
 | `tests/test_pr_readiness_audit.py` | Regression tests from earlier readiness checks; not an audit report. |
 | `tests/test_privacy_manager.py` | Allowlists, blocklists, and exclusions. |
+| `tests/test_prompt_integrity.py` | Meaning-safe reply cleaning, length limits, style priority, and summary failures. |
 | `tests/test_provider_silence.py` | Intentional NONE versus malformed content and candidate fallback. |
 | `tests/test_reply_manager.py` | Core reply orchestration and delivery. |
 | `tests/test_reply_policy_and_preferences.py` | Reply policy, history, and preference transfer. |
 | `tests/test_reply_stages_and_feedback.py` | Context/writer/humanizer stages, stale drafts, and isolated feedback. |
+| `tests/test_runtime_recovery.py` | Reconnection, readiness, safe-mode recovery, and session file naming. |
 | `tests/test_safety_manager.py` | Safety limits, duplicates, emergency controls, and cooldown persistence. |
 | `tests/test_session_manager.py` | Session formats and secure handling. |
+| `tests/test_ui_audit_regressions.cjs` | Playwright Mini App regressions for saves, approvals, popups, graph, and swipes. |
+| `tests/test_ui_audit_regressions.py` | Pytest wrapper for the UI regression browser script. |
 | `tests/test_version_sync.py` | Version propagation and stale asset reference detection. |
 | `tests/test_workflow_regressions.py` | Cross-layer authorization, model selection, context, and workflow regressions. |
 
