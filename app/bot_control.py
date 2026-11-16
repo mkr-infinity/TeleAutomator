@@ -1010,6 +1010,20 @@ class BotControl:
             return False
         return await self.send_message(main_id, text, reply_markup=reply_markup)
 
+    async def send_alert_all(self, text: str, reply_markup: Optional[dict] = None) -> bool:
+        """Send a status notice to every authorized user plus the main owner; True if any arrived."""
+        recipients = sorted(authorized_user_ids(self.db, self.seed_user_ids))
+        main_id = self.main_user_id
+        if main_id and main_id not in recipients:
+            recipients.append(main_id)
+        delivered = False
+        for user_id in recipients:
+            try:
+                delivered = bool(await self.send_message(user_id, text, reply_markup=reply_markup)) or delivered
+            except Exception as exc:  # unknown users or users who blocked the bot
+                logger.debug("Status notice to %s failed: %s", user_id, type(exc).__name__)
+        return delivered
+
     async def send_approval_card(self, text: str, approval_id: int) -> bool:
         """Send an approval notification with ✅/❌ inline buttons (suggestion #2)."""
         main_id = self.main_user_id

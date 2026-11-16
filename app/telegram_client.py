@@ -20,6 +20,7 @@ from app.event_handlers import register_handlers
 from app.health import HealthMonitor
 from app.logger import setup_logger
 from app.message_filter import MessageFilter
+from app.notifications import check_quiet_hours_transition
 from app.privacy_manager import PrivacyManager
 from app.reply_manager import ReplyManager
 from app.safety_manager import SafetyManager
@@ -197,6 +198,7 @@ class TelegramService:
             if self._initialized and is_connected:
                 self._schedule("quiet_hours", self.reply_manager.maybe_send_quiet_hours_goodnight)
                 self._schedule("pause_expiry", self.reply_manager.check_pause_expiry)
+                self._schedule("quiet_hours_notice", lambda: check_quiet_hours_transition(self.reply_manager))
                 self._schedule("safe_mode", self.reply_manager.maybe_recover_safe_mode)
 
             now = time.monotonic()

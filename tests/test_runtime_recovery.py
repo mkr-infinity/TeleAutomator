@@ -15,6 +15,7 @@ from telethon.errors import (
 from app.boot_guard import record_boot_and_maybe_safe_mode
 from app.config import AppConfig, load_config
 from app.health import HealthMonitor
+from app.safety_manager import SafetyManager
 from app.session_manager import get_local_session_file, get_telethon_session
 from app.storage.database import Database
 from app.telegram_client import TelegramService
@@ -29,6 +30,8 @@ def make_service(tmp_path):
     for method in ("maybe_send_quiet_hours_goodnight", "check_pause_expiry",
                    "maybe_recover_safe_mode", "refresh_group_summaries"):
         setattr(reply, method, AsyncMock())
+    # The quiet-hours notice job reads real schedule state; its first run only stores a baseline.
+    reply.db, reply.safety = db, SafetyManager(config, db)
     privacy = MagicMock()
     privacy.get_all_allowed_chats.return_value = (set(), set())
     service = TelegramService(config, db, SimpleNamespace(is_emergency_stopped=False),
@@ -207,6 +210,7 @@ def test_heartbeat_does_not_wait_for_scheduled_model_work_and_stop_cancels_jobs(
         assert started.is_set()
         assert ticks == 3
         assert service.reply_manager.maybe_send_quiet_hours_goodnight.await_count == 1
+        assert service.db.get_state("quiet_hours_notice_state")  # notice job ran and only stored a baseline
         assert service.health.is_healthy()
         await service.stop()
         assert cancelled.is_set()

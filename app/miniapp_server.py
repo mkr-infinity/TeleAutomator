@@ -15,6 +15,7 @@ the main asyncio loop with run_coroutine_threadsafe. Started from app.main.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import gzip
@@ -38,11 +39,17 @@ from app.ai.provider import normalize_base_url
 from app.ai.reply_generator import create_ai_provider
 from app.bot_control import authorized_user_ids, can_run_command
 from app.logger import setup_logger
+from app.notifications import format_change, notify_authorized
 from app.settings_transfer import MAX_BACKUP_BYTES, MAX_CONTEXT_NOTES, export_preferences, validate_preferences
 
 logger = setup_logger(__name__)
 
 MINIAPP_DIR = Path(__file__).resolve().parent.parent / "miniapp"
+
+# Console commands worth a change-log notice even without arguments; other bare commands are views.
+CONSOLE_CHANGE_COMMANDS = {"/stop", "/resume", "/unpause", "/pause", "/off", "/sleep", "/goodnight", "/gencontext",
+                           "/genvoice", "/syncpins", "/syncpin", "/clearcontext", "/backup"}
+CHANGE_DEDUPE_SECONDS = 10.0
 
 # initData may be up to a day old (Telegram sends a fresh one on every app open)
 INIT_DATA_MAX_AGE_SECONDS = 86400.0
@@ -78,6 +85,15 @@ def _format_ampm(time_str: str) -> str:
         return f"{h12:02d}:{m} {ampm}"
     except Exception:
         return time_str
+
+
+def _format_seconds(value: float) -> str:
+    return f"{value:.0f}s" if float(value).is_integer() else f"{value:.1f}s"
+
+
+def _actor_name(user: dict) -> str:
+    """Display name from validated initData: first name, else @username, else the numeric ID."""
+    return str(user.get("first_name") or (f"@{user['username']}" if user.get("username") else "") or user.get("id", ""))
 
 
 def validate_init_data(init_data: str, bot_token: str) -> Optional[dict]:
@@ -184,6 +200,32 @@ class MiniAppAPI:
 
     def __init__(self, ctx: MiniAppContext):
         self.ctx = ctx
+        self._recent_changes: dict = {}
+        self._recent_changes_lock = threading.Lock()
+
+    def announce_change(self, actor_id, actor_name, label, response):
+        """Fire-and-forget change log for authorized users; identical taps within 10 s are skipped.
+        Returns the scheduled future, or None when nothing was sent. Never raises into the handler."""
+        ctx = self.ctx
+        try:
+            loop = getattr(ctx, "loop", None)
+            if loop is None or loop.is_closed() or not hasattr(getattr(ctx, "reply_manager", None), "_send_control_alert_unlocked"):
+                return None
+            key, now = (actor_id, str(label), str(response)), time.monotonic()
+            with self._recent_changes_lock:
+                self._recent_changes = {k: t for k, t in self._recent_changes.items() if now - t < CHANGE_DEDUPE_SECONDS}
+                if key in self._recent_changes:
+                    return None
+                self._recent_changes[key] = now
+            coroutine = notify_authorized(ctx.reply_manager, format_change(actor_id, actor_name, label, response))
+            try:
+                return asyncio.run_coroutine_threadsafe(coroutine, loop)
+            except Exception:  # e.g. the loop closed after the check
+                coroutine.close()
+                raise
+        except Exception as exc:
+            logger.debug("Mini App change notice skipped: %s", type(exc).__name__)
+        return None
 
     def command_denial(self, user_id: int, command: str) -> Optional[dict]:
         if user_id not in _authorized_user_ids(self.ctx):
@@ -264,12 +306,20 @@ class MiniAppAPI:
         if not avail_models:
             configured = ai_model or getattr(ctx.generator.provider, "model", "")
             avail_models = [m.strip() for m in configured.replace(";", ",").split(",") if m.strip()]
+        try:
+            with ctx.db._get_connection() as conn:
+                row = conn.execute("SELECT status, detail, created_at FROM action_history WHERE source = 'context' "
+                                   "ORDER BY id DESC LIMIT 1").fetchone()
+            last_context = dict(row) if row else None
+        except Exception:
+            last_context = None
 
         return {
             "revision": ctx.db.get_state("state_revision", "0"),
             "history_revision": ctx.db.latest_action_id(),
             "pipeline": {"context": "Per-chat files and batched summaries", "writer": "Selected model", "humanizer": "Local checks; no extra model call",
-                         "context_jobs": len(getattr(getattr(ctx.reply_manager, "context_agent", None), "busy", ()))},
+                         "context_jobs": len(getattr(getattr(ctx.reply_manager, "context_agent", None), "busy", ())),
+                         "last_context": last_context},
             "mode": mode,
             "state": "stopped" if emergency else ("paused" if paused > 0 else "active"),
             "paused_remaining_sec": int(paused),
@@ -323,6 +373,14 @@ class MiniAppAPI:
         default_max = getattr(ctx.safety, "max_chat_cooldown", 60.0)
         all_cids = sorted((priv | grps) | blocked)
         metadata, contexts, settings = ctx.db.get_chat_panel_data(all_cids)
+        try:
+            chatty_global = float(ctx.db.get_state("chatty_probability", str(getattr(ctx.reply_manager.config, "chatty_probability", 0.15))))
+            if not math.isfinite(chatty_global):
+                chatty_global = getattr(ctx.reply_manager.config, "chatty_probability", 0.15)
+        except (ValueError, TypeError):
+            chatty_global = 0.15
+        global_rate = min(1.0, max(0.0, chatty_global))
+        chatty_rate = getattr(ctx.reply_manager, "group_chatty_probability", None)
         import re
         gradients = [
             "linear-gradient(135deg, #153421 0%, #1E3F2A 100%)",
@@ -365,10 +423,26 @@ class MiniAppAPI:
                     if cooldown_min == 0.0 and cooldown_max == 0.0:
                         cooldown_str = "0s (No chat wait; global cooldown applies)"
                     else:
-                        cooldown_str = f"{int(cooldown_min)}s - {int(cooldown_max)}s"
+                        cooldown_str = f"{_format_seconds(cooldown_min)} - {_format_seconds(cooldown_max)}"
                 except (ValueError, TypeError, OverflowError):
                     cooldown_min = cooldown_max = None
                     cooldown_str = ""
+
+            own_chatty = settings.get(f"chat_chatty_{cid}") or ""
+            rules = f"{settings.get(f'chat_prompt_{cid}') or ''} {perm.get('notes') or ''}"
+            try:
+                # Runtime order: per-chat setting, then a rate written in the chat prompt or notes, then global.
+                # shortcut: only text containing a digit is re-parsed (each rate phrase has one) so 100 chats stay a few queries.
+                if own_chatty:
+                    chatty_effective = float(own_chatty)
+                elif callable(chatty_rate) and any(ch.isdigit() for ch in rules):
+                    chatty_effective = float(chatty_rate(cid))
+                else:
+                    chatty_effective = global_rate
+                chatty_effective = min(1.0, max(0.0, chatty_effective)) if math.isfinite(chatty_effective) else 0.0
+            except Exception:  # display only; never fail the chat list
+                chatty_effective = 0.0 if own_chatty else global_rate
+            chatty_source = "chat" if own_chatty else ("prompt" if abs(chatty_effective - global_rate) > 1e-9 else "global")
 
             chats.append({
                 "id": cid,
@@ -379,6 +453,8 @@ class MiniAppAPI:
                 "avatar_url": avatar_url,
                 "type": "Group" if cid < 0 else "Private",
                 "chatty": settings.get(f"chat_chatty_{cid}") or "",
+                "chatty_effective": chatty_effective,
+                "chatty_source": chatty_source,
                 "style": settings.get(f"chat_style_{cid}") or "",
                 "prompt": settings.get(f"chat_prompt_{cid}") or "",
                 "context": perm.get("notes") or "",
@@ -390,12 +466,6 @@ class MiniAppAPI:
                 "voice_profile": bool(settings.get(f"chat_voice_profile_{cid}")),
                 "blocked": cid in blocked,
             })
-        try:
-            chatty_global = float(ctx.db.get_state("chatty_probability", str(getattr(ctx.reply_manager.config, "chatty_probability", 0.15))))
-            if not math.isfinite(chatty_global):
-                chatty_global = getattr(ctx.reply_manager.config, "chatty_probability", 0.15)
-        except (ValueError, TypeError):
-            chatty_global = 0.15
         return {"chats": chats, "chatty_global": chatty_global}
 
     def handle_pending(self) -> dict:
@@ -615,7 +685,7 @@ class MiniAppAPI:
         cmd_name, _, rest = filled.partition(" ")
         return f"{cmd_name} {rest.strip()}".strip()
 
-    def handle_action(self, user_id: int, action: str, params: dict) -> dict:
+    def handle_action(self, user_id: int, action: str, params: dict, actor_name: Optional[str] = None) -> dict:
         if not isinstance(params, dict):
             return {"ok": False, "response": "Action parameters must be an object"}
         known = action in self.ACTION_TO_COMMAND or action in {"chat_chatty", "chat_cooldown", "save_available_models", "safemode_reset", "emergencystop", "addauth", "removeauth"}
@@ -630,6 +700,11 @@ class MiniAppAPI:
             raise
         self.ctx.db.record_action("miniapp", label, "success" if result.get("ok") else "failed",
                                   "Action completed" if result.get("ok") else "Action rejected; check permissions, inputs, or safety controls", actor_id=user_id)
+        # safemode is a status view and backup already delivers its own file
+        if result.get("ok") and action not in ("safemode", "backup"):
+            chat = params.get("chat_id")
+            what = action.replace("_", " ") + (f" · chat {chat}" if chat not in (None, "") else "")
+            self.announce_change(user_id, actor_name, what, result.get("response", ""))
         return result
 
     def _perform_action(self, user_id: int, action: str, params: dict) -> dict:
@@ -687,7 +762,7 @@ class MiniAppAPI:
                     ctx.safety.set_chat_cooldown(cid, c_min, c_max)
                 if c_min == 0.0 and c_max == 0.0:
                     return {"ok": True, "response": f"Cooldown for chat {cid} set to 0s (Instant - No Wait)."}
-                return {"ok": True, "response": f"Cooldown for chat {cid} set to {int(c_min)}s - {int(c_max)}s."}
+                return {"ok": True, "response": f"Cooldown for chat {cid} set to {_format_seconds(c_min)} - {_format_seconds(c_max)}."}
             except (ValueError, TypeError) as e:
                 return {"ok": False, "response": f"Invalid cooldown values: {e}"}
         if action == "chatprompt":
@@ -856,7 +931,7 @@ class MiniAppAPI:
         ctx.db.update_authorized_users(remove=(target,), seeds=_seed_user_ids(ctx))
         return {"ok": True, "response": f"User {target} removed from authorized users."}
 
-    def run_command(self, command: str, user_id: int, audit: bool = True) -> dict:
+    def run_command(self, command: str, user_id: int, audit: bool = True, actor_name: Optional[str] = None) -> dict:
         """Run a bot command through the shared engine on the main asyncio loop."""
         ctx = self.ctx
         if not command.startswith("/"):
@@ -886,6 +961,11 @@ class MiniAppAPI:
                 logger.error(f"Mini app command '{command.split()[0]}' failed: {e}")
                 return {"ok": False, "response": f"Command failed: {e}"}
         ok = bool(response) and not response.startswith(("❌", "⚠️", "❓", "Usage:"))
+        if audit and ok:  # console path; GUI actions log once in handle_action
+            parts = command.split()
+            root = parts[0].lower().split("@")[0]
+            if len(parts) > 1 or root in CONSOLE_CHANGE_COMMANDS:
+                self.announce_change(user_id, actor_name, f"console {root}", response)
         return {"ok": ok, "response": response or "No response."}
 
     def handle_history(self, status="", before=0, limit=40) -> dict:
@@ -928,9 +1008,12 @@ class MiniAppAPI:
             self.ctx.settings_downloads.pop(token, None)
         return None
 
-    def handle_settings_import(self, user_id, backup, *, preview=True) -> dict:
+    def handle_settings_import(self, user_id, backup, *, preview=True, actor_name=None) -> dict:
         with self.ctx.db._context_lock:
-            return self._handle_settings_import(user_id, backup, preview=preview)
+            result = self._handle_settings_import(user_id, backup, preview=preview)
+        if not preview and result.get("ok"):  # announced after the shared lock is released
+            self.announce_change(user_id, actor_name, "preferences imported", result.get("response", ""))
+        return result
 
     def _handle_settings_import(self, user_id, backup, *, preview=True) -> dict:
         denial = self._settings_denial(user_id)
@@ -1599,19 +1682,20 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
             self._json(401, self._unauthorized_payload())
             return
         user_id = int(user["id"])
+        actor_name = _actor_name(user)
         try:
             if path == "/api/cmd":
                 command = str(body.get("command", "")).strip()
                 if not command or len(command) > 500:
                     self._json(400, {"ok": False, "response": "Provide a command."})
                     return
-                self._json(200, self.api.run_command(command, user_id))
+                self._json(200, self.api.run_command(command, user_id, actor_name=actor_name))
             elif path in ("/api/settings/preview", "/api/settings/import"):
                 denial = self.api._settings_denial(user_id)
                 if denial:
                     self._json(403, denial)
                     return
-                result = self.api.handle_settings_import(user_id, body.get("backup"), preview=path.endswith("preview"))
+                result = self.api.handle_settings_import(user_id, body.get("backup"), preview=path.endswith("preview"), actor_name=actor_name)
                 self._json(200 if result.get("ok") else 400, result)
             elif path == "/api/action":
                 action = str(body.get("action", "")).strip()
@@ -1619,7 +1703,7 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
                 if not action or not isinstance(params, dict):
                     self._json(400, {"ok": False, "response": "Provide an action."})
                     return
-                self._json(200, self.api.handle_action(user_id, action, params))
+                self._json(200, self.api.handle_action(user_id, action, params, actor_name=actor_name))
             elif path == "/api/fetch_models":
                 for command in ("/checkmodels", "/baseurl" if body.get("base_url") else "/checkmodels", "/apikey" if body.get("api_key") else "/checkmodels"):
                     denial = self.api.command_denial(user_id, command)
@@ -1648,6 +1732,9 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
                     return
                 result = self.api.handle_test_model(message, model, base_url, api_key, auto_apply=auto_apply)
                 self.api.ctx.db.record_action("miniapp", "model_test", "success" if result.get("ok") else "failed", "Provider and model check completed", actor_id=user_id)
+                if result.get("auto_applied"):
+                    self.api.announce_change(user_id, actor_name, "model test applied a new rotation",
+                                             f"Active models: {result.get('active_model', '')}")
                 self._json(200, result)
             else:
                 self._json(404, {"ok": False, "response": "Unknown endpoint."})

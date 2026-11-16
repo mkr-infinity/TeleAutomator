@@ -19,6 +19,7 @@ from app.banner import print_banner
 from app.config import load_config
 from app.health import HealthMonitor
 from app.logger import setup_logger
+from app.notifications import model_error_callback
 from app.privacy_manager import PrivacyManager
 from app.reply_manager import ReplyManager
 from app.safety_manager import SafetyManager
@@ -112,6 +113,7 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
 
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
+    generator.on_model_error = model_error_callback(loop, reply_mgr)
 
     def _signal_handler() -> None:
         logger.info("Received termination signal. Initiating shutdown...")
