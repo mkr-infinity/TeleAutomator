@@ -483,6 +483,15 @@ class Database:
                 ).fetchone()
             return float(row["timestamp"]) if row else 0.0
 
+    def has_recent_manual_message(self, chat_id: int, within_seconds: float) -> bool:
+        """True when the account owner typed a message (not automation) in this chat recently."""
+        with self._get_connection() as conn:
+            return conn.execute(
+                "SELECT 1 FROM chat_messages WHERE chat_id = ? AND is_outgoing = 1 AND is_automated = 0 "
+                "AND created_at >= datetime('now', ?) LIMIT 1",
+                (chat_id, f"-{int(within_seconds)} seconds"),
+            ).fetchone() is not None
+
     def prune_old_reply_events(self, max_age_seconds: float = 86400.0) -> None:
         """Delete reply timestamps older than max_age_seconds."""
         import time

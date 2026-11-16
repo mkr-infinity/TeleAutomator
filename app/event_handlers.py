@@ -91,6 +91,8 @@ def record_own_outgoing_message(reply_manager: ReplyManager, event: Any, my_user
     text = reply_manager.privacy.sanitize_text(text)
     if reply_manager.db.has_chat_message(chat_id, getattr(event, "id", None)):
         return
+    if getattr(reply_manager, "is_own_send", lambda *_: False)(chat_id, text) is True:
+        return  # echo of an automated message, not something the owner typed
     try:
         reply_manager.db.record_chat_message(
             chat_id=chat_id,

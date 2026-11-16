@@ -84,6 +84,7 @@ class ReplyManager(CommandRouterMixin):
         self._context_initializing = set()
         self._context_init_tasks = {}
         self._context_ready = set()
+        self._own_sends: dict[int, list[tuple[str, float]]] = {}
         self._context_startup_enabled = False
         self._process_started_at = time.time()
         self._last_delivery_parts = {}
@@ -193,7 +194,28 @@ class ReplyManager(CommandRouterMixin):
         except (ValueError, TypeError):
             return 0.0
 
+    def expect_own_send(self, chat_id: int, text: str) -> None:
+        """Remember a message the automation is about to send so its echo is never taken for a manual one."""
+        now = time.time()
+        sends = [item for item in self._own_sends.get(chat_id, []) if now - item[1] < 120]
+        sends.append((text.strip(), now))
+        self._own_sends[chat_id] = sends
+
+    def is_own_send(self, chat_id: int, text: str) -> bool:
+        now = time.time()
+        return any(sent == text.strip() and now - at < 120 for sent, at in self._own_sends.get(chat_id, []))
+
+    def owner_recently_active(self, chat_id: int) -> bool:
+        """The owner replied by hand lately: stay quiet so two voices never share one chat."""
+        try:
+            minutes = float(self.db.get_state("owner_active_minutes", "15"))
+        except ValueError:
+            minutes = 15.0
+        return minutes > 0 and self.db.has_recent_manual_message(chat_id, minutes * 60)
+
     def _context_current(self, context, approved=False):
+        if not approved and context is not None and self.owner_recently_active(context.chat_id):
+            return False
         if not self.context_agent.is_current(context):
             return False
         if context is not None and context.chat_id < 0 and not approved and not getattr(context, "is_mention", False):
@@ -345,6 +367,7 @@ class ReplyManager(CommandRouterMixin):
                         self.db.record_action("automation", "reply", "blocked", reason, chat_id=chat_id)
                         return None
                     try:
+                        self.expect_own_send(chat_id, text)
                         message = await self._client.send_message(chat_id, text, reply_to=reply_to)
                     except Exception as e:
                         if not reply_to or "reply" not in str(e).lower() or not self._outgoing_allowed(chat_id, approved, allow_quiet_hours):
@@ -656,6 +679,9 @@ class ReplyManager(CommandRouterMixin):
         if pending and pending is not asyncio.current_task() and not pending.done():
             pending.cancel()
         if self.current_mode == "restricted_auto" and self.safety.action_block_reason():
+            return
+        if self.current_mode == "restricted_auto" and self.owner_recently_active(chat_id):
+            self.db.record_action("automation", "reply", "skipped", "Owner replied by hand recently; automation stays quiet in this chat", chat_id=chat_id)
             return
         # Sanitize incoming text before passing to generator
         clean_text = self.privacy.sanitize_text(text)
@@ -1584,6 +1610,8 @@ class ReplyManager(CommandRouterMixin):
     async def _send_reaction_unlocked(self, chat_id: int, message_id: int, text: str, allow_any_emoji: bool) -> bool:
         """Add an emoji reaction to the message if reaction features and cooldown permit."""
         if not self._client or not self._outgoing_allowed(chat_id):
+            return False
+        if not allow_any_emoji and self.owner_recently_active(chat_id):
             return False
 
         # Check if reactions are enabled

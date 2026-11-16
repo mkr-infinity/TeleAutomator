@@ -39,6 +39,7 @@ Before implementing a new task:
 ## Behavior to preserve
 
 - Ignore chats outside the explicit allowlist before collecting context or generating replies. Recheck permission and stop/pause state after waits and before delivery.
+- When the owner has replied by hand in a chat within `owner_active_minutes` (default 15, 0 disables), automatic replies and reactions there stay quiet; the account's own sent messages never count as manual (`expect_own_send`).
 - Keep settings, prompts, context, pins, voice profiles, feedback, and history isolated per chat. Custom settings affect that chat only; otherwise use defaults. Chat overrides must not bypass account-wide safety limits.
 - Default global and per-chat cooldown ranges are 5–60 seconds. Verify effective runtime settings, not just environment defaults. Wait for live limits before sending; credit queued/lock waiting toward reading delay while preserving final typing indicators.
 - Generate automated conversational replies through the configured model, including rewrites of saved keyword guidance. No canned conversational fallback when a provider is unavailable. Static UI labels and control/status messages are a different category.
@@ -174,6 +175,7 @@ Paths below are repository-relative. Read actual code before using this map as a
 | `tests/test_miniapp.py` | Mini App authentication, permissions, API mapping, and HTTP behavior. |
 | `tests/test_miniapp_browser.cjs` | Playwright mobile viewport/popup workflows with mocked services. |
 | `tests/test_miniapp_frontend.cjs` | JavaScript dashboard workflows with a lightweight DOM fixture. |
+| `tests/test_owner_presence.py` | Automation stays quiet for 15 minutes after the owner replies by hand, then resumes. |
 | `tests/test_per_chat_context_and_burst.py` | Chat isolation, profiles, context, and burst controls. |
 | `tests/test_notifications.py` | Model-error alerts, quiet-hours notices, and Mini App change log. |
 | `tests/test_pr_readiness_audit.py` | Regression tests from earlier readiness checks; not an audit report. |

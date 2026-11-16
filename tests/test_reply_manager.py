@@ -2077,7 +2077,7 @@ def test_spontaneous_followup_command_and_execution(tmp_path: Path, clock):
 
         chat_id = 1234
         # Record initial reply
-        db.record_chat_message(chat_id, 100, None, "Kaif", "on my way", is_outgoing=True)
+        db.record_chat_message(chat_id, 100, None, "Kaif", "on my way", is_outgoing=True, is_automated=True)
         # Intervening peer message arrives
         db.record_chat_message(chat_id, 101, 555, "Alice", "okay see ya", is_outgoing=False)
 
@@ -2088,7 +2088,7 @@ def test_spontaneous_followup_command_and_execution(tmp_path: Path, clock):
 
         # 3. Execution test: No intervening message -> sends follow-up
         chat_id2 = 5678
-        db.record_chat_message(chat_id2, 200, None, "Kaif", "heading out", is_outgoing=True)
+        db.record_chat_message(chat_id2, 200, None, "Kaif", "heading out", is_outgoing=True, is_automated=True)
         await mgr._schedule_spontaneous_followup(chat_id2, "heading out", delay_seconds=0.0)
         # Should have sent follow-up
         assert mock_client.send_message.call_count == 1
