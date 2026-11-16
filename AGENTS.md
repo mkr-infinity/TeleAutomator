@@ -82,8 +82,8 @@ Paths below are repository-relative. Read actual code before using this map as a
 | `.dockerignore` | Excludes unnecessary/private files from Docker build context. |
 | `Dockerfile` | Application container build and runtime definition. |
 | `compose.yaml` | Local container service, volume, ports, and resource limits. |
-| `entrypoint.sh` | Container startup permissions and session prerequisites. |
-| `healthcheck.sh` | Invokes the application's health-check mode. |
+| `entrypoint.sh` | Fixes volume ownership as root, drops to UID 10001, and checks storage and session prerequisites. |
+| `healthcheck.sh` | Invokes the health-check mode as the unprivileged user. |
 | `Procfile` | Hosted process entry point. |
 | `railway.json` | Railway build and restart configuration. |
 | `render.yaml` | Render service, environment, and health configuration. |
@@ -117,6 +117,7 @@ Paths below are repository-relative. Read actual code before using this map as a
 | `app/event_handlers.py` | Incoming/outgoing event routing, eligibility, and engagement. |
 | `app/message_filter.py` | Message eligibility and account-addressing checks. |
 | `app/privacy_manager.py` | Allowlists, exclusions, and privacy controls. |
+| `app/notifications.py` | Owner alerts: model errors, quiet-hours notices, and Mini App change-log text. |
 | `app/safety_manager.py` | Cooldowns, rate limits, stop/pause, duplicates, and sensitive-content guards. |
 | `app/reply_manager.py` | Reply modes, queues, delays, typing, approvals, delivery, and background lifecycle. |
 | `app/command_router.py` | Shared command handlers for settings, chats, persona, context, and controls. |
@@ -166,12 +167,15 @@ Paths below are repository-relative. Read actual code before using this map as a
 | `tests/test_deferred_delay_budget.py` | Queue/lock time credited toward reading without skipping typing or Stop. |
 | `tests/test_delivery_integrity.py` | Delivery retry guards, stale drafts, chatty parsing, approval batches, and sleep pauses. |
 | `tests/test_frontend.py` | Pytest wrappers for Node and browser workflow tests. |
+| `tests/test_human_text_policy.py` | Two-line limit, code and instruction guards, and human-text cleaning. |
+| `tests/test_launchers.py` | Launcher and container entrypoint behavior (ownership, privilege drop, storage checks). |
 | `tests/test_logger.py` | Log redaction. |
 | `tests/test_message_filter.py` | Message eligibility. |
 | `tests/test_miniapp.py` | Mini App authentication, permissions, API mapping, and HTTP behavior. |
 | `tests/test_miniapp_browser.cjs` | Playwright mobile viewport/popup workflows with mocked services. |
 | `tests/test_miniapp_frontend.cjs` | JavaScript dashboard workflows with a lightweight DOM fixture. |
 | `tests/test_per_chat_context_and_burst.py` | Chat isolation, profiles, context, and burst controls. |
+| `tests/test_notifications.py` | Model-error alerts, quiet-hours notices, and Mini App change log. |
 | `tests/test_pr_readiness_audit.py` | Regression tests from earlier readiness checks; not an audit report. |
 | `tests/test_privacy_manager.py` | Allowlists, blocklists, and exclusions. |
 | `tests/test_prompt_integrity.py` | Meaning-safe reply cleaning, length limits, style priority, and summary failures. |
@@ -179,6 +183,7 @@ Paths below are repository-relative. Read actual code before using this map as a
 | `tests/test_reply_manager.py` | Core reply orchestration and delivery. |
 | `tests/test_reply_policy_and_preferences.py` | Reply policy, history, and preference transfer. |
 | `tests/test_reply_stages_and_feedback.py` | Context/writer/humanizer stages, stale drafts, and isolated feedback. |
+| `tests/test_reply_timing.py` | Typing inside the cooldown, bubble gaps, reaction matching, pin cache, and identity gate. |
 | `tests/test_runtime_recovery.py` | Reconnection, readiness, safe-mode recovery, and session file naming. |
 | `tests/test_safety_manager.py` | Safety limits, duplicates, emergency controls, and cooldown persistence. |
 | `tests/test_session_manager.py` | Session formats and secure handling. |
