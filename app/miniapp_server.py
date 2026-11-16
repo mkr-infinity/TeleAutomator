@@ -33,11 +33,12 @@ from types import SimpleNamespace
 from typing import Any, Optional
 
 from app import __version__ as APP_VERSION
+from app.ai.prompt_manager import VALID_STYLES
 from app.ai.provider import normalize_base_url
 from app.ai.reply_generator import create_ai_provider
-from app.bot_control import authorized_user_ids, can_run_command, save_authorized_users
+from app.bot_control import authorized_user_ids, can_run_command
 from app.logger import setup_logger
-from app.settings_transfer import MAX_BACKUP_BYTES, export_preferences, validate_preferences
+from app.settings_transfer import MAX_BACKUP_BYTES, MAX_CONTEXT_NOTES, export_preferences, validate_preferences
 
 logger = setup_logger(__name__)
 
@@ -473,7 +474,18 @@ class MiniAppAPI:
                 "sender": r["sender_name"] or "",
                 "ts": r["created_at"] or "",
             })
-        return {"activity": items}
+        hourly = []
+        if allowed:
+            with self.ctx.db._get_connection() as conn:
+                rows = conn.execute(
+                    "SELECT strftime('%Y-%m-%dT%H:00:00Z', created_at) AS hour, COUNT(*) AS count "
+                    "FROM chat_messages WHERE is_outgoing=1 AND is_automated=1 "
+                    "AND created_at >= datetime('now', '-24 hours') "
+                    f"AND chat_id IN ({','.join('?' for _ in allowed)}) GROUP BY hour ORDER BY hour",
+                    tuple(allowed),
+                ).fetchall()
+            hourly = [{"hour": row["hour"], "count": row["count"]} for row in rows if row["hour"]]
+        return {"activity": items, "hourly_activity": hourly}
 
     def handle_feedback(self, rating="") -> dict:
         if rating not in ("", "helpful", "unnecessary", "off_topic", "style"):
@@ -586,6 +598,11 @@ class MiniAppAPI:
         template = self.ACTION_TO_COMMAND.get(action)
         if not template:
             return None
+        if action == "approve_all" and "ids" in params:
+            ids = params["ids"]
+            if not isinstance(ids, list) or not ids or len(ids) > 1000 or any(type(i) is not int or i <= 0 for i in ids):
+                raise ValueError("Choose valid pending approval IDs")
+            return "/approveall " + ",".join(str(i) for i in dict.fromkeys(ids))
         filled = template.format(
             minutes=params.get("minutes", 30),
             value=str(params.get("value", "")),
@@ -595,10 +612,7 @@ class MiniAppAPI:
             provider=params.get("provider", ""),
             id=params.get("id", ""),
         ).strip()
-        # Drop unpopulated placeholders while preserving multi-line user content
-        import re
-        cleaned = re.sub(r"\{[a-zA-Z0-9_]+\}", "", filled)
-        cmd_name, _, rest = cleaned.partition(" ")
+        cmd_name, _, rest = filled.partition(" ")
         return f"{cmd_name} {rest.strip()}".strip()
 
     def handle_action(self, user_id: int, action: str, params: dict) -> dict:
@@ -690,7 +704,12 @@ class MiniAppAPI:
             return {"ok": True, "response": f"Custom prompt saved for chat {cid}."}
         if action == "setcontext":
             cid = int(params.get("chat_id", 0))
-            val = str(params.get("value", "")).strip()
+            raw = params.get("value", "")
+            if not isinstance(raw, str):
+                return {"ok": False, "response": "Chat notes must be text."}
+            val = raw.strip()
+            if len(raw) > MAX_CONTEXT_NOTES or "\x00" in raw:
+                return {"ok": False, "response": "Chat notes must be text up to 8000 characters."}
             if hasattr(ctx.db, "set_permanent_context"):
                 ctx.db.set_permanent_context(cid, notes=val)
             if hasattr(ctx.db, "sync_chat_context_file"):
@@ -711,6 +730,8 @@ class MiniAppAPI:
                 if hasattr(ctx.db, "sync_chat_context_file"):
                     ctx.db.sync_chat_context_file(cid)
                 return {"ok": True, "response": f"Chat {cid} reset to default style."}
+            if val not in VALID_STYLES:
+                return {"ok": False, "response": "Invalid chat reply style."}
             ctx.db.set_state(f"chat_style_{cid}", val)
             if hasattr(ctx.db, "sync_chat_context_file"):
                 ctx.db.sync_chat_context_file(cid)
@@ -819,8 +840,7 @@ class MiniAppAPI:
 
         users = _authorized_user_ids(ctx)
         if action == "addauth":
-            users.add(target)
-            save_authorized_users(ctx.db, users, _seed_user_ids(ctx))
+            ctx.db.update_authorized_users(add=(target,), seeds=_seed_user_ids(ctx))
             if meta and hasattr(ctx.db, "record_chat_metadata"):
                 ctx.db.record_chat_metadata(
                     target,
@@ -833,8 +853,7 @@ class MiniAppAPI:
 
         if _is_main_user(ctx, target):
             return {"ok": False, "response": "The main owner cannot be removed."}
-        users.discard(target)
-        save_authorized_users(ctx.db, users, _seed_user_ids(ctx))
+        ctx.db.update_authorized_users(remove=(target,), seeds=_seed_user_ids(ctx))
         return {"ok": True, "response": f"User {target} removed from authorized users."}
 
     def run_command(self, command: str, user_id: int, audit: bool = True) -> dict:
@@ -887,7 +906,6 @@ class MiniAppAPI:
         if denial:
             return denial
         backup = export_preferences(self.ctx)
-        validate_preferences(backup, self.ctx.db)
         content = json.dumps(backup, ensure_ascii=False, indent=2).encode("utf-8")
         if len(content) > MAX_BACKUP_BYTES:
             return {"ok": False, "response": "The preference backup exceeds the 1 MB limit"}
@@ -911,6 +929,10 @@ class MiniAppAPI:
         return None
 
     def handle_settings_import(self, user_id, backup, *, preview=True) -> dict:
+        with self.ctx.db._context_lock:
+            return self._handle_settings_import(user_id, backup, preview=preview)
+
+    def _handle_settings_import(self, user_id, backup, *, preview=True) -> dict:
         denial = self._settings_denial(user_id)
         if denial:
             return denial
@@ -1124,9 +1146,11 @@ class MiniAppAPI:
         auto_apply: bool = False,
     ) -> dict:
         """Test chat message live in the GUI, test candidates, auto-prune dead models, and auto-save working rotation."""
-        expected_settings = {key: self.ctx.db.get_state(key) for key in
-                             ("ai_model", "ai_base_url", "ai_api_key", "ai_provider", "ai_enabled", "models_manually_set",
-                              "ai_temperature", "ai_max_tokens", "ai_reasoning_effort")}
+        with self.ctx.db._context_lock:
+            expected_settings = {key: self.ctx.db.get_state(key) for key in
+                                 ("ai_model", "ai_base_url", "ai_api_key", "ai_provider", "ai_enabled", "models_manually_set",
+                                  "ai_temperature", "ai_max_tokens", "ai_reasoning_effort", "state_revision")}
+            expected_provider = self.ctx.generator.provider
         prompt = (message or "hello").strip()
         provider = (
             self.ctx.db.get_state("ai_provider")
@@ -1308,18 +1332,19 @@ class MiniAppAPI:
                     states["ai_api_key"] = api_key
                 active_provider = "gemini" if is_gemini else (provider if provider not in ("local", "gemini") else "custom")
                 states["ai_provider"] = active_provider
-                from app.ai.reply_generator import create_ai_provider
-                planned_db = SimpleNamespace(get_state=lambda key, default="": states.get(key, self.ctx.db.get_state(key, default)),
-                                             record_token_usage=self.ctx.db.record_token_usage)
-                try:
-                    new_provider = create_ai_provider(self.ctx.reply_manager.config, database=planned_db)
-                except Exception:
-                    return {"ok": False, "error": "The provider could not load this rotation. Saved settings were preserved.",
-                            "auto_applied": False, "working_models": working_models, "results": results}
-                if self.ctx.db.apply_preferences(states, [], [], expected_states=expected_settings):
-                    self.ctx.generator.provider = new_provider
-                else:
-                    should_auto_apply = False
+                with self.ctx.db._context_lock:
+                    from app.ai.reply_generator import create_ai_provider
+                    planned_db = SimpleNamespace(get_state=lambda key, default="": states.get(key, self.ctx.db.get_state(key, default)),
+                                                 record_token_usage=self.ctx.db.record_token_usage)
+                    try:
+                        new_provider = create_ai_provider(self.ctx.reply_manager.config, database=planned_db)
+                    except Exception:
+                        return {"ok": False, "error": "The provider could not load this rotation. Saved settings were preserved.",
+                                "auto_applied": False, "working_models": working_models, "results": results}
+                    if self.ctx.generator.provider is expected_provider and self.ctx.db.apply_preferences(states, [], [], expected_states=expected_settings):
+                        self.ctx.generator.provider = new_provider
+                    else:
+                        should_auto_apply = False
 
         primary_err = results[0]["detail"] if results else "All candidate models failed."
         return {
@@ -1346,6 +1371,10 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
     static_dir: Path = MINIAPP_DIR
 
     # ---------------------------------------------------------------- utils
+
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(5.0)
 
     def _init_user(self) -> Optional[dict]:
         init_data = self.headers.get("X-Telegram-Init-Data", "")
@@ -1417,7 +1446,10 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
             return self._serve_settings_download()
         if path == "/api/health":
             hs = getattr(self.api.ctx, "health_status", None)
-            if hs and not hs.get("healthy", True):
+            monitor = getattr(self.api.ctx, "health_monitor", None)
+            if monitor is not None and not monitor.is_healthy():
+                self._json(503, {"status": "error", "service": "teleautomator", "reason": "not ready"})
+            elif hs and not hs.get("healthy", True):
                 self._json(503, {"status": "error", "service": "teleautomator", "reason": hs.get("error") or "unhealthy"})
             else:
                 self._json(200, {"status": "healthy", "service": "teleautomator"})
@@ -1523,14 +1555,37 @@ class MiniAppRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802 - stdlib naming
         path = self.path.split("?", 1)[0]
+        user = self._init_user()
+        if path != "/api/auth" and (user is None or int(user.get("id", 0)) not in _authorized_user_ids(self.api.ctx)):
+            self.close_connection = True
+            self._json(401, self._unauthorized_payload())
+            return
         try:
             length = int(self.headers.get("Content-Length", "0") or 0)
             if not 0 <= length <= MAX_BACKUP_BYTES + 10000:
                 raise ValueError("Request too large")
-            body = json.loads(self.rfile.read(length) or b"{}")
+            if path == "/api/auth" and length > 16384:
+                raise ValueError("Authentication request too large")
+            deadline = time.monotonic() + 5.0
+            chunks, remaining = [], length
+            while remaining:
+                timeout = deadline - time.monotonic()
+                if timeout <= 0:
+                    raise TimeoutError("Request body deadline exceeded")
+                self.connection.settimeout(timeout)
+                chunk = self.rfile.read1(remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw_body = b"".join(chunks)
+            if len(raw_body) != length:
+                raise ValueError("Incomplete request body")
+            body = json.loads(raw_body or b"{}")
             if not isinstance(body, dict):
                 raise ValueError("Expected a JSON object")
         except Exception:
+            self.close_connection = True
             self._json(400, {"ok": False, "response": "Invalid JSON body."})
             return
         user = self._init_user()
@@ -1699,6 +1754,30 @@ def set_telegram_menu_button(
         return False
 
 
+class BoundedHTTPServer(ThreadingHTTPServer):
+    """Reject excess connections before allocating request threads."""
+
+    def __init__(self, *args, **kwargs):
+        self._request_slots = threading.BoundedSemaphore(16)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        if not self._request_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
+
+
 class MiniAppServer:
     """Owns the HTTP server thread."""
 
@@ -1710,7 +1789,7 @@ class MiniAppServer:
 
     def start(self) -> None:
         handler = type("BoundHandler", (MiniAppRequestHandler,), {"api": MiniAppAPI(self.ctx)})
-        self._httpd = ThreadingHTTPServer(("0.0.0.0", self.port), handler)
+        self._httpd = BoundedHTTPServer(("0.0.0.0", self.port), handler)
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True, name="miniapp-server")
         self._thread.start()
         logger.info(f"Mini app server listening on port {self.port} (GUI: miniapp/, API: /api/*)")
