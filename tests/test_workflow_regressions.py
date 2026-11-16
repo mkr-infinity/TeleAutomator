@@ -357,7 +357,7 @@ def test_stop_controls_are_rechecked_after_typing(tmp_path, clock, change):
 
 
 @pytest.mark.parametrize("custom", [None, 6.0, 0.0])
-def test_every_dm_bubble_obeys_custom_or_default_cooldown(tmp_path, clock, custom):
+def test_every_dm_reply_obeys_custom_or_default_cooldown(tmp_path, clock, custom):
     s = make_stack(tmp_path)
     s.db.set_state("min_chat_cooldown_seconds", "4")
     s.db.set_state("max_chat_cooldown_seconds", "4")
@@ -370,9 +370,12 @@ def test_every_dm_bubble_obeys_custom_or_default_cooldown(tmp_path, clock, custo
         return SimpleNamespace(id=len(times))
     s.client.send_message.side_effect = send
     assert asyncio.run(s.manager._send_reply(123, 1, "First thought.\nSecond thought.", adaptive_delay=False))
+    assert asyncio.run(s.manager._send_reply(123, 2, "Next reply", adaptive_delay=False))
     expected = 4.0 if custom is None else custom
-    assert len(times) == 2
-    assert times[1] - times[0] >= expected
+    assert len(times) == 3
+    # Later bubbles of one reply skip the cooldown (zero bubble gap in this zero-delay stack); the next reply waits.
+    assert times[1] == times[0]
+    assert times[2] - times[1] >= expected
 
 
 def test_updated_cooldown_takes_effect_while_a_reply_is_waiting(tmp_path, clock):
@@ -490,6 +493,7 @@ def test_concurrent_approvals_and_retries_send_draft_once(tmp_path, clock):
 def test_typo_correction_keeps_room_greeting_unthreaded(tmp_path, clock):
     s = make_stack(tmp_path)
     s.db.set_state("typo_correction_enabled", "1")
+    s.db.set_state("editfix_enabled", "1")  # Typo simulation needs both switches on.
     s.manager.maybe_inject_typo_correction = MagicMock(return_value=("goood morning guys", ""))
     assert asyncio.run(s.manager._send_reply(-100111, 1, "good morning guys", adaptive_delay=False))
     s.client.send_message.assert_awaited_once()

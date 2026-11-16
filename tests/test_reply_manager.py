@@ -334,13 +334,10 @@ def test_errors_and_fallbacks_never_sent_to_groups_or_chats(tmp_path: Path):
             dest = call[0][0]
             assert dest != group_id, f"Error/fallback was leaked to group {group_id}!"
 
-        # Crucial Assertion 2: Exactly one issue alert was delivered to private Saved Messages ('me')
-        assert mock_client.send_message.call_count == 1
-        saved_call = mock_client.send_message.call_args[0]
-        assert saved_call[0] == "me"
-        assert "TeleAutomator Alert" in saved_call[1]
-        assert "API rate limit exceeded 429" in saved_call[1]
-        assert "Developer Group" in saved_call[1]
+        # Crucial Assertion 2: the failure is recorded; owner alerts come from the generator's shared
+        # model-issue reporter, so this path sends nothing (not even to Saved Messages).
+        mock_client.send_message.assert_not_called()
+        assert db.list_actions("failed")[0]["action"] == "provider"
 
     asyncio.run(_run())
 

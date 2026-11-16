@@ -1,4 +1,4 @@
-"""Tests for strict per-chat min cooldown, 3-10s typing indicator, and group anti-flood single message delivery."""
+"""Tests for strict per-chat min cooldown, the 5-10s typing indicator that ends the wait, and group anti-flood single message delivery."""
 
 import asyncio
 import time
@@ -150,7 +150,7 @@ def test_strict_custom_chat_min_cooldown_wait(tmp_path: Path, clock):
 
 
 def test_typing_indicator_duration_range(tmp_path: Path, clock):
-    """Verify that in adaptive delay mode, typing duration is between 3.0 and 10.0 seconds."""
+    """Verify that in adaptive delay mode, typing lasts 5-10 seconds and ends exactly when the message is sent."""
     async def _run():
         cfg = AppConfig(api_id=123, api_hash="dummy_hash", data_dir=tmp_path, min_delay_seconds=5.0, max_delay_seconds=15.0)
         db = Database(tmp_path / "app_typing.db")
@@ -163,17 +163,25 @@ def test_typing_indicator_duration_range(tmp_path: Path, clock):
 
         chat_id = 777666
         enable_auto_replies(mgr, chat_id)
+        sent_at = []
+
+        async def send(*_args, **_kwargs):
+            sent_at.append(clock.now)
+            return MagicMock(id=301)
+
         mock_client = AsyncMock()
-        mock_client.send_message = AsyncMock(return_value=MagicMock(id=301))
+        mock_client.send_message = AsyncMock(side_effect=send)
 
         action_types = []
+        typing_times = []
         class MockActionContext:
             def __init__(self, c_id, action):
                 action_types.append((c_id, action))
             async def __aenter__(self):
+                typing_times.append(clock.now)
                 return self
             async def __aexit__(self, exc_type, exc_val, exc_tb):
-                pass
+                typing_times.append(clock.now)
 
         mock_client.action = MagicMock(side_effect=MockActionContext)
         mgr.set_telegram_client(mock_client)
@@ -194,6 +202,8 @@ def test_typing_indicator_duration_range(tmp_path: Path, clock):
 
         assert len(action_types) >= 1
         assert action_types[0] == (chat_id, "typing")
+        assert 5.0 <= typing_times[-1] - typing_times[0] <= 10.0
+        assert abs(sent_at[0] - typing_times[-1]) < 0.02
 
     asyncio.run(_run())
 

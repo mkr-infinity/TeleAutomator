@@ -39,6 +39,29 @@ def capitalize_message(text: str) -> str:
     return text
 
 
+# Identity, model, and prompt-injection questions stay with the account owner (checked before any model call).
+_IDENTITY_QUESTION = re.compile(
+    r"\b(?:are|r)\s+(?:you|u)\s+(?:(?:an?|really|actually|just)\s+)*"
+    r"(?:ai|bot|robot|human|real|automated|chatgpt|gpt|gemini|claude|llm)\b"
+    r"|(?:^|[.!?,])\s*(?:you|u)\s+an?\s+(?:ai|bot|robot|llm)\b"
+    r"|\bis\s+this\s+an?\s+(?:ai|bot|robot|llm)\b"
+    r"|\b(?:what|which)\s+(?:ai|model|bot|llm)\s+(?:are|r)\s+(?:you|u)\b"
+    r"|\bwhich\s+llm\b(?:\s+(?:is\s+(?:this|it)|do\s+(?:you|u)\s+use))?\s*(?:[?!.]|$)"
+    r"|\bsystem\s+prompt\b"
+    r"|\bignore\s+(?:all\s+)?(?:the\s+)?(?:previous|prior|above)\s+instructions\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+# Reply rates count only as explicit frequency phrases, so "100% certain" or "50% shorter" never set one.
+_FREQUENCY_LEAD = r"\b(?:reply|respond|chime\s+in|participate|talk|join)\b[^.!?\n]{0,40}?\b(\d+(?:\.\d+)?)"
+_FREQUENCY_RATIO = re.compile(_FREQUENCY_LEAD + r"\s+(?:times\s+)?(?:in|out\s+of)\s+(\d+)\s+(?:messages|texts|times|sends)\b", re.I)
+_FREQUENCY_PERCENT = re.compile(_FREQUENCY_LEAD + r"\s*%\s*(?:of\s+the\s+time|of\s+(?:the\s+)?messages|chance)\b", re.I)
+
+
+def _mentions_any(text: str, phrases) -> bool:
+    """Whole word/phrase match; apostrophes count as letters so "won" never matches "won't" or "won’t"."""
+    return re.search(r"(?<![\w'’])(?:" + "|".join(phrases) + r")(?![\w'’])", text) is not None
+
+
 class ReplyManager(CommandRouterMixin):
     """Manages reply lifecycle across Draft, Approval Required, and Restricted Auto modes."""
 
@@ -156,8 +179,8 @@ class ReplyManager(CommandRouterMixin):
         raw = self.db.get_state(f"chat_chatty_{chat_id}")
         if not raw:
             rules = self.db.get_chat_prompt(chat_id) + " " + self.db.get_permanent_context(chat_id).get("notes", "")
-            ratio = re.search(r"\b(?:reply|respond|participate|message|talk|send)\s+(?:(?:rate|frequency|chance|probability)\s*(?:of|at|is)?\s*)?(\d+(?:\.\d+)?)\s*(?:times\s+in|out\s+of|/)\s*(\d+)\s*(?:sends|messages|texts)?", rules, re.I)
-            percent = re.search(r"\b(?:reply|respond|participate|message|talk|send)\s*(?:rate|frequency|chance|probability)?\s*(?:of|at|is)?\s*(\d+(?:\.\d+)?)%", rules, re.I)
+            ratio = _FREQUENCY_RATIO.search(rules)
+            percent = _FREQUENCY_PERCENT.search(rules)
             if ratio and float(ratio[2]) > 0:
                 raw = str(float(ratio[1]) / float(ratio[2]))
             elif percent:
@@ -251,16 +274,38 @@ class ReplyManager(CommandRouterMixin):
             logger.debug("Typing indicator unavailable for chat %s", chat_id)
         await asyncio.sleep(duration)
 
+    @staticmethod
+    def _typing_window(text: str) -> float:
+        """Seconds of typing indicator that end a reply wait, scaled 5-10 s by length."""
+        words = len(text.split())
+        if words <= 4:
+            return random.uniform(5.0, 6.5)
+        if words <= 12:
+            return random.uniform(6.5, 8.5)
+        return random.uniform(8.5, 10.0)
+
     async def _type_before_send(self, chat_id, duration):
         if duration < 3.5:
             await self._typing_burst(chat_id, duration)
             return
-        first = round(duration / 2, 1)
+        first = duration / 2
+        pause = random.uniform(0.8, 1.4)
         await self._typing_burst(chat_id, first)
-        await asyncio.sleep(random.uniform(0.8, 1.4))
-        await self._typing_burst(chat_id, duration - first)
+        await asyncio.sleep(pause)
+        # The pause is part of the total so typing ends exactly when the planned wait does.
+        await self._typing_burst(chat_id, max(0.0, duration - first - pause))
 
-    async def _deliver_message(self, chat_id: int, text: str, reply_to=None, *, approved: bool = False, allow_quiet_hours: bool = False, context=None, operator_id=None, typing_seconds=None):
+    def _delivery_wait(self, chat_id, text, allow_quiet_hours=False, sequence_part=False):
+        """Seconds until text may go out, or None when a non-cooldown safety rule blocks it."""
+        can_send, reason = self.safety.can_reply(chat_id, text, allow_quiet_hours=allow_quiet_hours)
+        if not can_send and "cooldown" not in reason.lower():
+            return None
+        if sequence_part:
+            return 0.0  # Later bubbles belong to the reply whose first bubble already passed the cooldown.
+        wait = self.safety.burst_wait_needed(chat_id)
+        return wait if can_send else max(wait, self.safety.cooldown_remaining(chat_id)[0])
+
+    async def _deliver_message(self, chat_id: int, text: str, reply_to=None, *, approved: bool = False, allow_quiet_hours: bool = False, context=None, operator_id=None, typing_seconds=None, sequence_part: bool = False):
         text = capitalize_message(text)
         if typing_seconds is None:
             typing_seconds = random.uniform(3.0, 7.0) if self.typing_delay > 0 else 0.0
@@ -272,24 +317,28 @@ class ReplyManager(CommandRouterMixin):
         if reason:
             self.db.record_action("automation", "reply", "blocked", reason, chat_id=chat_id)
             return None
+        typed = False
         while True:
             async with self._outgoing_lock:
                 if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours) or not self._context_current(context, approved) or not self._operator_allowed(operator_id):
                     return None
                 if not self._prevent_duplicate_reply(chat_id, text):
                     return None
-                can_send, reason = self.safety.can_reply(chat_id, text, allow_quiet_hours=allow_quiet_hours)
-                wait = self.safety.burst_wait_needed(chat_id)
-                if not can_send:
-                    if "cooldown" not in reason.lower():
-                        return None
-                    wait = max(wait, self.safety.cooldown_remaining(chat_id)[0])
-                if can_send and wait <= 0:
-                    await self._type_before_send(chat_id, typing_seconds)
+                wait = self._delivery_wait(chat_id, text, allow_quiet_hours, sequence_part)
+                if wait is None:
+                    return None
+                if wait <= typing_seconds:
+                    if typed:
+                        # Clock rounding left a sliver of cooldown; the indicator from the last burst is still visible.
+                        await asyncio.sleep(max(0.01, wait))
+                    else:
+                        # Typing covers the rest of the cooldown, so the message goes out as the wait ends.
+                        await self._type_before_send(chat_id, typing_seconds)
+                        typed = True
                     if (not self._outgoing_allowed(chat_id, approved, allow_quiet_hours)
                             or not self._context_current(context, approved) or not self._operator_allowed(operator_id)):
                         return None
-                    if not self.safety.can_reply(chat_id, text, allow_quiet_hours=allow_quiet_hours)[0] or self.safety.burst_wait_needed(chat_id) > 0:
+                    if self._delivery_wait(chat_id, text, allow_quiet_hours, sequence_part) != 0:
                         continue
                     reason = self._outgoing_text_reason(chat_id, text)
                     if reason:
@@ -302,20 +351,21 @@ class ReplyManager(CommandRouterMixin):
                             raise
                         if (not self._context_current(context, approved) or not self._operator_allowed(operator_id)
                                 or self._outgoing_text_reason(chat_id, text)
-                                or not self.safety.can_reply(chat_id, text, allow_quiet_hours=allow_quiet_hours)[0]
-                                or self.safety.burst_wait_needed(chat_id) > 0):
+                                or self._delivery_wait(chat_id, text, allow_quiet_hours, sequence_part) != 0):
                             return None
                         message = await self._client.send_message(chat_id, text)
                     self.safety.mark_reply_sent(chat_id)
-                    self.safety.record_burst_send(chat_id)
+                    if not sequence_part:
+                        self.safety.record_burst_send(chat_id)
                     recent = self._recent_replies_history.setdefault(chat_id, [])
                     recent.append(text)
                     del recent[:-12]
                     self._save_recent_replies_history()
                     self.db.record_action("automation", "reply", "sent", "Message delivered", chat_id=chat_id)
                     return message
-            # Release the account lock while waiting so another chat can proceed.
-            await asyncio.sleep(min(1.0, max(0.01, wait)))
+            typed = False
+            # Release the account lock while waiting so another chat can proceed; typing starts when it fits the wait.
+            await asyncio.sleep(min(1.0, max(0.01, wait - typing_seconds)))
 
     def _get_chat_send_lock(self, chat_id: int) -> asyncio.Lock:
         """Return a per-chat send lock ensuring sequential, non-overlapping message delivery."""
@@ -386,6 +436,8 @@ class ReplyManager(CommandRouterMixin):
             pinned_msgs = await self._client.get_messages(chat_id, filter=InputMessagesFilterPinned, limit=5)
             if self._closed or not self.context_agent.allowed(chat_id):
                 return None
+            # Lets incoming messages skip re-fetching a chat whose pins were just checked (even when empty).
+            self.db.set_state(f"chat_pins_checked_{chat_id}", str(time.time()))
             if pinned_msgs:
                 texts = [self.privacy.sanitize_text(m.text.strip()) for m in pinned_msgs
                          if getattr(m, "text", None) and m.text.strip() and not self.safety.is_sensitive(m.text)
@@ -613,7 +665,7 @@ class ReplyManager(CommandRouterMixin):
             self.db.record_action("automation", "reply", "skipped", "Age is not configured; answer left to the account owner", chat_id=chat_id)
             return
 
-        if re.search(r"\b(?:are|r)\s+(?:you|u)\s+(?:(?:an?|really|actually|just)\s+)*(?:ai|bot|human|real|automated)\b|\b(?:what|which)\s+(?:ai|model|bot)\s+(?:are|r)\s+(?:you|u)\b", text, re.IGNORECASE):
+        if _IDENTITY_QUESTION.search(text):
             self.db.record_action("automation", "reply", "skipped", "Identity question left for the account owner", chat_id=chat_id)
             return
 
@@ -645,11 +697,16 @@ class ReplyManager(CommandRouterMixin):
             perm_ctx = self.db.get_permanent_context(chat_id)
             pinned_text = perm_ctx.get("pinned_text", "")
 
-            # If this is a group and no pinned messages have been cached yet, auto-fetch
+            # If this is a group and no pinned messages have been cached yet, auto-fetch (at most every 6 hours)
             if chat_id < 0 and not pinned_text:
-                fetched_pin = await self.sync_pinned_context_from_telegram(chat_id)
-                if fetched_pin:
-                    pinned_text = fetched_pin
+                try:
+                    pins_checked = float(self.db.get_state(f"chat_pins_checked_{chat_id}") or "-inf")
+                except ValueError:
+                    pins_checked = float("-inf")
+                if time.time() - pins_checked >= 6 * 3600:
+                    fetched_pin = await self.sync_pinned_context_from_telegram(chat_id)
+                    if fetched_pin:
+                        pinned_text = fetched_pin
 
             # Rebuild after fetching pins; each stage receives the same chat snapshot.
             if not self._context_current(context):
@@ -698,18 +755,7 @@ class ReplyManager(CommandRouterMixin):
         except Exception as e:
             logger.error(f"Failed to generate AI reply for chat {chat_id}: {e}")
             self.db.record_action("automation", "provider", "failed", "Reply generation failed; check provider credentials, endpoint, and model", chat_id=chat_id)
-            # AI provider/model/API-key failure: always alert Saved Messages so the owner can fix it fast.
-            if not is_mention:
-                provider = getattr(self.generator.config, "ai_provider", "")
-                await self._notify_issue_to_saved_messages(
-                    chat_id=chat_id,
-                    chat_title=chat_title,
-                    sender_name=sender_name,
-                    error_msg=f"AI provider/model failed (provider='{provider}', all fallbacks exhausted): {e}",
-                    incoming_text=clean_text,
-                    force=True,
-                    message_id=message_id,
-                )
+            # Model-failure alerts to authorized users are raised by the shared reporter in ReplyGenerator.
             return
 
         if not self._context_current(context):
@@ -962,7 +1008,8 @@ class ReplyManager(CommandRouterMixin):
                 if not self._outgoing_allowed(chat_id) or not self._context_current(context):
                     return
                 can_send, reason = self.safety.can_reply(chat_id, draft)
-                if can_send:
+                # A cooldown within the longest typing window (10 s) is covered by typing in _send_reply.
+                if can_send or ("cooldown" in reason.lower() and self.safety.cooldown_remaining(chat_id)[0] <= 10.0):
                     break
                 if "cooldown" not in reason.lower() and "limit" not in reason.lower():
                     logger.warning(f"Deferred reply to chat {chat_id} aborted: {reason}")
@@ -1232,6 +1279,7 @@ class ReplyManager(CommandRouterMixin):
         if until <= 0 or time.time() < until:
             return
         self.db.set_state("pause_until", "0")
+        self.db.set_state("sleep_now", "0")  # a finished /sleep must not let a later /resume disable quiet hours
         logger.info("SAFETY: Timed pause expired. Automation resumed automatically.")
         if not self.safety.is_emergency_stopped:
             await self._send_control_alert(
@@ -1604,23 +1652,24 @@ class ReplyManager(CommandRouterMixin):
         # shortcut: pools must stay a subset of `all_telegram_reactions` below (only valid Telegram reaction emojis)
         lower = text.lower()
         has_sentiment = True
-        if any(w in lower for w in ("haha", "lol", "lmao", "rofl", "xd", "funny", "lmfao", "joke", "bruh", "meme", "comedy", "dead", "ded")):
+        # Entries are regex fragments matched as whole words (laughter may be stretched, e.g. "hahaha", "lmaooo").
+        if _mentions_any(lower, ("ha(?:ha)+h?", "lo+l+", "lmao+", "rofl", "xd", "funny", "lmfao+", "joke", "bruh", "meme", "comedy", "dead", "ded")):
             chosen = random.choice(["😂", "🤣", "💀", "😁", "🤡"])
-        elif any(w in lower for w in ("congrats", "congratulations", "huge w", "promoted", "won", "awesome work", "let's go", "goat", "legend", "superb", "champion", "winner", "victory")):
+        elif _mentions_any(lower, ("congrats", "congratulations", "huge w", "promoted", "won", "awesome work", "let's go", "goat", "legend", "superb", "champion", "winner", "victory")):
             chosen = random.choice(["🔥", "⚡", "💯", "🏆", "🤩", "👏", "🎉", "🦄"])
-        elif any(w in lower for w in ("thanks", "thank you", "tysm", "love you", "heart", "appreciate it", "grateful", "sweetest", "adorable")):
+        elif _mentions_any(lower, ("thanks", "thank you", "tysm", "love you", "heart", "appreciate it", "grateful", "sweetest", "adorable")):
             chosen = random.choice(["❤️", "❤️‍🔥", "🥰", "😍", "🙏", "🤗", "😘", "💋"])
-        elif any(w in lower for w in ("deal", "sounds good", "done deal", "agreed", "let's do it", "partner", "perfect", "done", "alright", "ok", "yep", "sure")):
+        elif _mentions_any(lower, ("deal", "sounds good", "done deal", "agreed", "let's do it", "partner", "perfect", "done", "alright", "ok", "yep", "sure")):
             chosen = random.choice(["👍", "🤝", "🫡", "👌", "😎"])
-        elif any(w in lower for w in ("wtf", "no way", "holy shit", "damn", "omg", "crazy", "wild", "insane", "unreal", "can't believe")):
+        elif _mentions_any(lower, ("wtf", "no way", "holy shit", "damn", "omg", "crazy", "wild", "insane", "unreal", "can't believe")):
             chosen = random.choice(["🤯", "😱", "👀", "😨", "🤨"])
-        elif any(w in lower for w in ("rip", "sorry to hear", "unfortunate", "so sad", "pain", "hurts", "miss you", "tragic", "heartbroke")):
+        elif _mentions_any(lower, ("rip", "sorry to hear", "unfortunate", "so sad", "pain", "hurts", "miss you", "tragic", "heartbroke")):
             chosen = random.choice(["😢", "😭", "💔"])
-        elif any(w in lower for w in ("tired", "sleepy", "exhausted", "bored", "nap")):
+        elif _mentions_any(lower, ("tired", "sleepy", "exhausted", "bored", "nap")):
             chosen = random.choice(["🥱", "😴"])
-        elif any(w in lower for w in ("whatever", "meh", "sus", "mid", "boring")):
+        elif _mentions_any(lower, ("whatever", "meh", "sus", "mid", "boring")):
             chosen = random.choice(["🗿", "😐", "🥴"])
-        elif any(w in lower for w in ("party", "birthday", "bday", "cheers", "celebrate")):
+        elif _mentions_any(lower, ("party", "birthday", "bday", "cheers", "celebrate")):
             chosen = random.choice(["🎉", "🍾"])
         else:
             has_sentiment = False
@@ -1791,12 +1840,18 @@ class ReplyManager(CommandRouterMixin):
         if should_send:
             try:
                 _, allowed_groups = self.privacy.get_all_allowed_chats()
-                allowed_groups = [gid for gid in allowed_groups if time.time() - self.db.get_last_reply_timestamp(gid) < 900]
+                # Mention-only rooms and rooms set to never chime in get no unprompted sign-off.
+                mention_only = self.db.get_state("group_mention_only", "0") == "1"
+                allowed_groups = [gid for gid in allowed_groups
+                                  if not mention_only and self.group_chatty_probability(gid) > 0
+                                  and time.time() - self.db.get_last_reply_timestamp(gid) < 900]
             except Exception:
                 allowed_groups = []
             if allowed_groups:
                 if not any(self._outgoing_allowed(gid, allow_quiet_hours=True) for gid in allowed_groups):
                     return
+                # One attempt per night: a failed or empty model sign-off is not retried by the heartbeat.
+                self.db.set_state("last_quiet_goodnight_date", today_str)
                 # Goodnight text is AI-generated (never hardcoded); skip if the AI fails
                 try:
                     text = await asyncio.to_thread(self.generator.generate_goodnight_signoff)
@@ -1810,8 +1865,6 @@ class ReplyManager(CommandRouterMixin):
                         await self._send_reply(gid, 0, text, allow_quiet_hours=True)
                     except Exception as e:
                         logger.debug(f"Could not send goodnight to group {gid}: {e}")
-
-                self.db.set_state("last_quiet_goodnight_date", today_str)
 
     async def _send_reply(
         self,
@@ -1862,7 +1915,7 @@ class ReplyManager(CommandRouterMixin):
             edit_fix_original: Optional[str] = None
             typo_enabled = (
                 self.db.get_state("typo_correction_enabled", "1") == "1"
-                or self.db.get_state("editfix_enabled", "1") == "1"
+                and self.db.get_state("editfix_enabled", "1") == "1"
             )
             if typo_enabled and len(msg_parts) == 1 and not is_mention:
                 # Human mobile texting simulation: occasionally sends a natural typo,
@@ -1897,70 +1950,48 @@ class ReplyManager(CommandRouterMixin):
                 )
 
                 if is_zero_delay:
-                    total_delay = 0.0
                     typing_duration = 0.0
-                    reading_delay = 0.0
-                elif not adaptive_delay:
-                    typing_duration = max(0.0, self.typing_delay)
-                    reading_delay = max(0.0, needed_cooldown_wait - typing_duration)
-                    total_delay = reading_delay + typing_duration
                 else:
-                    # Suggestion 2: Context-Aware Delay Scaling (3-10s scaled to message length)
-                    word_count = len(first_part.split())
-                    char_count = len(first_part)
-                    if word_count <= 4 or char_count < 25:
-                        base_typing = random.uniform(3.0, 5.0)
-                    elif word_count <= 12 or char_count < 70:
-                        base_typing = random.uniform(5.0, 7.5)
-                    else:
-                        base_typing = random.uniform(7.5, 10.0)
-                    typing_duration = round(min(10.0, max(3.0, base_typing)), 1)
+                    human_wait = self.calculate_adaptive_delay(chat_id, first_part, is_mention=is_mention) if adaptive_delay else 0.0
+                    window = self._typing_window(first_part)
+                    # Queue/lock time already spent counts toward the human wait only, never toward safety limits.
+                    waited = elapsed_wait = max(0.0, time.monotonic() - delay_started_at)
 
-                    # Suggestion 1: Simulate Online/Offline Activity Rhythm (2-5s reading pause before typing begins)
-                    natural_reading_pause = round(random.uniform(2.0, 4.5), 1)
-                    calc_delay = self.calculate_adaptive_delay(chat_id, first_part, is_mention=is_mention)
-                    target_wait = max(needed_cooldown_wait, calc_delay, chat_min if chat_min > 0 else 0.0)
-                    if target_wait > typing_duration:
-                        reading_delay = max(natural_reading_pause, round(target_wait - typing_duration, 1))
-                    else:
-                        reading_delay = natural_reading_pause
-                    total_delay = reading_delay + typing_duration
+                    def plan():
+                        remaining = max(human_wait - waited, self.safety.cooldown_remaining(chat_id)[0],
+                                        self.safety.burst_wait_needed(chat_id), 0.0)
+                        # Typing fills the end of the wait; only a wait-free send adds a short configured burst.
+                        return remaining, (min(window, remaining) if remaining > 0 else min(window, self.typing_delay))
 
-                elapsed_wait = max(0.0, time.monotonic() - delay_started_at)
-                reading_delay = max(0.0, reading_delay - elapsed_wait)
-                total_delay = reading_delay + typing_duration
+                    remaining, typing_duration = plan()
+                    total_delay = max(remaining, typing_duration)
+                    if total_delay > 0:
+                        env_type = "Group" if chat_id < 0 else "Private DM"
+                        mention_str = " (Mention)" if is_mention else ""
+                        logger.info(
+                            f"[{env_type} Delay{mention_str}] Total delay: {total_delay:.1f}s "
+                            f"(reading: {total_delay - typing_duration:.1f}s, typing indicator: {typing_duration:.1f}s) "
+                            f"for chat {chat_id} (chat_min={chat_min}s, already_waited={elapsed_wait:.1f}s)."
+                        )
 
-                if total_delay > 0:
-                    env_type = "Group" if chat_id < 0 else "Private DM"
-                    mention_str = " (Mention)" if is_mention else ""
-                    logger.info(
-                        f"[{env_type} Delay{mention_str}] Total delay: {total_delay:.1f}s "
-                        f"(reading: {reading_delay:.1f}s, typing indicator: {typing_duration:.1f}s) "
-                        f"for chat {chat_id} (chat_min={chat_min}s, already_waited={elapsed_wait:.1f}s)."
-                    )
-
-                    # Phase 1: Reading/thinking pause
-                    remaining_reading = reading_delay
-                    while remaining_reading > 0:
+                    # Phase 1: reading/thinking until only the typing window is left; live limits are re-read each step.
+                    while remaining > typing_duration:
                         if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours) or not self._context_current(context, approved):
                             return False
                         current_range = self.safety._get_chat_cooldown_range(chat_id)
                         if current_range != initial_range:
-                            new_target = self.calculate_adaptive_delay(chat_id, first_part, is_mention=is_mention) if adaptive_delay else 0.0
-                            elapsed_reading = reading_delay - remaining_reading + elapsed_wait
-                            remaining_reading = min(remaining_reading, max(0.0, max(new_target, current_range[0]) - typing_duration - elapsed_reading))
                             initial_range = current_range
-                        if remaining_reading <= 0:
-                            break
-                        step = min(1.0, remaining_reading)
+                            if adaptive_delay:
+                                human_wait = min(human_wait, self.calculate_adaptive_delay(chat_id, first_part, is_mention=is_mention))
+                        step = min(1.0, max(0.01, remaining - typing_duration))
                         await asyncio.sleep(step)
-                        remaining_reading -= step
+                        waited += step
+                        remaining, typing_duration = plan()
 
                     # Abort if emergency stop was triggered during reading delay
                     if self.safety.is_emergency_stopped:
                         logger.warning(f"Reply to chat {chat_id} aborted: emergency stop triggered during delay.")
                         return False
-
 
                 # Send first message part
                 first_sent = await self._deliver_message(chat_id, first_part, reply_to_msg_id, approved=approved, allow_quiet_hours=allow_quiet_hours, context=context, operator_id=operator_id, typing_seconds=typing_duration)
@@ -2064,7 +2095,7 @@ class ReplyManager(CommandRouterMixin):
                         await asyncio.sleep(followup_pause)
 
 
-                    sub_sent = await self._deliver_message(chat_id, part, approved=approved, allow_quiet_hours=allow_quiet_hours, context=context, operator_id=operator_id, typing_seconds=followup_typing)
+                    sub_sent = await self._deliver_message(chat_id, part, approved=approved, allow_quiet_hours=allow_quiet_hours, context=context, operator_id=operator_id, typing_seconds=followup_typing, sequence_part=True)
                     if sub_sent is None:
                         break
                     self._last_delivery_parts[chat_id] = idx

@@ -14,7 +14,7 @@ def configure_timing(tmp_path, clock, monkeypatch, global_wait):
     monkeypatch.setattr("app.reply_manager.time", SimpleNamespace(time=lambda: clock.now, monotonic=lambda: clock.now))
 
     def uniform(low, high):
-        if (low, high) == (3.0, 5.0):
+        if (low, high) == (5.0, 6.5):
             return 5.0
         if (low, high) == (0.8, 1.4):
             return 1.0
@@ -30,7 +30,8 @@ def configure_timing(tmp_path, clock, monkeypatch, global_wait):
     return s
 
 
-@pytest.mark.parametrize("global_wait,expected", [(0, 36), (10, 36), (40, 46)])
+# Sent at max(35 s human delay, global cooldown); the 5 s typing window ends the wait instead of extending it.
+@pytest.mark.parametrize("global_wait,expected", [(0, 35), (10, 35), (40, 40)])
 def test_queue_wait_overlaps_reading_but_preserves_final_typing(tmp_path, clock, monkeypatch, global_wait, expected):
     s = configure_timing(tmp_path, clock, monkeypatch, global_wait)
     events = []
@@ -52,7 +53,9 @@ def test_queue_wait_overlaps_reading_but_preserves_final_typing(tmp_path, clock,
     asyncio.run(s.manager._schedule_deferred_reply(123, 1, "Ready for launch"))
     s.client.send_message.assert_awaited_once()
     assert events[-1][1] - start == expected
-    assert events[0][1] >= start + global_wait
+    assert events[-1][1] - start >= global_wait
+    # Typing occupies exactly the last 5 s of the wait, with the pause between bursts inside it.
+    assert events[-1][1] - events[0][1] == 5
     assert [event for event, _ in events] == ["typing", "typing_end", "typing", "typing_end", "sent"]
     assert events[-1][1] == events[-2][1]
 
@@ -83,6 +86,6 @@ def test_waiting_for_chat_lock_also_counts_toward_reading(tmp_path, clock, monke
         clock.now += 10
         lock.release()
         assert await asyncio.wait_for(task, timeout=3)
-        assert sent_at[0] - start == 36
+        assert sent_at[0] - start == 35
 
     asyncio.run(run())
