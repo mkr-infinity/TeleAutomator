@@ -251,7 +251,7 @@ class Database:
             )
 
     def set_state(self, key: str, value: str) -> None:
-        with self._get_connection() as conn:
+        with self._context_lock, self._get_connection() as conn:
             conn.execute(
                 "INSERT INTO runtime_state (key, value) VALUES (?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -261,6 +261,34 @@ class Database:
                 "INSERT INTO runtime_state (key, value) VALUES ('state_revision', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (str(time.time_ns()),),
             )
+
+    def update_authorized_users(self, *, add=(), remove=(), seeds=()) -> set[int]:
+        """Atomically update grants and seed revocations; removal wins overlapping inputs."""
+        added, removed, seeded = ({int(uid) for uid in values if int(uid) > 0}
+                                  for values in (add, remove, seeds))
+        with self._context_lock, self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+
+            def read_ids(key):
+                row = conn.execute("SELECT value FROM runtime_state WHERE key=?", (key,)).fetchone()
+                try:
+                    return {int(uid) for uid in json.loads(row["value"] if row else "[]") if int(uid) > 0}
+                except (ValueError, TypeError):
+                    return set()
+
+            revoked = (read_ids("bot_revoked_users") - added) | removed
+            users = ((read_ids("bot_authorized_users") | seeded | added) - revoked) - removed
+            conn.executemany(
+                "INSERT INTO runtime_state(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [("bot_revoked_users", json.dumps(sorted(revoked))),
+                 ("bot_authorized_users", json.dumps(sorted(users))),
+                 ("state_revision", str(time.time_ns()))],
+            )
+            conn.executemany(
+                "INSERT INTO runtime_state(key,value) VALUES(?, 'all') ON CONFLICT(key) DO UPDATE SET value='all'",
+                [(f"bot_granted_cmds_{uid}",) for uid in removed],
+            )
+            return users
 
     def get_state(self, key: str, default: str = "") -> str:
         with self._get_connection() as conn:
@@ -680,60 +708,33 @@ class Database:
             ).fetchone()
             return int(row[0]) if row else 0
 
-    def get_chat_messages_since_text(self, chat_id: int, since_row_id: int, limit: int = 40) -> str:
-        """Chronological 'Sender: text' lines for cached messages after since_row_id (summary payload)."""
+    def get_chat_message_batch(self, chat_id: int, since_row_id: int, limit: int = 40):
+        """Return the oldest outstanding summary payload and its exact high-water mark."""
         with self._get_connection() as conn:
             rows = conn.execute(
-                """
-                SELECT sender_name, text, is_outgoing
-                FROM chat_messages
-                WHERE chat_id = ? AND id > ? AND text != ''
-                ORDER BY id DESC
-                LIMIT ?
-                """,
+                "SELECT id, sender_name, text, is_outgoing FROM chat_messages "
+                "WHERE chat_id = ? AND id > ? ORDER BY id ASC LIMIT ?",
                 (chat_id, since_row_id, max(1, limit)),
             ).fetchall()
         lines = []
-        for r in reversed(rows):
-            sender = "You" if r["is_outgoing"] == 1 else (r["sender_name"] or "Contact")
-            lines.append(f"{sender}: {r['text']}")
-        return "\n".join(lines)
+        for row in rows:
+            if row["text"]:
+                sender = "You" if row["is_outgoing"] else (row["sender_name"] or "Contact")
+                lines.append(f"{sender}: {row['text']}")
+        return "\n".join(lines), (int(rows[-1]["id"]) if rows else since_row_id)
+
+    def get_chat_messages_since_text(self, chat_id: int, since_row_id: int, limit: int = 40) -> str:
+        return self.get_chat_message_batch(chat_id, since_row_id, limit)[0]
 
     def get_chat_summary(self, chat_id: int) -> str:
-        """AI-generated rolling recap for chat_id (runtime_state keyed storage with disk fallback)."""
-        summary = self.get_state(f"chat_summary_{chat_id}", "")
-        if summary:
-            return summary
-        if self.get_state(f"chat_memory_epoch_{chat_id}"):
-            return ""
-        # Fallback to isolated context file on disk
-        file_path = self._get_context_file_path(chat_id)
-        if file_path.exists():
-            try:
-                data = json.loads(file_path.read_text(encoding="utf-8"))
-                memory = data.get("ai_memory") or ""
-                if memory:
-                    return memory if self.set_chat_summary(chat_id, memory, epoch="") else ""
-            except Exception:
-                pass
-        return ""
+        with self._context_lock:
+            self._hydrate_chat_context(chat_id)
+            return self.get_state(f"chat_summary_{chat_id}")
 
     def get_chat_prompt(self, chat_id: int) -> str:
-        """Get per-chat custom AI persona (from runtime_state with disk context file fallback)."""
-        prompt = self.get_state(f"chat_prompt_{chat_id}", "")
-        if prompt:
-            return prompt
-        file_path = self._get_context_file_path(chat_id)
-        if file_path.exists():
-            try:
-                data = json.loads(file_path.read_text(encoding="utf-8"))
-                p = data.get("prompt") or ""
-                if p:
-                    self.set_state(f"chat_prompt_{chat_id}", p)
-                    return p
-            except Exception:
-                pass
-        return ""
+        with self._context_lock:
+            self._hydrate_chat_context(chat_id)
+            return self.get_state(f"chat_prompt_{chat_id}")
 
     def count_chat_messages(self, chat_id: int) -> int:
         """Total cached messages for chat_id."""
@@ -906,95 +907,76 @@ class Database:
                 logger.debug(f"Failed to write context file for chat {chat_id} to disk: {e}")
                 return False
 
-    def sync_chat_context_file(self, chat_id: int) -> bool:
-        """Sync full per-chat context snapshot (persona, notes, pins) to its isolated disk file."""
-        ctx = self.get_permanent_context(chat_id)
-        return self._sync_context_to_disk(chat_id, pinned_text=ctx.get("pinned_text", ""), notes=ctx.get("notes", ""))
-
-    def set_permanent_context(
-        self,
-        chat_id: int,
-        pinned_text: Optional[str] = None,
-        notes: Optional[str] = None,
-    ) -> None:
-        """Store or update permanent context for a chat (never removed by context aging or TTL)."""
-        with self._get_connection() as conn:
-            existing = conn.execute(
-                "SELECT pinned_text, notes FROM permanent_chat_context WHERE chat_id = ?",
-                (chat_id,),
-            ).fetchone()
-
-            if existing:
-                new_pinned = pinned_text if pinned_text is not None else existing["pinned_text"]
-                new_notes = notes if notes is not None else existing["notes"]
-                conn.execute(
-                    """
-                    UPDATE permanent_chat_context
-                    SET pinned_text = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE chat_id = ?
-                    """,
-                    (new_pinned, new_notes, chat_id),
-                )
-            else:
-                new_pinned = pinned_text or ""
-                new_notes = notes or ""
-                conn.execute(
-                    """
-                    INSERT INTO permanent_chat_context (chat_id, pinned_text, notes)
-                    VALUES (?, ?, ?)
-                    """,
-                    (chat_id, new_pinned, new_notes),
-                )
-
-        self._sync_context_to_disk(chat_id, new_pinned, new_notes)
-
-    def get_permanent_context(self, chat_id: int) -> Dict[str, str]:
-        """Retrieve permanent context (pinned message + custom notes) for chat_id."""
-        with self._get_connection() as conn:
-            row = conn.execute(
-                "SELECT pinned_text, notes FROM permanent_chat_context WHERE chat_id = ?",
-                (chat_id,),
-            ).fetchone()
-            if row:
-                pinned = row["pinned_text"] or ""
-                notes = row["notes"] or ""
-                file_path = self._get_context_file_path(chat_id)
-                if not file_path.exists():
-                    self._sync_context_to_disk(chat_id, pinned, notes)
-                return {"pinned_text": pinned, "notes": notes}
-
-        # Fallback to isolated context file on disk if present
-        file_path = self._get_context_file_path(chat_id)
-        if file_path.exists():
+    def _hydrate_chat_context(self, chat_id: int) -> None:
+        """Recover all fallback fields before any file rewrite; existing empty rows win."""
+        with self._context_lock:
+            file_path = self._get_context_file_path(chat_id)
             try:
                 content = json.loads(file_path.read_text(encoding="utf-8"))
-                pinned = content.get("pinned_text") or ""
-                notes = content.get("notes") or ""
-                if pinned or notes:
-                    with self._get_connection() as conn:
-                        conn.execute(
-                            "INSERT OR REPLACE INTO permanent_chat_context (chat_id, pinned_text, notes) VALUES (?, ?, ?)",
-                            (chat_id, pinned, notes),
-                        )
-                    return {"pinned_text": pinned, "notes": notes}
-            except Exception as e:
-                logger.debug(f"Could not read context file {file_path}: {e}")
+                if not isinstance(content, dict):
+                    return
+            except (OSError, ValueError):
+                return
+            with self._get_connection() as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO permanent_chat_context (chat_id, pinned_text, notes) VALUES (?, ?, ?)",
+                    (chat_id, content.get("pinned_text") or "", content.get("notes") or ""),
+                )
+                epoch = conn.execute("SELECT value FROM runtime_state WHERE key=?",
+                                     (f"chat_memory_epoch_{chat_id}",)).fetchone()
+                for field, prefix in (("ai_memory", "chat_summary_"), ("prompt", "chat_prompt_"),
+                                      ("voice_profile", "chat_voice_profile_"), ("style", "chat_style_")):
+                    value = "" if field == "ai_memory" and epoch and epoch["value"] else content.get(field) or ""
+                    conn.execute("INSERT OR IGNORE INTO runtime_state (key, value) VALUES (?, ?)",
+                                 (f"{prefix}{chat_id}", value))
 
-        return {"pinned_text": "", "notes": ""}
+    def sync_chat_context_file(self, chat_id: int) -> bool:
+        """Read, recover, and write a context snapshot under the same lock."""
+        with self._context_lock:
+            ctx = self.get_permanent_context(chat_id)
+            return self._sync_context_to_disk(chat_id, ctx["pinned_text"], ctx["notes"])
+
+    def set_permanent_context(
+        self, chat_id: int, pinned_text: Optional[str] = None, notes: Optional[str] = None,
+    ) -> None:
+        with self._context_lock:
+            self._hydrate_chat_context(chat_id)
+            with self._get_connection() as conn:
+                conn.execute(
+                    "INSERT INTO permanent_chat_context (chat_id, pinned_text, notes) VALUES (?, ?, ?) "
+                    "ON CONFLICT(chat_id) DO UPDATE SET "
+                    "pinned_text=COALESCE(?, permanent_chat_context.pinned_text), "
+                    "notes=COALESCE(?, permanent_chat_context.notes), updated_at=CURRENT_TIMESTAMP",
+                    (chat_id, pinned_text or "", notes or "", pinned_text, notes),
+                )
+            self.sync_chat_context_file(chat_id)
+
+    def get_permanent_context(self, chat_id: int) -> Dict[str, str]:
+        with self._context_lock:
+            self._hydrate_chat_context(chat_id)
+            with self._get_connection() as conn:
+                row = conn.execute("SELECT pinned_text, notes FROM permanent_chat_context WHERE chat_id=?",
+                                   (chat_id,)).fetchone()
+            result = {"pinned_text": row["pinned_text"] or "", "notes": row["notes"] or ""} if row else {"pinned_text": "", "notes": ""}
+            if row and not self._get_context_file_path(chat_id).exists():
+                self._sync_context_to_disk(chat_id, **result)
+            return result
 
     def delete_permanent_context(self, chat_id: int) -> bool:
-        """Explicitly remove permanent context for a chat upon owner request."""
-        with self._get_connection() as conn:
-            cursor = conn.execute("DELETE FROM permanent_chat_context WHERE chat_id = ?", (chat_id,))
-            deleted = cursor.rowcount > 0
-
-        file_path = self._get_context_file_path(chat_id)
-        if file_path.exists():
+        """Keep an empty database tombstone so failed/stale disk files cannot restore notes."""
+        with self._context_lock:
+            self._hydrate_chat_context(chat_id)
+            with self._get_connection() as conn:
+                row = conn.execute("SELECT 1 FROM permanent_chat_context WHERE chat_id=?", (chat_id,)).fetchone()
+                conn.execute(
+                    "INSERT INTO permanent_chat_context (chat_id, pinned_text, notes) VALUES (?, '', '') "
+                    "ON CONFLICT(chat_id) DO UPDATE SET pinned_text='', notes='', updated_at=CURRENT_TIMESTAMP",
+                    (chat_id,),
+                )
+            file_path = self._get_context_file_path(chat_id)
+            deleted = bool(row) or file_path.exists()
             try:
-                file_path.unlink()
-                deleted = True
-            except Exception as e:
-                logger.debug(f"Could not remove context file {file_path}: {e}")
-
-        return deleted
-
+                file_path.unlink(missing_ok=True)
+            except OSError:
+                logger.debug("Could not remove context file for chat %s", chat_id)
+            return deleted

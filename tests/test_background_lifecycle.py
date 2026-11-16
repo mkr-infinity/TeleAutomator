@@ -151,13 +151,15 @@ def test_summary_merges_new_messages_with_prior_recap_and_keeps_notes(tmp_path):
         agent = s.manager.context_agent
         await agent.refresh(-100111, force=True)
         first = s.generator.summarize_chat_history.call_args.args[2]
-        assert "Release detail 9\n" not in first and "Release detail 10" in first and "Release detail 59" in first
+        # Oldest outstanding batch first, so no message is skipped by the 50-row payload cap.
+        assert "Release detail 0\n" in first and "Release detail 49" in first and "Release detail 50" not in first
         for number in range(8):
             s.db.record_chat_message(-100111, 61 + number, 222, "Contact", f"New test detail {number}")
         agent.last_attempt[-100111] = float("-inf")
         await agent.refresh(-100111)
         _title, previous, new = s.generator.summarize_chat_history.call_args.args
-        assert previous == "Launch Friday" and "New test detail 7" in new and "Release detail" not in new
+        assert previous == "Launch Friday" and "New test detail 7" in new
+        assert "Release detail 50" in new and "Release detail 59" in new and "Release detail 49" not in new
         assert s.db.get_chat_summary(123) == ""
         context_file = s.db._get_context_file_path(-100111).read_text()
         assert "Owner note" in context_file and "Owner pin" in context_file and "test the mobile release" in context_file

@@ -276,9 +276,12 @@ def test_isolated_per_group_context_files_on_disk(tmp_path: Path):
     data_b3 = json.loads(file_b.read_text(encoding="utf-8"))
     assert "typography" in data_b3["ai_memory"]
 
-    # Verify fallback from disk file if SQLite state is purged
-    mgr.db.set_state(f"chat_summary_{grp_b}", "")
+    # Verify fallback from disk file if the SQLite row is lost (an explicit empty value stays cleared)
+    with mgr.db._get_connection() as conn:
+        conn.execute("DELETE FROM runtime_state WHERE key=?", (f"chat_summary_{grp_b}",))
     assert "typography" in mgr.db.get_chat_summary(grp_b)
+    mgr.db.set_state(f"chat_summary_{grp_b}", "")
+    assert mgr.db.get_chat_summary(grp_b) == ""
 
 
 def test_per_group_custom_prompt_isolation_and_default_fallback():
