@@ -332,9 +332,10 @@ class CommandRouterMixin:
                     f"Usage: `/model <model_name(s)>` (supports comma-separated fallback chain)"
                 )
             new_model = cmd_parts[1].strip()
-            self.db.set_state("ai_model", new_model)
-            self.db.set_state("models_manually_set", "1")
-            self.generator.reload_provider()
+            with self.db._context_lock:
+                self.db.set_state("ai_model", new_model)
+                self.db.set_state("models_manually_set", "1")
+                self.generator.reload_provider()
             return f"✅ AI model switched to *{new_model}* (provider reloaded)."
 
         if cmd in ("/pause", "/off"):
@@ -365,6 +366,9 @@ class CommandRouterMixin:
 
         if cmd in ("/resume", "/unpause"):
             self.safety.clear_pause()
+            if self.db.get_state("sleep_now", "0") == "1":
+                self.safety.set_quiet_hours(False)
+                self.db.set_state("sleep_now", "0")
             return "▶️ Automation RESUMED. Emergency stop and timed pauses cleared."
 
         if cmd == "/safemode":
@@ -475,6 +479,15 @@ class CommandRouterMixin:
             _, response = await self._approve_draft(approval_id, actor_id=actor_id)
             return response
 
+        if cmd == "/approveall":
+            try:
+                ids = [int(value) for value in cmd_parts[1].split(",")]
+                if len(cmd_parts) != 2 or not ids or len(ids) > 100 or min(ids) <= 0:
+                    raise ValueError
+            except (ValueError, IndexError):
+                return "❌ Supply the exact draft IDs to approve."
+            return self._start_approval_batch(actor_id, ids=ids)
+
         if cmd == "/reject":
             if len(cmd_parts) < 2:
                 return (
@@ -509,11 +522,21 @@ class CommandRouterMixin:
 
         return None
 
-    def _start_approval_batch(self, actor_id=None):
+    def _end_sleep_now(self):
+        """Lift only the pause set by /sleep; an emergency stop still needs /resume."""
+        if self.db.get_state("sleep_now", "0") == "1":
+            self.db.set_state("pause_until", "0")
+            self.db.set_state("sleep_now", "0")
+
+    def _start_approval_batch(self, actor_id=None, ids=None):
         task = self._approval_batch_task
         if task and not task.done():
             return "An approval batch is already running. Check pending drafts or action history."
-        pending = self.db.list_pending_approvals()
+        if ids is None:
+            pending = self.db.list_pending_approvals()
+        else:
+            pending = [item for approval_id in dict.fromkeys(ids)
+                       if (item := self.db.get_pending_approval(approval_id)) and item.get("status", "pending") == "pending"]
         if not pending:
             return "No drafts currently pending approval."
 
@@ -549,12 +572,16 @@ class CommandRouterMixin:
         if not item:
             return False, f"❌ Draft #{approval_id} no longer exists or is already being handled. Use /pending to see current drafts."
         try:
-            sent = await self._send_reply(item["chat_id"], item["reply_to_msg_id"], item["draft_text"], adaptive_delay=False, approved=True, operator_id=actor_id)
+            context = self.context_agent.snapshot(item["chat_id"], is_mention=True, require_latest=True)
+            sent = context is not None and await self._send_reply(item["chat_id"], item["reply_to_msg_id"], item["draft_text"], adaptive_delay=False, approved=True, context=context, operator_id=actor_id)
         except BaseException:
             # An interrupted send has an unknown delivery outcome; never retry it automatically.
             self.db.update_approval_status(approval_id, "failed", expected_status="sending")
             raise
-        self.db.update_approval_status(approval_id, "sent" if sent else "pending", expected_status="sending")
+        partial = not sent and self._last_delivery_parts.get(item["chat_id"], 0) > 0
+        self.db.update_approval_status(approval_id, "sent" if sent else "failed" if partial else "pending", expected_status="sending")
+        if partial:
+            return False, f"⚠️ Draft #{approval_id} was only partly sent. It will not be retried automatically; review the conversation."
         return sent, (f"✅ Draft #{approval_id} sent successfully." if sent else f"⚠️ Cannot send draft #{approval_id}: check chat access, pause, quiet hours, and rate limits.")
 
     async def _resolve_chat_id(self, raw_target: str) -> tuple[Optional[int], Optional[dict], Optional[str]]:
@@ -704,7 +731,7 @@ class CommandRouterMixin:
             result = f"✅ {target}{info_str} [ID: `{cid}`] has been added to the allowlist!"
             # Immediately initialize isolated context file, pins, and history for this chat/group
             if hasattr(self, "init_chat_context"):
-                self.start_background(self.init_chat_context(cid))
+                self.schedule_chat_context(cid)
             elif cid < 0 and self._client:
                 self.start_background(self.generate_chat_voice_profile(cid))
 
@@ -1211,7 +1238,7 @@ class CommandRouterMixin:
             else:
                 try:
                     pct = float(arg.rstrip("%"))
-                    prob = max(0.0, min(1.0, pct / 100.0 if pct > 1.0 else pct))
+                    prob = max(0.0, min(1.0, pct / 100.0 if arg.endswith("%") or pct > 1.0 else pct))
                     self.db.set_state("chatty_probability", str(prob))
                     return f"💬 Group banter probability set to *{int(prob * 100)}%*."
                 except ValueError:
@@ -1315,10 +1342,19 @@ class CommandRouterMixin:
         if cmd in ("/sleep", "/goodnight"):
             if len(cmd_parts) >= 2 and cmd_parts[1].lower() in ("off", "stop", "wake", "resume"):
                 self.safety.set_quiet_hours(False)
+                self._end_sleep_now()
                 return "☀️ Quiet hours *DISABLED*. Automated replies and reactions are now active 24/7."
             await self.maybe_send_quiet_hours_goodnight(force=True)
             self.safety.set_quiet_hours(True)
             s, e = self.safety.quiet_hours_window
+            zone = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+            now = datetime.datetime.now(zone)
+            hour, minute = map(int, e.split(":"))
+            wake = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if wake <= now:
+                wake += datetime.timedelta(days=1)
+            self.safety.set_timed_pause((wake - now).total_seconds())
+            self.db.set_state("sleep_now", "1")
             return (
                 f"🌙 *Goodnight sign-off sent!* Quiet hours (sleep schedule {s}–{e}) is now *ON*.\n"
                 f"Auto-replies are paused. Send `/quiethours off` or `/resume` to wake up anytime."
@@ -1347,6 +1383,7 @@ class CommandRouterMixin:
             sub = cmd_parts[1].lower().strip()
             if sub == "off":
                 self.safety.set_quiet_hours(False)
+                self._end_sleep_now()
                 return "☀️ Quiet hours *DISABLED*. Automated replies and reactions are now active 24/7."
 
             if sub == "on":
@@ -1592,6 +1629,8 @@ class CommandRouterMixin:
             try:
                 per_min = max(1, int(cmd_parts[1]))
                 self.db.set_state("max_replies_per_minute", str(per_min))
+                self.safety._minute_cap_ts = 0.0
+                self.safety._minute_cap = per_min
                 return f"✅ Anti-spam base burst limit updated to *{per_min}* replies/min (dynamic range applies on top)."
             except ValueError:
                 return (
@@ -1792,7 +1831,10 @@ class CommandRouterMixin:
                     "Missing: Active provider supporting live model verification\n"
                     "Fix: Live model verification is supported on Gemini, OpenAI, and Inception custom providers."
                 )
-            results = await asyncio.to_thread(self.generator.provider.check_working_models)
+            with self.db._context_lock:
+                checked_provider = self.generator.provider
+                expected = {key: self.db.get_state(key) for key in ("ai_provider", "ai_model", "ai_api_key", "ai_base_url", "ai_enabled", "state_revision")}
+            results = await asyncio.to_thread(checked_provider.check_working_models)
             lines = ["🔍 *Model Live Health Check:*"]
             healthy_models: list[str] = []
             for m, ok, detail in results:
@@ -1803,8 +1845,10 @@ class CommandRouterMixin:
             active = getattr(self.generator.provider, "model", "")
             if healthy_models:
                 active = ",".join(healthy_models)
-                self.generator.provider.model = active
-                self.db.set_state("ai_model", active)
+                with self.db._context_lock:
+                    if self.generator.provider is not checked_provider or not self.db.apply_preferences({"ai_model": active}, [], [], expected_states=expected):
+                        return "\n".join(lines) + "\nSettings changed during the check; newer choices were preserved."
+                    checked_provider.model = active
                 lines.append(f"\n🎯 Active working models updated to: *{active}*")
             else:
                 lines.append(f"\n⚠️ No healthy models found.")
@@ -1830,9 +1874,10 @@ class CommandRouterMixin:
                     target_url = normalize_base_url(target_url)
             except ValueError as e:
                 return f"❌ Invalid API base URL: {e}"
-            self.db.set_state("ai_base_url", target_url)
-            self.db.set_state("available_models", "[]")
-            self.generator.reload_provider()
+            with self.db._context_lock:
+                self.db.set_state("ai_base_url", target_url)
+                self.db.set_state("available_models", "[]")
+                self.generator.reload_provider()
             return f"✅ AI base URL updated to: `{target_url or 'default'}` (provider reloaded)."
 
         if cmd in ("/provider", "/setprovider"):
@@ -1849,10 +1894,11 @@ class CommandRouterMixin:
                 )
             target = cmd_parts[1].lower().strip()
             if target in ("gemini", "openai", "nvidia", "custom", "groq", "together", "deepseek", "local", "inception"):
-                self.db.set_state("ai_provider", target)
-                self.db.set_state("available_models", "[]")
-                self.db.set_state("ai_enabled", "0" if target == "local" else "1")
-                self.generator.reload_provider()
+                with self.db._context_lock:
+                    self.db.set_state("ai_provider", target)
+                    self.db.set_state("available_models", "[]")
+                    self.db.set_state("ai_enabled", "0" if target == "local" else "1")
+                    self.generator.reload_provider()
                 return f"🧠 AI provider switched to *{target.upper()}* (provider reloaded)."
             return (
                 "❌ /provider failed\n"
@@ -1871,8 +1917,9 @@ class CommandRouterMixin:
                     f"_Updates your active AI key instantly on both local and cloud deployments without server restarts._"
                 )
             new_key = cmd_parts[1].strip()
-            self.db.set_state("ai_api_key", new_key)
-            self.generator.reload_provider()
+            with self.db._context_lock:
+                self.db.set_state("ai_api_key", new_key)
+                self.generator.reload_provider()
             masked = f"`{new_key[:7]}...{new_key[-4:]}`" if len(new_key) > 11 else "`Set`"
             return f"✅ AI API key updated to {masked} and provider reloaded."
 
@@ -1903,13 +1950,14 @@ class CommandRouterMixin:
                 return "❌ Unsupported AI provider. Use /provider to see supported providers."
             if p in ("mercury", "inception") and len(cmd_parts) >= 3:
                 k = cmd_parts[2].strip()
-                self.db.set_state("ai_provider", "custom")
-                self.db.set_state("ai_enabled", "1")
-                self.db.set_state("ai_api_key", k)
-                self.db.set_state("ai_base_url", "https://api.inceptionlabs.ai/v1")
-                self.db.set_state("ai_model", "mercury-3,mercury-3-preview-1014,mercury-3-preview-1002")
-                self.db.set_state("available_models", "[]")
-                self.generator.reload_provider()
+                with self.db._context_lock:
+                    self.db.set_state("ai_provider", "custom")
+                    self.db.set_state("ai_enabled", "1")
+                    self.db.set_state("ai_api_key", k)
+                    self.db.set_state("ai_base_url", "https://api.inceptionlabs.ai/v1")
+                    self.db.set_state("ai_model", "mercury-3,mercury-3-preview-1014,mercury-3-preview-1002")
+                    self.db.set_state("available_models", "[]")
+                    self.generator.reload_provider()
                 return (
                     f"✅ *Inception Labs Mercury Configured & Activated!*\n\n"
                     f"• Provider: `CUSTOM`\n"
@@ -1924,14 +1972,15 @@ class CommandRouterMixin:
                 except ValueError as e:
                     return f"❌ Invalid API base URL: {e}"
                 m = cmd_parts[4].strip() if len(cmd_parts) >= 5 else ""
-                self.db.set_state("ai_provider", p)
-                self.db.set_state("ai_enabled", "0" if p == "local" else "1")
-                self.db.set_state("ai_api_key", k)
-                self.db.set_state("ai_base_url", u)
-                self.db.set_state("available_models", "[]")
-                if m:
-                    self.db.set_state("ai_model", m)
-                self.generator.reload_provider()
+                with self.db._context_lock:
+                    self.db.set_state("ai_provider", p)
+                    self.db.set_state("ai_enabled", "0" if p == "local" else "1")
+                    self.db.set_state("ai_api_key", k)
+                    self.db.set_state("ai_base_url", u)
+                    self.db.set_state("available_models", "[]")
+                    if m:
+                        self.db.set_state("ai_model", m)
+                    self.generator.reload_provider()
                 return (
                     f"✅ *Custom AI Configured & Activated!*\n\n"
                     f"• Provider: `{p.upper()}`\n"

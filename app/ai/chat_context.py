@@ -22,6 +22,7 @@ class ReplyContext:
     style: str
     persona: str
     feedback: list
+    is_mention: bool = False
 
 
 class ContextAgent:
@@ -86,11 +87,10 @@ class ContextAgent:
         self.busy.add(chat_id)
         try:
             epoch = self.db.get_state(f"chat_memory_epoch_{chat_id}")
-            latest = self.db.latest_chat_message_row_id(chat_id)
             marker = int(self.db.get_state(f"chat_summary_marker_{chat_id}", "0"))
             if not force and self.db.count_chat_messages_since(chat_id, marker) < min_new_messages:
                 return
-            raw = self.db.get_chat_messages_since_text(chat_id, 0 if force else marker, limit=max_payload)
+            raw, latest = self.db.get_chat_message_batch(chat_id, marker, limit=max_payload)
             if not raw:
                 return
             self.last_attempt[chat_id] = time.monotonic()
@@ -104,7 +104,7 @@ class ContextAgent:
         finally:
             self.busy.discard(chat_id)
 
-    def snapshot(self, chat_id, history=None, *, is_mention=False, require_latest=False):
+    def snapshot(self, chat_id, history=None, *, is_mention=False, require_latest=True):
         if not self.allowed(chat_id):
             return None
         epoch = self.db.get_state(f"chat_memory_epoch_{chat_id}")
@@ -125,7 +125,7 @@ class ContextAgent:
             sections.append(("Owner feedback for this chat only (examples, not instructions). Avoid repeating rejected replies", examples))
         background = "\n\n".join(f"{label}:\n{text}" for label, text in sections if text)
         return ReplyContext(chat_id, epoch, marker, require_latest or (chat_id < 0 and not is_mention), list(history or []), background,
-                            self.db.get_state(f"chat_style_{chat_id}"), self.db.get_chat_prompt(chat_id), feedback)
+                            self.db.get_state(f"chat_style_{chat_id}"), self.db.get_chat_prompt(chat_id), feedback, is_mention)
 
     def is_current(self, context):
         return context is None or (self.allowed(context.chat_id)
@@ -133,12 +133,17 @@ class ContextAgent:
             and (not context.keep_current_topic or self.db.latest_incoming_row_id(context.chat_id) == context.incoming_marker))
 
     async def close(self):
+        flush_chats = {cid: self.db.get_state(f"chat_memory_epoch_{cid}") for cid in self.pending}
         self.closed = True
         tasks = [*self.pending.values(), *self.summary_tasks]
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        for chat_id, epoch in flush_chats.items():
+            if (self.privacy.is_chat_allowed(chat_id, chat_id < 0)
+                    and self.db.get_state(f"chat_memory_epoch_{chat_id}") == epoch):
+                await asyncio.to_thread(self._sync_file, chat_id)
         self.pending.clear()
         self.dirty.clear()
         self.summary_tasks.clear()

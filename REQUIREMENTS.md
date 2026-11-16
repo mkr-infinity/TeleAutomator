@@ -10,7 +10,7 @@ This guide explains **every required and recommended setting** needed to run Tel
 | :--- | :--- | :---: | :--- |
 | **Telegram Core** | `TG_API_ID` | **YES** | [my.telegram.org](https://my.telegram.org) |
 | **Telegram Core** | `TG_API_HASH` | **YES** | [my.telegram.org](https://my.telegram.org) |
-| **AI Brain** | `AI_API_KEY` | **YES** | [Google AI Studio](https://aistudio.google.com/app/apikey) (Free) or [OpenAI](https://platform.openai.com/api-keys) |
+| **AI Brain** | `AI_API_KEY` | **YES** | [Google AI Studio](https://aistudio.google.com/app/apikey) or [OpenAI](https://platform.openai.com/api-keys) |
 | **Bot & Mini App** | `BOT_API_KEY` | **Recommended** | [@BotFather](https://t.me/BotFather) on Telegram |
 | **Bot & Mini App** | `BOT_AUTHORIZED_USERS` | **Recommended** | Your own Telegram ID from [@userinfobot](https://t.me/userinfobot) |
 | **Cloud Deploy** | `TG_SESSION_STRING` | Cloud only | Generated once via `./session.sh` |
@@ -84,7 +84,7 @@ TeleAutomator uses an AI model to read messages in context and draft human-like 
 ### `AI_PROVIDER`
 * **Why it's needed**: Specifies which AI company or API protocol to use.
 * **Options**:
-  * `"gemini"` *(Recommended default: fastest and has a generous free tier)*
+  * `"gemini"` *(Default provider; check your own account limits)*
   * `"openai"` *(Official OpenAI API)*
   * `"custom"` *(Any OpenAI-compatible API: Groq, DeepSeek, Together, Ollama, vLLM, etc.)*
 * **Example in `.env`**:
@@ -95,7 +95,7 @@ TeleAutomator uses an AI model to read messages in context and draft human-like 
 ### `AI_API_KEY`
 * **Why it's needed**: Authenticates your requests with the AI provider.
 * **Where to find it**:
-  * **Google Gemini (Free)**: Visit **[https://aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)**, sign in with your Google account, and click **Create API key**.
+  * **Google Gemini**: Visit **[https://aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)**, sign in with your Google account, and click **Create API key**.
   * **OpenAI**: Visit **[https://platform.openai.com/api-keys](https://platform.openai.com/api-keys)**, create an account, and generate a new secret key.
   * **Custom Provider**: Copy the API key from your provider's dashboard (e.g. Groq, OpenRouter, DeepSeek).
 * **Example in `.env`**:
@@ -121,6 +121,8 @@ TeleAutomator uses an AI model to read messages in context and draft human-like 
   AI_BASE_URL=https://api.groq.com/openai/v1
   ```
 
+With `AI_ENABLED=false` or an unavailable provider, automated conversational replies stay silent. Keyword guidance also requires the configured model. There is no canned offline reply fallback.
+
 ---
 
 ## 4. Chat Allowlist & Privacy Scope
@@ -135,7 +137,7 @@ By default, TeleAutomator stays completely quiet until you tell it which chats i
    * Forward any message from that user to **[@userinfobot](https://t.me/userinfobot)**. It will reply with their user ID (e.g. `987654321`).
 2. **Group or Supergroup ID**:
    * Add **[@RawDataBot](https://t.me/RawDataBot)** to the group temporarily. It will output a JSON message showing the `"chat": { "id": -1001987654321 }`.
-   * Group IDs are **always negative** and start with `-100`.
+   * Group IDs are negative; supergroup IDs commonly start with `-100`, while basic groups use other negative IDs.
 
 ### `ALLOWED_PRIVATE_CHATS`
 * **Example in `.env`**:
@@ -165,18 +167,18 @@ By default, TeleAutomator stays completely quiet until you tell it which chats i
 
 When running locally or on a standard Linux VPS, TeleAutomator saves your login session file automatically to `data/telegram_client.session`.
 
-When deploying on headless cloud platforms (like **Railway** or **Render**), disk storage is ephemeral, so you store the session as a string:
+Headless deployments use a StringSession credential, but still require a durable disk for SQLite settings, access revocations, history, and chat contexts. On Railway attach a Volume to the service (the app follows its mount path); on Render add a disk at `/app/data`. The container refuses startup without a mount on Railway/Render. See [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ### `TG_SESSION_MODE` & `TG_SESSION_STRING`
 * **How to generate it**:
   1. On your computer, run:
      ```bash
-     ./session.sh
+     ./session.sh --new
      # Or cross-platform:
-     python run.py --session
+     python run.py --new-session
      ```
   2. Follow the prompt to log in with your Telegram account.
-  3. The script will output a secure string starting with `1B...` (approx. 200–300 characters).
+  3. The script will output an encoded bearer credential (not encrypted; keep it as private as a password).
   4. Paste that string into your cloud service's Environment Variables.
 * **Example in `.env`**:
   ```env
@@ -211,7 +213,7 @@ BOT_AUTHORIZED_USERS=555000111
 
 # ==========================================
 # 3. AI Reply Engine (Required)
-# Free key from https://aistudio.google.com/app/apikey
+# Provider key from https://aistudio.google.com/app/apikey
 # ==========================================
 AI_ENABLED=true
 AI_PROVIDER=gemini

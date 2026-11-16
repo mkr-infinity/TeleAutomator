@@ -79,7 +79,7 @@ for cmd in python3 python; do
         PY_VER=$("${cmd}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "0.0")
         PY_MAJOR=$("${cmd}" -c 'import sys; print(sys.version_info.major)' 2>/dev/null || echo "0")
         PY_MINOR=$("${cmd}" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo "0")
-        if [ "${PY_MAJOR}" -ge 3 ] && [ "${PY_MINOR}" -ge 10 ]; then
+        if [ "${PY_MAJOR}" -gt 3 ] || { [ "${PY_MAJOR}" -eq 3 ] && [ "${PY_MINOR}" -ge 10 ]; }; then
             PYTHON_CMD="${cmd}"
             echo "[*] Python Executable    : $(command -v "${cmd}") (v${PY_VER})"
             break

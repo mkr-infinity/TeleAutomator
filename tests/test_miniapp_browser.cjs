@@ -47,6 +47,10 @@ function telegramMock({ version }) {
   data.state.available_models = ["first", "second"];
   data.state.rules = [{ keyword: "help", reply: "Send a message" }];
   data.chats.forEach(chat => { chat.cooldown_default_min = 3; chat.cooldown_default_max = 8; });
+  // Newer server fields; Crypto Signals Hub (index 4) keeps the older shape without them.
+  data.state.pipeline = { context: "Per-chat files and batched summaries", writer: "Selected model", humanizer: "Local checks; no extra model call", context_jobs: 1, last_context: { status: "success", detail: "Chat memory updated from a batch of messages", created_at: "2026-11-15 12:00:00" } };
+  Object.assign(data.chats[1], { chatty_effective: 0.4, chatty_source: "chat" });
+  Object.assign(data.chats[2], { chatty: "", prompt: "Reply rate 30% here.", chatty_effective: 0.3, chatty_source: "prompt" });
   data.activity.forEach((row, index) => { row.is_automated = index < 3; });
   const requests = [];
   let rejectAction = null;
@@ -253,6 +257,8 @@ function telegramMock({ version }) {
     await expect(page.locator("#ov-activity .feedback-button").first()).toHaveText("Off-topic");
     await navigate(page, "more", "feedback");
     await expect(page.locator("#pipeline-status")).toContainText("no extra model call");
+    await expect(page.locator("#pipeline-status div", { hasText: "Context jobs running" }).locator("strong")).toHaveText("1");
+    await expect(page.locator("#pipeline-status div", { hasText: "Last memory update" }).locator("strong")).toHaveText("Nov 15, 5:30 PM IST · Success");
     await expect(page.locator("#feedback-list .history-row")).toHaveCount(1);
     assert((await page.locator("#feedback-list .feedback-button").boundingBox()).height >= 48, "feedback buttons need mobile touch targets");
     await expect(page.locator("#feedback-counts")).toContainText("Off-topic: 1");
@@ -288,11 +294,15 @@ function telegramMock({ version }) {
         window.sheetObserver = new MutationObserver(records => { window.sheetChanges += records.filter(record => record.type === "childList").length; });
         window.sheetObserver.observe(document.getElementById("sheet-body"), { childList: true });
       });
-      await page.locator(".chat-capsule-card").first().click();
+      // Chatty is group-only and the first card is a private chat.
+      await page.locator(".chat-capsule-card").nth(action === "chatty" ? 1 : 0).click();
       assert.equal(await page.evaluate(() => window.sheetChanges), 1, "one chat-card tap must open the popup once");
       if (action) await page.locator(`.clay-action-btn[data-action="${action}"]`).click();
       await checkSheet(page, title);
+      if (action === "chatty") await expect(page.locator("#sheet-body")).toContainText("Now: 40% (per-chat)");
       if (!action) {
+        await expect(page.locator('.clay-action-btn[data-action="chatty"]')).toHaveCount(0);
+        await expect(page.locator("#sheet-body")).not.toContainText("Chatty");
         await page.locator(".copy-id-btn").click();
         await expect(page.locator("#toast")).toBeVisible();
         await expect(page.locator("#toast-msg")).toContainText("copied");
@@ -315,9 +325,16 @@ function telegramMock({ version }) {
     await checkSheet(page, "Delhi Tech");
     assert.equal(await page.evaluate(() => window.sheetChanges), 1, "keyboard activation must open the popup once");
     await expect(page.locator("#sheet-body")).toContainText("Global Default (3s – 8s)");
+    await expect(page.locator(".summary-item", { hasText: "Chatty Frequency" })).toContainText("30% (from chat prompt)");
+    await expect(page.locator('.clay-action-btn[data-action="chatty"]')).toContainText("30% Chance");
+    await close(page);
+    await page.locator(".chat-capsule-card").nth(4).click();
+    await expect(page.locator(".summary-item", { hasText: "Chatty Frequency" })).toContainText("Global default");
+    await expect(page.locator('.clay-action-btn[data-action="chatty"]')).toContainText("Default Chance");
     await close(page);
     await page.locator(".chat-capsule-card").first().click();
     await page.locator('.clay-action-btn[data-action="cooldown"]').click();
+    await expect(page.locator("#sheet-body")).toContainText("account-wide gap after a reply in any chat");
     await page.locator("#cd-min-input").fill("8");
     await page.locator("#cd-min-input").press("Enter");
     await expect(page.locator("#cd-max-input")).toBeFocused();

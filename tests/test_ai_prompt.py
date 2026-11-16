@@ -47,9 +47,9 @@ def test_prompt_manager_conversation_history():
 def test_prompt_clean_reply_and_anti_robotic():
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
 
-    # Strips robotic openings
+    # Strips assistant-only openings; ordinary human openers stay
     assert pm.clean_reply("Certainly! Let's meet at 5.") == "Let's meet at 5."
-    assert pm.clean_reply("Sure thing! On my way.") == "On my way."
+    assert pm.clean_reply("Sure thing! On my way.") == "Sure thing! On my way."
     assert pm.clean_reply("Here is a draft: sounds good!") == "sounds good!"
 
     # Strips robotic closers
@@ -236,7 +236,7 @@ def test_custom_prompt_wrapping_and_anti_ai_guardrails():
     assert "NATURAL MESSAGE LENGTH" in instructions
     assert "Automation or bot/human verification questions are left to the account owner" in instructions
     assert "MANDATORY REPLY POLICY" in instructions
-    assert "SLANG" in instructions
+    assert "configured persona and active style" in instructions
     assert "NO CODE" in instructions
 
     # Resetting custom persona
@@ -254,18 +254,18 @@ def test_custom_prompt_word_rule_priority():
     multiline = "sounds good to me\nwill check later"
     assert pm.clean_reply(multiline) == multiline
 
-    # 1b. Long 2-line output (>20 words total) falls back to the first line
+    # 1b. Two lines over 25 words with no complete sentence stay silent instead of being cut
     long_two_lines = (
         "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron\n"
         "pi rho sigma tau upsilon phi chi psi omega one two"
     )
-    assert pm.clean_reply(long_two_lines) == "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron"
+    assert pm.clean_reply(long_two_lines) == ""
 
     # 2. With custom word rule specified (e.g. 5 words)
     pm.custom_prompt = "Always reply in up to 5 words."
     assert pm.get_custom_word_limit() == 5
     ten_words = "one two three four five six seven eight nine ten"
-    assert len(pm.clean_reply(ten_words).split()) == 5
+    assert pm.clean_reply(ten_words) == ""
 
     # 3. With custom detailed/paragraphs directive
     pm.custom_prompt = "You are an author who provides detailed explanations."
@@ -472,9 +472,9 @@ def test_strict_word_limits_and_hard_cap():
     multiline = "sounds good bro 👍\ncheck this other thing out"
     assert pm.clean_reply(multiline) == multiline
 
-    # Excessively long run-on messages (>25 words) are capped for safety
+    # Excessively long run-on messages are suppressed instead of cut mid-thought
     thirty_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty"
-    assert len(pm.clean_reply(thirty_words).split()) == 20
+    assert pm.clean_reply(thirty_words) == ""
 
 
 def test_ist_time_awareness_and_brevity_instructions_in_prompt():
@@ -493,7 +493,7 @@ def test_ist_time_awareness_and_brevity_instructions_in_prompt():
     assert "NO USELESS CONVERSATION" in prompt
     assert "humor" in prompt
     assert "vibe" in prompt
-    assert "NEVER explain" in prompt
+    assert "Answer directly without assistant preambles" in prompt
 
 
 def test_dynamic_owner_name_without_hardcoding(tmp_path: Path):

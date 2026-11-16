@@ -16,7 +16,7 @@
 [![Tests](https://img.shields.io/badge/tests-pytest-blue.svg)](test.sh)
 
 > 🔑 **First Time Setup & Requirements Guide**  
-> Wondering which API keys, Telegram IDs, and environment settings are required? Read **[REQUIREMENTS.md](REQUIREMENTS.md)** for a beginner-friendly walkthrough on where to get your `TG_API_ID`, `TG_API_HASH`, bot token, and free AI key.
+> Wondering which API keys, Telegram IDs, and environment settings are required? Read **[REQUIREMENTS.md](REQUIREMENTS.md)** for a beginner-friendly walkthrough on where to get your `TG_API_ID`, `TG_API_HASH`, bot token, and AI provider key.
 
 > 🚀 **Deploying to Railway, Render, or Cloud VPS 24/7?**  
 > For complete step-by-step cloud deployment walkthroughs, automated build guides, and environment variable configurations, see **[DEPLOYMENT.md](DEPLOYMENT.md)**.
@@ -45,6 +45,17 @@ git clone https://github.com/mkr-infinity/TeleAutomator.git && cd TeleAutomator
 ```
 *(Windows / cross-platform: `python run.py --setup` -> `python run.py --auth` -> `python run.py --session` -> `python run.py`)*
 
+For a dedicated headless login use `./session.sh --new` or `python run.py --new-session`.
+`./session.sh` / `python run.py --session` only export an existing authenticated local session.
+Session files and strings are unencrypted bearer credentials. Stop the local sender before
+starting a deployment. A separate session avoids sharing an auth key, but two senders for
+the same account can still duplicate replies and use independent safety counters.
+
+Setup requires Python 3.10+ with venv/pip already installed. Setup scripts install Python
+packages and create configuration; they do not install Python, Docker, or OS packages.
+With AI disabled or unavailable, conversational replies stay silent; there is no canned offline fallback.
+Containers require persistent storage; follow [DEPLOYMENT.md](DEPLOYMENT.md) before Compose or cloud startup.
+
 ---
 
 ## 📱 Telegram Mini App (Web App GUI)
@@ -70,9 +81,9 @@ Switch modes on the fly from terminal, the Mini App GUI, or your Telegram **Cont
 
 | Mode | Description | How to Activate |
 | :--- | :--- | :--- |
-| **`draft`** *(Default)* | Generates and logs drafts to SQLite; **never sends to chat**. | `/mode draft` or `./start.sh --draft` |
+| **`draft`** | Generates and logs drafts to SQLite; **never sends to chat**. | `/mode draft` or `./start.sh --draft` |
 | **`approval`** | Sends drafts to your **Control Bot** for `/approve <id>` dispatch. | `/mode approval` or `./start.sh --mode approval` |
-| **`restricted_auto`**| Automatically replies to allowlisted chats with human-like delays (min 2.0s between bubbles). | `/mode auto` or set `REPLY_MODE=restricted_auto` |
+| **`restricted_auto`** *(Template default)*| Automatically replies to allowlisted chats with human-like delays (min 2.0s between bubbles). | `/mode auto` or set `REPLY_MODE=restricted_auto` |
 
 ---
 
@@ -149,6 +160,10 @@ Tests cover configuration, authorization, safety guards, quiet hours, live custo
 With Playwright and Chromium installed, pytest also checks the real Mini App in a mobile browser: popup scrolling, small swipes, fullscreen compatibility, keyboard resizing, failed saves, repeated taps, preserved drafts, and reconnects across six window sizes. These checks use local fixtures. `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` can select an existing Chromium binary.
 
 The Mini App requests fullscreen on supported Telegram clients, respects Telegram/system safe areas, and disables body swipes that would minimize it. Telegram still controls its native header gestures. Settings use expandable sections; popups keep failed edits visible and require confirmation before discarding unsaved input. Public assets are cached separately from authenticated API responses.
+
+CI runs Python pytest, Node workflow checks, and Chromium fixtures. Run
+`python scripts/update_version.py --check` for a read-only version consistency check;
+without `--check`, that script writes synchronized files. CI uploads no test reports.
 
 Automated outgoing messages start with a capital letter, including each separate bubble and approved draft. Remaining casing, such as `API` and `iPhone`, is preserved.
 

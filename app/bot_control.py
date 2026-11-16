@@ -228,9 +228,9 @@ def authorized_user_ids(db: Database, seeds=()) -> set[int]:
 
 
 def save_authorized_users(db: Database, users: set[int], seeds=()) -> None:
-    revoked = (_user_id_state(db, "bot_revoked_users") | (authorized_user_ids(db, seeds) - users)) - users
-    db.set_state("bot_revoked_users", json.dumps(sorted(revoked)))
-    db.set_state("bot_authorized_users", json.dumps(sorted(users)))
+    with db._context_lock:
+        current = authorized_user_ids(db, seeds)
+        db.update_authorized_users(add=users, remove=current - users, seeds=seeds)
 
 
 def can_run_command(db: Database, user_id: int, command: str, main_user_id: int) -> bool:
@@ -263,7 +263,7 @@ class BotControl:
         self._me_cache: Optional[dict] = None
         self._watchdog_last_alert: float = 0.0
         # Bootstrap: seed authorized users from env (DB list persists dynamic changes)
-        self._save_authorized(authorized_user_ids(self.db, self.seed_user_ids))
+        self.db.update_authorized_users(seeds=self.seed_user_ids)
         if not self.db.get_state("main_owner_id", "") and self.seed_user_ids:
             self.db.set_state("main_owner_id", str(min(self.seed_user_ids)))
 
@@ -447,7 +447,12 @@ class BotControl:
         callback = update.get("callback_query") or {}
         text = str(message.get("text") or callback.get("data") or "").removeprefix("cmd:")
         root = text.split()[0].split("@")[0].lower() if text.split() else ""
-        slow = root in {"/approve", "/checkmodels", "/syncpins", "/gencontext", "/backup", "/name"} or text.startswith("approve:")
+        slow = root in {
+            "/approve", "/approveall", "/checkmodels", "/testmodels",
+            "/syncpin", "/syncpins", "/gencontext", "/genvoice",
+            "/backup", "/exportdb", "/name", "/sleep", "/goodnight",
+            "/authlist", "/addauth", "/removeauth",
+        } or text.startswith("approve:")
         if not slow:
             return await self._process_update(update)
         if len(self._command_tasks) >= 4:
@@ -573,9 +578,18 @@ class BotControl:
 
         # Bot-specific auth management (main user only, plus plain /start help)
         parts = text.split()
-        lowered = text.lower()
-        if lowered.startswith("/start"):
+        root = parts[0].lower().split("@")[0]
+        lowered = root
+        if root != "/start" and not self._user_can(user_id, root):
+            await self.send_message(
+                chat_id,
+                f"❌ Permission denied\nMissing: Permission for `{root}`\nFix: `{root}` is not permitted for your account. Ask the owner to grant it via `/grantperm {user_id} {root}`.",
+            )
+            return
+        if root == "/start":
             await self.send_message(chat_id, BOT_COMMAND_HELP, reply_markup=quick_menu_markup())
+            if not self._user_can(user_id, "/status"):
+                return
             try:
                 response = await self.reply_manager.handle_control_command("/status")
                 if response:
@@ -584,11 +598,11 @@ class BotControl:
                 logger.debug(f"Could not send status on /start: {e}")
             return
 
-        if lowered.startswith("/authlist"):
+        if lowered == "/authlist":
             await self._handle_authlist(chat_id)
             return
 
-        if lowered.startswith("/addauth"):
+        if lowered == "/addauth":
             if not self.is_main_user(user_id):
                 await self.send_message(
                     chat_id,
@@ -627,14 +641,13 @@ class BotControl:
             if new_id in users:
                 await self.send_message(chat_id, f"User `{new_id}` is already authorized.")
                 return
-            users.add(new_id)
-            self._save_authorized(users)
+            self.db.update_authorized_users(add=(new_id,), seeds=self.seed_user_ids)
             await self.send_message(chat_id, f"✅ User `{new_id}` is now authorized.")
             await self.send_message(new_id, AUTHORIZED_NOTICE)
             logger.info(f"Bot auth added: {new_id} (by {user_id}).")
             return
 
-        if lowered.startswith("/removeauth"):
+        if lowered == "/removeauth":
             if not self.is_main_user(user_id):
                 await self.send_message(
                     chat_id,
@@ -683,15 +696,14 @@ class BotControl:
             if not users:
                 await self.send_message(chat_id, "🛡️ At least one authorized user must remain.")
                 return
-            self._save_authorized(users)
-            self.db.set_state(f"bot_granted_cmds_{target}", "all")  # reset any restriction
+            self.db.update_authorized_users(remove=(target,), seeds=self.seed_user_ids)
             await self.send_message(chat_id, f"🗑️ User `{target}` removed from authorized list.")
             await self.send_message(target, REMOVED_NOTICE)
             logger.info(f"Bot auth removed: {target} (by {user_id}).")
             return
 
         # Per-command permissions (suggestion #1): main owner can restrict a secondary user
-        if lowered.startswith("/grantperm"):
+        if lowered == "/grantperm":
             if not self.is_main_user(user_id):
                 await self.send_message(
                     chat_id,
@@ -728,7 +740,7 @@ class BotControl:
             await self.send_message(target, "✨ *Your bot permissions were updated by the owner.*\nType `/start` to see what you can use.")
             return
 
-        if lowered.startswith("/revokeperm"):
+        if lowered == "/revokeperm":
             if not self.is_main_user(user_id):
                 await self.send_message(
                     chat_id,
@@ -750,7 +762,7 @@ class BotControl:
             await self.send_message(target, "🔓 *Your bot permissions were updated by the owner.*\nYou now have full command access.")
             return
 
-        if lowered.startswith("/watchdog"):
+        if lowered == "/watchdog":
             if not self.is_main_user(user_id):
                 await self.send_message(
                     chat_id,
@@ -767,15 +779,6 @@ class BotControl:
             mins = max(2, int(parts[1]))
             self.db.set_state("watchdog_minutes", str(mins))
             await self.send_message(chat_id, f"⏱️ Watchdog threshold set to *{mins} minutes*.")
-            return
-
-        # Per-command permission enforcement (main owner always unrestricted)
-        if not self.is_main_user(user_id) and not self._user_can(user_id, text.split()[0]):
-            cmd_root = text.split()[0].split('@')[0]
-            await self.send_message(
-                chat_id,
-                f"❌ Permission denied\nMissing: Permission for `{cmd_root}`\nFix: `{cmd_root}` is not permitted for your account. Ask the owner to grant it via `/grantperm {user_id} {cmd_root}`.",
-            )
             return
 
         # All remaining commands route to the shared command engine of ReplyManager
@@ -1006,6 +1009,20 @@ class BotControl:
             logger.warning("Bot send_alert: no main user configured; alert dropped.")
             return False
         return await self.send_message(main_id, text, reply_markup=reply_markup)
+
+    async def send_alert_all(self, text: str, reply_markup: Optional[dict] = None) -> bool:
+        """Send a status notice to every authorized user plus the main owner; True if any arrived."""
+        recipients = sorted(authorized_user_ids(self.db, self.seed_user_ids))
+        main_id = self.main_user_id
+        if main_id and main_id not in recipients:
+            recipients.append(main_id)
+        delivered = False
+        for user_id in recipients:
+            try:
+                delivered = bool(await self.send_message(user_id, text, reply_markup=reply_markup)) or delivered
+            except Exception as exc:  # unknown users or users who blocked the bot
+                logger.debug("Status notice to %s failed: %s", user_id, type(exc).__name__)
+        return delivered
 
     async def send_approval_card(self, text: str, approval_id: int) -> bool:
         """Send an approval notification with ✅/❌ inline buttons (suggestion #2)."""

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import json
+import math
 import random
 import re
 import time
@@ -38,6 +39,29 @@ def capitalize_message(text: str) -> str:
     return text
 
 
+# Identity, model, and prompt-injection questions stay with the account owner (checked before any model call).
+_IDENTITY_QUESTION = re.compile(
+    r"\b(?:are|r)\s+(?:you|u)\s+(?:(?:an?|really|actually|just)\s+)*"
+    r"(?:ai|bot|robot|human|real|automated|chatgpt|gpt|gemini|claude|llm)\b"
+    r"|(?:^|[.!?,])\s*(?:you|u)\s+an?\s+(?:ai|bot|robot|llm)\b"
+    r"|\bis\s+this\s+an?\s+(?:ai|bot|robot|llm)\b"
+    r"|\b(?:what|which)\s+(?:ai|model|bot|llm)\s+(?:are|r)\s+(?:you|u)\b"
+    r"|\bwhich\s+llm\b(?:\s+(?:is\s+(?:this|it)|do\s+(?:you|u)\s+use))?\s*(?:[?!.]|$)"
+    r"|\bsystem\s+prompt\b"
+    r"|\bignore\s+(?:all\s+)?(?:the\s+)?(?:previous|prior|above)\s+instructions\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+# Reply rates count only as explicit frequency phrases, so "100% certain" or "50% shorter" never set one.
+_FREQUENCY_LEAD = r"\b(?:reply|respond|chime\s+in|participate|talk|join)\b[^.!?\n]{0,40}?\b(\d+(?:\.\d+)?)"
+_FREQUENCY_RATIO = re.compile(_FREQUENCY_LEAD + r"\s+(?:times\s+)?(?:in|out\s+of)\s+(\d+)\s+(?:messages|texts|times|sends)\b", re.I)
+_FREQUENCY_PERCENT = re.compile(_FREQUENCY_LEAD + r"\s*%\s*(?:of\s+the\s+time|of\s+(?:the\s+)?messages|chance)\b", re.I)
+
+
+def _mentions_any(text: str, phrases) -> bool:
+    """Whole word/phrase match; apostrophes count as letters so "won" never matches "won't" or "won’t"."""
+    return re.search(r"(?<![\w'’])(?:" + "|".join(phrases) + r")(?![\w'’])", text) is not None
+
+
 class ReplyManager(CommandRouterMixin):
     """Manages reply lifecycle across Draft, Approval Required, and Restricted Auto modes."""
 
@@ -58,6 +82,12 @@ class ReplyManager(CommandRouterMixin):
         self._approval_batch_task = None
         self._background_tasks = set()
         self._context_initializing = set()
+        self._context_init_tasks = {}
+        self._context_ready = set()
+        self._own_sends: dict[int, list[tuple[str, float]]] = {}
+        self._context_startup_enabled = False
+        self._process_started_at = time.time()
+        self._last_delivery_parts = {}
         self._closed = False
         self._client: Any = None
         # Optional Bot API control channel (set by main.py when BOT_API_KEY is configured).
@@ -121,12 +151,76 @@ class ReplyManager(CommandRouterMixin):
         clean = mode.strip().lower()
         if clean in ("draft", "approval", "restricted_auto"):
             self.db.set_state("reply_mode", clean)
+            self.db.set_state("safe_mode_active", "0")
             return True
         return False
 
     def set_telegram_client(self, client: Any) -> None:
         """Attach the active Telethon client."""
         self._client = client
+
+    def schedule_chat_context(self, chat_id):
+        task = self._context_init_tasks.get(chat_id)
+        if task is None or task.done():
+            self._context_ready.discard(chat_id)
+            task = self.start_background(self.init_chat_context(chat_id))
+            self._context_init_tasks[chat_id] = task
+        return task
+
+    async def ensure_chat_context(self, chat_id):
+        if chat_id in self._context_ready or not self._client or self._closed:
+            return
+        task = self._context_init_tasks.get(chat_id)
+        if task is None:
+            task = self.schedule_chat_context(chat_id)
+        if task is not asyncio.current_task():
+            await asyncio.shield(task)
+
+    def group_chatty_probability(self, chat_id):
+        raw = self.db.get_state(f"chat_chatty_{chat_id}")
+        if not raw:
+            rules = self.db.get_chat_prompt(chat_id) + " " + self.db.get_permanent_context(chat_id).get("notes", "")
+            ratio = _FREQUENCY_RATIO.search(rules)
+            percent = _FREQUENCY_PERCENT.search(rules)
+            if ratio and float(ratio[2]) > 0:
+                raw = str(float(ratio[1]) / float(ratio[2]))
+            elif percent:
+                raw = str(float(percent[1]) / 100)
+        if not raw:
+            raw = self.db.get_state("chatty_probability", str(getattr(self.config, "chatty_probability", 0.15)))
+        try:
+            value = float(raw)
+            return min(1.0, max(0.0, value)) if math.isfinite(value) else 0.0
+        except (ValueError, TypeError):
+            return 0.0
+
+    def expect_own_send(self, chat_id: int, text: str) -> None:
+        """Remember a message the automation is about to send so its echo is never taken for a manual one."""
+        now = time.time()
+        sends = [item for item in self._own_sends.get(chat_id, []) if now - item[1] < 120]
+        sends.append((text.strip(), now))
+        self._own_sends[chat_id] = sends
+
+    def is_own_send(self, chat_id: int, text: str) -> bool:
+        now = time.time()
+        return any(sent == text.strip() and now - at < 120 for sent, at in self._own_sends.get(chat_id, []))
+
+    def owner_recently_active(self, chat_id: int) -> bool:
+        """The owner replied by hand lately: stay quiet so two voices never share one chat."""
+        try:
+            minutes = float(self.db.get_state("owner_active_minutes", "15"))
+        except ValueError:
+            minutes = 15.0
+        return minutes > 0 and self.db.has_recent_manual_message(chat_id, minutes * 60)
+
+    def _context_current(self, context, approved=False):
+        if not approved and context is not None and self.owner_recently_active(context.chat_id):
+            return False
+        if not self.context_agent.is_current(context):
+            return False
+        if context is not None and context.chat_id < 0 and not approved and not getattr(context, "is_mention", False):
+            return self.db.get_state("group_mention_only", "0") != "1" and self.group_chatty_probability(context.chat_id) > 0
+        return True
 
     def start_background(self, coroutine):
         task = asyncio.create_task(coroutine)
@@ -158,6 +252,7 @@ class ReplyManager(CommandRouterMixin):
         self._debounce_first_time.clear()
         self._debounce_last_time.clear()
         self._pending_deferred_replies.clear()
+        self._context_init_tasks.clear()
         await self.context_agent.close()
 
     def _outgoing_text_reason(self, chat_id: int, text: str, names=()) -> str:
@@ -201,16 +296,38 @@ class ReplyManager(CommandRouterMixin):
             logger.debug("Typing indicator unavailable for chat %s", chat_id)
         await asyncio.sleep(duration)
 
+    @staticmethod
+    def _typing_window(text: str) -> float:
+        """Seconds of typing indicator that end a reply wait, scaled 5-10 s by length."""
+        words = len(text.split())
+        if words <= 4:
+            return random.uniform(5.0, 6.5)
+        if words <= 12:
+            return random.uniform(6.5, 8.5)
+        return random.uniform(8.5, 10.0)
+
     async def _type_before_send(self, chat_id, duration):
         if duration < 3.5:
             await self._typing_burst(chat_id, duration)
             return
-        first = round(duration / 2, 1)
+        first = duration / 2
+        pause = random.uniform(0.8, 1.4)
         await self._typing_burst(chat_id, first)
-        await asyncio.sleep(random.uniform(0.8, 1.4))
-        await self._typing_burst(chat_id, duration - first)
+        await asyncio.sleep(pause)
+        # The pause is part of the total so typing ends exactly when the planned wait does.
+        await self._typing_burst(chat_id, max(0.0, duration - first - pause))
 
-    async def _deliver_message(self, chat_id: int, text: str, reply_to=None, *, approved: bool = False, allow_quiet_hours: bool = False, context=None, operator_id=None, typing_seconds=None):
+    def _delivery_wait(self, chat_id, text, allow_quiet_hours=False, sequence_part=False):
+        """Seconds until text may go out, or None when a non-cooldown safety rule blocks it."""
+        can_send, reason = self.safety.can_reply(chat_id, text, allow_quiet_hours=allow_quiet_hours)
+        if not can_send and "cooldown" not in reason.lower():
+            return None
+        if sequence_part:
+            return 0.0  # Later bubbles belong to the reply whose first bubble already passed the cooldown.
+        wait = self.safety.burst_wait_needed(chat_id)
+        return wait if can_send else max(wait, self.safety.cooldown_remaining(chat_id)[0])
+
+    async def _deliver_message(self, chat_id: int, text: str, reply_to=None, *, approved: bool = False, allow_quiet_hours: bool = False, context=None, operator_id=None, typing_seconds=None, sequence_part: bool = False):
         text = capitalize_message(text)
         if typing_seconds is None:
             typing_seconds = random.uniform(3.0, 7.0) if self.typing_delay > 0 else 0.0
@@ -222,45 +339,56 @@ class ReplyManager(CommandRouterMixin):
         if reason:
             self.db.record_action("automation", "reply", "blocked", reason, chat_id=chat_id)
             return None
+        typed = False
         while True:
             async with self._outgoing_lock:
-                if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours) or not self.context_agent.is_current(context) or not self._operator_allowed(operator_id):
+                if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours) or not self._context_current(context, approved) or not self._operator_allowed(operator_id):
                     return None
                 if not self._prevent_duplicate_reply(chat_id, text):
                     return None
-                can_send, reason = self.safety.can_reply(chat_id, text, allow_quiet_hours=allow_quiet_hours)
-                wait = self.safety.burst_wait_needed(chat_id)
-                if not can_send:
-                    if "cooldown" not in reason.lower():
-                        return None
-                    wait = max(wait, self.safety.cooldown_remaining(chat_id)[0])
-                if can_send and wait <= 0:
-                    await self._type_before_send(chat_id, typing_seconds)
+                wait = self._delivery_wait(chat_id, text, allow_quiet_hours, sequence_part)
+                if wait is None:
+                    return None
+                if wait <= typing_seconds:
+                    if typed:
+                        # Clock rounding left a sliver of cooldown; the indicator from the last burst is still visible.
+                        await asyncio.sleep(max(0.01, wait))
+                    else:
+                        # Typing covers the rest of the cooldown, so the message goes out as the wait ends.
+                        await self._type_before_send(chat_id, typing_seconds)
+                        typed = True
                     if (not self._outgoing_allowed(chat_id, approved, allow_quiet_hours)
-                            or not self.context_agent.is_current(context) or not self._operator_allowed(operator_id)):
+                            or not self._context_current(context, approved) or not self._operator_allowed(operator_id)):
                         return None
-                    if not self.safety.can_reply(chat_id, text, allow_quiet_hours=allow_quiet_hours)[0] or self.safety.burst_wait_needed(chat_id) > 0:
+                    if self._delivery_wait(chat_id, text, allow_quiet_hours, sequence_part) != 0:
                         continue
                     reason = self._outgoing_text_reason(chat_id, text)
                     if reason:
                         self.db.record_action("automation", "reply", "blocked", reason, chat_id=chat_id)
                         return None
                     try:
+                        self.expect_own_send(chat_id, text)
                         message = await self._client.send_message(chat_id, text, reply_to=reply_to)
                     except Exception as e:
                         if not reply_to or "reply" not in str(e).lower() or not self._outgoing_allowed(chat_id, approved, allow_quiet_hours):
                             raise
+                        if (not self._context_current(context, approved) or not self._operator_allowed(operator_id)
+                                or self._outgoing_text_reason(chat_id, text)
+                                or self._delivery_wait(chat_id, text, allow_quiet_hours, sequence_part) != 0):
+                            return None
                         message = await self._client.send_message(chat_id, text)
                     self.safety.mark_reply_sent(chat_id)
-                    self.safety.record_burst_send(chat_id)
+                    if not sequence_part:
+                        self.safety.record_burst_send(chat_id)
                     recent = self._recent_replies_history.setdefault(chat_id, [])
                     recent.append(text)
                     del recent[:-12]
                     self._save_recent_replies_history()
                     self.db.record_action("automation", "reply", "sent", "Message delivered", chat_id=chat_id)
                     return message
-            # Release the account lock while waiting so another chat can proceed.
-            await asyncio.sleep(min(1.0, max(0.01, wait)))
+            typed = False
+            # Release the account lock while waiting so another chat can proceed; typing starts when it fits the wait.
+            await asyncio.sleep(min(1.0, max(0.01, wait - typing_seconds)))
 
     def _get_chat_send_lock(self, chat_id: int) -> asyncio.Lock:
         """Return a per-chat send lock ensuring sequential, non-overlapping message delivery."""
@@ -331,9 +459,12 @@ class ReplyManager(CommandRouterMixin):
             pinned_msgs = await self._client.get_messages(chat_id, filter=InputMessagesFilterPinned, limit=5)
             if self._closed or not self.context_agent.allowed(chat_id):
                 return None
+            # Lets incoming messages skip re-fetching a chat whose pins were just checked (even when empty).
+            self.db.set_state(f"chat_pins_checked_{chat_id}", str(time.time()))
             if pinned_msgs:
                 texts = [self.privacy.sanitize_text(m.text.strip()) for m in pinned_msgs
-                         if getattr(m, "text", None) and m.text.strip() and not self.safety.is_sensitive(m.text)]
+                         if getattr(m, "text", None) and m.text.strip() and not self.safety.is_sensitive(m.text)
+                         and self.privacy.is_user_allowed(getattr(m, "sender_id", None))]
                 if texts:
                     raw_combined = "\n---\n".join(texts)
                     loop = asyncio.get_running_loop()
@@ -346,6 +477,8 @@ class ReplyManager(CommandRouterMixin):
                     self.db.set_permanent_context(chat_id, pinned_text=pinned_content)
                     logger.info(f"AI-distilled permanent pinned context for '{chat_title}' ({chat_id}): {len(pinned_content)} chars")
                     return pinned_content
+            # A successful empty fetch invalidates old announcements; failures retain them.
+            self.db.set_permanent_context(chat_id, pinned_text="")
         except Exception as e:
             logger.debug(f"Could not fetch pinned messages for chat {chat_id}: {e}")
         return None
@@ -364,7 +497,7 @@ class ReplyManager(CommandRouterMixin):
             lines: list[str] = []
             for m in msgs:
                 txt = (getattr(m, "text", "") or "").strip()
-                if not txt or self.safety.is_sensitive(txt):
+                if not txt or self.safety.is_sensitive(txt) or not self.privacy.is_user_allowed(getattr(m, "sender_id", None)):
                     continue
                 sender = "someone"
                 try:
@@ -536,17 +669,29 @@ class ReplyManager(CommandRouterMixin):
         """Process a single or stitched incoming message."""
         if self._closed or not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
             return
+        if self._context_startup_enabled or chat_id in self._context_init_tasks:
+            await self.ensure_chat_context(chat_id)
+            if self._closed or not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
+                return
+        if not self.privacy.is_user_allowed(sender_id):
+            return
+        pending = self._pending_deferred_replies.pop(chat_id, None)
+        if pending and pending is not asyncio.current_task() and not pending.done():
+            pending.cancel()
         if self.current_mode == "restricted_auto" and self.safety.action_block_reason():
+            return
+        if self.current_mode == "restricted_auto" and self.owner_recently_active(chat_id):
+            self.db.record_action("automation", "reply", "skipped", "Owner replied by hand recently; automation stays quiet in this chat", chat_id=chat_id)
             return
         # Sanitize incoming text before passing to generator
         clean_text = self.privacy.sanitize_text(text)
 
         age_question = re.search(r"\b(?:how old are you|(?:your|ur|tumhari|aapki)\s+(?:age|umar)|kitne saal ke)\b", text, re.IGNORECASE)
-        if age_question and self.generator.prompt_manager.known_owner_age(self.db.get_chat_prompt(chat_id)) is None:
+        if age_question and self.generator.prompt_manager.known_owner_age(self.db.get_chat_prompt(chat_id), is_group=chat_id < 0) is None:
             self.db.record_action("automation", "reply", "skipped", "Age is not configured; answer left to the account owner", chat_id=chat_id)
             return
 
-        if re.search(r"\b(?:are|r)\s+(?:you|u)\s+(?:(?:an?|really|actually|just)\s+)*(?:ai|bot|human|real|automated)\b|\b(?:what|which)\s+(?:ai|model|bot)\s+(?:are|r)\s+(?:you|u)\b", text, re.IGNORECASE):
+        if _IDENTITY_QUESTION.search(text):
             self.db.record_action("automation", "reply", "skipped", "Identity question left for the account owner", chat_id=chat_id)
             return
 
@@ -578,14 +723,19 @@ class ReplyManager(CommandRouterMixin):
             perm_ctx = self.db.get_permanent_context(chat_id)
             pinned_text = perm_ctx.get("pinned_text", "")
 
-            # If this is a group and no pinned messages have been cached yet, auto-fetch
+            # If this is a group and no pinned messages have been cached yet, auto-fetch (at most every 6 hours)
             if chat_id < 0 and not pinned_text:
-                fetched_pin = await self.sync_pinned_context_from_telegram(chat_id)
-                if fetched_pin:
-                    pinned_text = fetched_pin
+                try:
+                    pins_checked = float(self.db.get_state(f"chat_pins_checked_{chat_id}") or "-inf")
+                except ValueError:
+                    pins_checked = float("-inf")
+                if time.time() - pins_checked >= 6 * 3600:
+                    fetched_pin = await self.sync_pinned_context_from_telegram(chat_id)
+                    if fetched_pin:
+                        pinned_text = fetched_pin
 
             # Rebuild after fetching pins; each stage receives the same chat snapshot.
-            if not self.context_agent.is_current(context):
+            if not self._context_current(context):
                 return
             context = self.context_agent.snapshot(chat_id, conversation_history, is_mention=is_mention)
             if context is None:
@@ -631,21 +781,10 @@ class ReplyManager(CommandRouterMixin):
         except Exception as e:
             logger.error(f"Failed to generate AI reply for chat {chat_id}: {e}")
             self.db.record_action("automation", "provider", "failed", "Reply generation failed; check provider credentials, endpoint, and model", chat_id=chat_id)
-            # AI provider/model/API-key failure: always alert Saved Messages so the owner can fix it fast.
-            if not is_mention:
-                provider = getattr(self.generator.config, "ai_provider", "")
-                await self._notify_issue_to_saved_messages(
-                    chat_id=chat_id,
-                    chat_title=chat_title,
-                    sender_name=sender_name,
-                    error_msg=f"AI provider/model failed (provider='{provider}', all fallbacks exhausted): {e}",
-                    incoming_text=clean_text,
-                    force=True,
-                    message_id=message_id,
-                )
+            # Model-failure alerts to authorized users are raised by the shared reporter in ReplyGenerator.
             return
 
-        if not self.context_agent.is_current(context):
+        if not self._context_current(context):
             self.db.record_action("humanizer", "reply", "skipped", "Conversation changed while the reply was being written", chat_id=chat_id)
             return
 
@@ -838,7 +977,8 @@ class ReplyManager(CommandRouterMixin):
                         recent_msgs = await self._client.get_messages(chat_id, limit=20)
                         for m in reversed(recent_msgs):
                             m_text = getattr(m, "message", None) or getattr(m, "text", None) or ""
-                            if not m_text.strip() or self.safety.is_sensitive(m_text):
+                            if (not m_text.strip() or self.safety.is_sensitive(m_text)
+                                    or not self.privacy.is_user_allowed(getattr(m, "sender_id", None))):
                                 continue
                             sender_name = "Contact"
                             try:
@@ -868,6 +1008,7 @@ class ReplyManager(CommandRouterMixin):
 
             if self.db:
                 self.db.sync_chat_context_file(chat_id)
+            self._context_ready.add(chat_id)
             logger.info(f"[INIT CONTEXT] Successfully initialized permanent context for chat {chat_id} ({title}).")
         except Exception as e:
             logger.warning(f"[INIT CONTEXT] Error initializing context for chat {chat_id}: {e}")
@@ -887,12 +1028,14 @@ class ReplyManager(CommandRouterMixin):
         context=None,
     ) -> None:
         """Queue and send a deferred reply after cooldown expires so no reply is sent prematurely or dropped."""
+        delay_started_at = time.monotonic()
         try:
             while True:
-                if not self._outgoing_allowed(chat_id) or not self.context_agent.is_current(context):
+                if not self._outgoing_allowed(chat_id) or not self._context_current(context):
                     return
                 can_send, reason = self.safety.can_reply(chat_id, draft)
-                if can_send:
+                # A cooldown within the longest typing window (10 s) is covered by typing in _send_reply.
+                if can_send or ("cooldown" in reason.lower() and self.safety.cooldown_remaining(chat_id)[0] <= 10.0):
                     break
                 if "cooldown" not in reason.lower() and "limit" not in reason.lower():
                     logger.warning(f"Deferred reply to chat {chat_id} aborted: {reason}")
@@ -902,7 +1045,8 @@ class ReplyManager(CommandRouterMixin):
 
             if self._pending_deferred_replies.get(chat_id) is asyncio.current_task():
                 self._pending_deferred_replies.pop(chat_id, None)
-            sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True, is_mention=is_mention, context=context)
+            sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True, is_mention=is_mention, context=context,
+                                          delay_started_at=delay_started_at)
             if sent:
                 self.start_background(self.refresh_single_chat_summary(chat_id))
                 logger.info(f"[DEFERRED REPLY SENT] Successfully replied to chat {chat_id} after cooldown.")
@@ -1161,6 +1305,7 @@ class ReplyManager(CommandRouterMixin):
         if until <= 0 or time.time() < until:
             return
         self.db.set_state("pause_until", "0")
+        self.db.set_state("sleep_now", "0")  # a finished /sleep must not let a later /resume disable quiet hours
         logger.info("SAFETY: Timed pause expired. Automation resumed automatically.")
         if not self.safety.is_emergency_stopped:
             await self._send_control_alert(
@@ -1176,7 +1321,7 @@ class ReplyManager(CommandRouterMixin):
             recover_min = max(1, int(self.db.get_state("safe_mode_recover_minutes", "15")))
         except ValueError:
             return
-        if time.time() - since < recover_min * 60:
+        if time.time() - max(since, self._process_started_at) < recover_min * 60:
             return
         prev = self.db.get_state("safe_mode_prev_mode", "restricted_auto")
         self.db.set_state("reply_mode", prev)
@@ -1466,6 +1611,8 @@ class ReplyManager(CommandRouterMixin):
         """Add an emoji reaction to the message if reaction features and cooldown permit."""
         if not self._client or not self._outgoing_allowed(chat_id):
             return False
+        if not allow_any_emoji and self.owner_recently_active(chat_id):
+            return False
 
         # Check if reactions are enabled
         enabled = self.db.get_state(
@@ -1533,23 +1680,24 @@ class ReplyManager(CommandRouterMixin):
         # shortcut: pools must stay a subset of `all_telegram_reactions` below (only valid Telegram reaction emojis)
         lower = text.lower()
         has_sentiment = True
-        if any(w in lower for w in ("haha", "lol", "lmao", "rofl", "xd", "funny", "lmfao", "joke", "bruh", "meme", "comedy", "dead", "ded")):
+        # Entries are regex fragments matched as whole words (laughter may be stretched, e.g. "hahaha", "lmaooo").
+        if _mentions_any(lower, ("ha(?:ha)+h?", "lo+l+", "lmao+", "rofl", "xd", "funny", "lmfao+", "joke", "bruh", "meme", "comedy", "dead", "ded")):
             chosen = random.choice(["😂", "🤣", "💀", "😁", "🤡"])
-        elif any(w in lower for w in ("congrats", "congratulations", "huge w", "promoted", "won", "awesome work", "let's go", "goat", "legend", "superb", "champion", "winner", "victory")):
+        elif _mentions_any(lower, ("congrats", "congratulations", "huge w", "promoted", "won", "awesome work", "let's go", "goat", "legend", "superb", "champion", "winner", "victory")):
             chosen = random.choice(["🔥", "⚡", "💯", "🏆", "🤩", "👏", "🎉", "🦄"])
-        elif any(w in lower for w in ("thanks", "thank you", "tysm", "love you", "heart", "appreciate it", "grateful", "sweetest", "adorable")):
+        elif _mentions_any(lower, ("thanks", "thank you", "tysm", "love you", "heart", "appreciate it", "grateful", "sweetest", "adorable")):
             chosen = random.choice(["❤️", "❤️‍🔥", "🥰", "😍", "🙏", "🤗", "😘", "💋"])
-        elif any(w in lower for w in ("deal", "sounds good", "done deal", "agreed", "let's do it", "partner", "perfect", "done", "alright", "ok", "yep", "sure")):
+        elif _mentions_any(lower, ("deal", "sounds good", "done deal", "agreed", "let's do it", "partner", "perfect", "done", "alright", "ok", "yep", "sure")):
             chosen = random.choice(["👍", "🤝", "🫡", "👌", "😎"])
-        elif any(w in lower for w in ("wtf", "no way", "holy shit", "damn", "omg", "crazy", "wild", "insane", "unreal", "can't believe")):
+        elif _mentions_any(lower, ("wtf", "no way", "holy shit", "damn", "omg", "crazy", "wild", "insane", "unreal", "can't believe")):
             chosen = random.choice(["🤯", "😱", "👀", "😨", "🤨"])
-        elif any(w in lower for w in ("rip", "sorry to hear", "unfortunate", "so sad", "pain", "hurts", "miss you", "tragic", "heartbroke")):
+        elif _mentions_any(lower, ("rip", "sorry to hear", "unfortunate", "so sad", "pain", "hurts", "miss you", "tragic", "heartbroke")):
             chosen = random.choice(["😢", "😭", "💔"])
-        elif any(w in lower for w in ("tired", "sleepy", "exhausted", "bored", "nap")):
+        elif _mentions_any(lower, ("tired", "sleepy", "exhausted", "bored", "nap")):
             chosen = random.choice(["🥱", "😴"])
-        elif any(w in lower for w in ("whatever", "meh", "sus", "mid", "boring")):
+        elif _mentions_any(lower, ("whatever", "meh", "sus", "mid", "boring")):
             chosen = random.choice(["🗿", "😐", "🥴"])
-        elif any(w in lower for w in ("party", "birthday", "bday", "cheers", "celebrate")):
+        elif _mentions_any(lower, ("party", "birthday", "bday", "cheers", "celebrate")):
             chosen = random.choice(["🎉", "🍾"])
         else:
             has_sentiment = False
@@ -1720,12 +1868,18 @@ class ReplyManager(CommandRouterMixin):
         if should_send:
             try:
                 _, allowed_groups = self.privacy.get_all_allowed_chats()
-                allowed_groups = [gid for gid in allowed_groups if time.time() - self.db.get_last_reply_timestamp(gid) < 900]
+                # Mention-only rooms and rooms set to never chime in get no unprompted sign-off.
+                mention_only = self.db.get_state("group_mention_only", "0") == "1"
+                allowed_groups = [gid for gid in allowed_groups
+                                  if not mention_only and self.group_chatty_probability(gid) > 0
+                                  and time.time() - self.db.get_last_reply_timestamp(gid) < 900]
             except Exception:
                 allowed_groups = []
             if allowed_groups:
                 if not any(self._outgoing_allowed(gid, allow_quiet_hours=True) for gid in allowed_groups):
                     return
+                # One attempt per night: a failed or empty model sign-off is not retried by the heartbeat.
+                self.db.set_state("last_quiet_goodnight_date", today_str)
                 # Goodnight text is AI-generated (never hardcoded); skip if the AI fails
                 try:
                     text = await asyncio.to_thread(self.generator.generate_goodnight_signoff)
@@ -1740,8 +1894,6 @@ class ReplyManager(CommandRouterMixin):
                     except Exception as e:
                         logger.debug(f"Could not send goodnight to group {gid}: {e}")
 
-                self.db.set_state("last_quiet_goodnight_date", today_str)
-
     async def _send_reply(
         self,
         chat_id: int,
@@ -1753,12 +1905,16 @@ class ReplyManager(CommandRouterMixin):
         allow_quiet_hours: bool = False,
         context=None,
         operator_id=None,
+        delay_started_at: Optional[float] = None,
     ) -> bool:
         """Send message using Telethon client with adaptive human reading/typing delay and error handling."""
+        if delay_started_at is None:
+            delay_started_at = time.monotonic()
         if not self._client:
             logger.error("Cannot send reply: Telegram client is not attached.")
             return False
-        if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours) or not self.context_agent.is_current(context):
+        self._last_delivery_parts[chat_id] = 0
+        if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours) or not self._context_current(context, approved):
             return False
         if self.safety.is_sensitive(text):
             return False
@@ -1768,6 +1924,7 @@ class ReplyManager(CommandRouterMixin):
             return False
 
         async with self._get_chat_send_lock(chat_id):
+            self._last_delivery_parts[chat_id] = 0
             # Cancel any pending deferred reply task for this chat to avoid double-sends
             curr_task = asyncio.current_task()
             old_task = self._pending_deferred_replies.get(chat_id)
@@ -1786,7 +1943,7 @@ class ReplyManager(CommandRouterMixin):
             edit_fix_original: Optional[str] = None
             typo_enabled = (
                 self.db.get_state("typo_correction_enabled", "1") == "1"
-                or self.db.get_state("editfix_enabled", "1") == "1"
+                and self.db.get_state("editfix_enabled", "1") == "1"
             )
             if typo_enabled and len(msg_parts) == 1 and not is_mention:
                 # Human mobile texting simulation: occasionally sends a natural typo,
@@ -1799,6 +1956,7 @@ class ReplyManager(CommandRouterMixin):
             sent_any = False
             try:
                 chat_min, _ = self.safety._get_chat_cooldown_range(chat_id)
+                initial_range = self.safety._get_chat_cooldown_range(chat_id)
 
                 # Strict per-chat minimum cooldown check
                 now_check = time.time()
@@ -1820,59 +1978,55 @@ class ReplyManager(CommandRouterMixin):
                 )
 
                 if is_zero_delay:
-                    total_delay = 0.0
                     typing_duration = 0.0
-                    reading_delay = 0.0
-                elif not adaptive_delay:
-                    typing_duration = max(0.0, self.typing_delay)
-                    reading_delay = max(0.0, needed_cooldown_wait - typing_duration)
-                    total_delay = reading_delay + typing_duration
                 else:
-                    # Suggestion 2: Context-Aware Delay Scaling (3-10s scaled to message length)
-                    word_count = len(first_part.split())
-                    char_count = len(first_part)
-                    if word_count <= 4 or char_count < 25:
-                        base_typing = random.uniform(3.0, 5.0)
-                    elif word_count <= 12 or char_count < 70:
-                        base_typing = random.uniform(5.0, 7.5)
-                    else:
-                        base_typing = random.uniform(7.5, 10.0)
-                    typing_duration = round(min(10.0, max(3.0, base_typing)), 1)
+                    human_wait = self.calculate_adaptive_delay(chat_id, first_part, is_mention=is_mention) if adaptive_delay else 0.0
+                    window = self._typing_window(first_part)
+                    # Queue/lock time already spent counts toward the human wait only, never toward safety limits.
+                    waited = elapsed_wait = max(0.0, time.monotonic() - delay_started_at)
 
-                    # Suggestion 1: Simulate Online/Offline Activity Rhythm (2-5s reading pause before typing begins)
-                    natural_reading_pause = round(random.uniform(2.0, 4.5), 1)
-                    calc_delay = self.calculate_adaptive_delay(chat_id, first_part, is_mention=is_mention)
-                    target_wait = max(needed_cooldown_wait, calc_delay, chat_min if chat_min > 0 else 0.0)
-                    if target_wait > typing_duration:
-                        reading_delay = max(natural_reading_pause, round(target_wait - typing_duration, 1))
-                    else:
-                        reading_delay = natural_reading_pause
-                    total_delay = reading_delay + typing_duration
+                    def plan():
+                        remaining = max(human_wait - waited, self.safety.cooldown_remaining(chat_id)[0],
+                                        self.safety.burst_wait_needed(chat_id), 0.0)
+                        # Typing fills the end of the wait; only a wait-free send adds a short configured burst.
+                        return remaining, (min(window, remaining) if remaining > 0 else min(window, self.typing_delay))
 
-                if total_delay > 0:
-                    env_type = "Group" if chat_id < 0 else "Private DM"
-                    mention_str = " (Mention)" if is_mention else ""
-                    logger.info(
-                        f"[{env_type} Delay{mention_str}] Total delay: {total_delay:.1f}s "
-                        f"(reading: {reading_delay:.1f}s, typing indicator: {typing_duration:.1f}s) "
-                        f"for chat {chat_id} (chat_min={chat_min}s)."
-                    )
+                    remaining, typing_duration = plan()
+                    total_delay = max(remaining, typing_duration)
+                    if total_delay > 0:
+                        env_type = "Group" if chat_id < 0 else "Private DM"
+                        mention_str = " (Mention)" if is_mention else ""
+                        logger.info(
+                            f"[{env_type} Delay{mention_str}] Total delay: {total_delay:.1f}s "
+                            f"(reading: {total_delay - typing_duration:.1f}s, typing indicator: {typing_duration:.1f}s) "
+                            f"for chat {chat_id} (chat_min={chat_min}s, already_waited={elapsed_wait:.1f}s)."
+                        )
 
-                    # Phase 1: Reading/thinking pause
-                    if reading_delay > 0:
-                        await asyncio.sleep(reading_delay)
+                    # Phase 1: reading/thinking until only the typing window is left; live limits are re-read each step.
+                    while remaining > typing_duration:
+                        if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours) or not self._context_current(context, approved):
+                            return False
+                        current_range = self.safety._get_chat_cooldown_range(chat_id)
+                        if current_range != initial_range:
+                            initial_range = current_range
+                            if adaptive_delay:
+                                human_wait = min(human_wait, self.calculate_adaptive_delay(chat_id, first_part, is_mention=is_mention))
+                        step = min(1.0, max(0.01, remaining - typing_duration))
+                        await asyncio.sleep(step)
+                        waited += step
+                        remaining, typing_duration = plan()
 
                     # Abort if emergency stop was triggered during reading delay
                     if self.safety.is_emergency_stopped:
                         logger.warning(f"Reply to chat {chat_id} aborted: emergency stop triggered during delay.")
                         return False
 
-
                 # Send first message part
                 first_sent = await self._deliver_message(chat_id, first_part, reply_to_msg_id, approved=approved, allow_quiet_hours=allow_quiet_hours, context=context, operator_id=operator_id, typing_seconds=typing_duration)
                 if first_sent is None:
                     return False
                 sent_any = True
+                self._last_delivery_parts[chat_id] = 1
                 self._last_sent_reply_by_chat[chat_id] = first_part
                 if chat_id < 0:
                     self.mark_group_activity(chat_id)
@@ -1906,7 +2060,7 @@ class ReplyManager(CommandRouterMixin):
                 if edit_fix_original is not None and first_msg_id and not self.safety.is_emergency_stopped:
                     await asyncio.sleep(random.uniform(1.5, 3.0))
                     if (not self._outgoing_allowed(chat_id, approved, allow_quiet_hours)
-                            or not self._operator_allowed(operator_id) or not self.context_agent.is_current(context)
+                            or not self._operator_allowed(operator_id) or not self._context_current(context, approved)
                             or self._outgoing_text_reason(chat_id, edit_fix_original)):
                         return True
                     try:
@@ -1969,9 +2123,10 @@ class ReplyManager(CommandRouterMixin):
                         await asyncio.sleep(followup_pause)
 
 
-                    sub_sent = await self._deliver_message(chat_id, part, approved=approved, allow_quiet_hours=allow_quiet_hours, context=context, operator_id=operator_id, typing_seconds=followup_typing)
+                    sub_sent = await self._deliver_message(chat_id, part, approved=approved, allow_quiet_hours=allow_quiet_hours, context=context, operator_id=operator_id, typing_seconds=followup_typing, sequence_part=True)
                     if sub_sent is None:
                         break
+                    self._last_delivery_parts[chat_id] = idx
                     sub_msg_id = getattr(sub_sent, "id", 0)
                     if not isinstance(sub_msg_id, int):
                         sub_msg_id = 0
@@ -1986,7 +2141,10 @@ class ReplyManager(CommandRouterMixin):
                     )
                     logger.info(f"Successfully sent reply part {idx}/{len(msg_parts)} to chat {chat_id}.")
 
-                return True
+                complete = self._last_delivery_parts[chat_id] == len(msg_parts)
+                if not complete:
+                    self.db.record_action("automation", "reply", "failed", f"Partial delivery: {self._last_delivery_parts[chat_id]}/{len(msg_parts)} parts sent; not retried automatically", chat_id=chat_id)
+                return complete
             except Exception as e:
                 # Check for Telegram FloodWaitError
                 self.db.record_action("automation", "reply", "failed", "Telegram delivery failed: " + type(e).__name__, chat_id=chat_id)
@@ -2005,7 +2163,7 @@ class ReplyManager(CommandRouterMixin):
                         incoming_text=text,
                         message_id=reply_to_msg_id,
                     )
-                    return sent_any
+                    return False
 
                 # Check for Telegram PeerFloodError (account restricted by Telegram anti-spam)
                 if (PeerFloodError and isinstance(e, PeerFloodError)) or "peerflood" in e.__class__.__name__.lower():
@@ -2022,7 +2180,7 @@ class ReplyManager(CommandRouterMixin):
                         incoming_text=text,
                         message_id=reply_to_msg_id,
                     )
-                    return sent_any
+                    return False
 
                 self.safety.record_error()
                 logger.error(f"Failed to send message to chat {chat_id}: {e}")
@@ -2034,4 +2192,4 @@ class ReplyManager(CommandRouterMixin):
                     incoming_text=text,
                     message_id=reply_to_msg_id,
                 )
-                return sent_any
+                return False

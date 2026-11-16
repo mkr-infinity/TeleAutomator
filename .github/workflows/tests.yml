@@ -1,0 +1,40 @@
+name: Tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.12", "3.14"]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PLAYWRIGHT_MODULE: ${{ github.workspace }}/node_modules/playwright
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: python -m pip install -r requirements.txt
+      - run: npm install --no-save --package-lock=false playwright
+      - run: npx playwright install --with-deps chromium
+      - run: python scripts/update_version.py --check
+      - run: python -m pytest tests/ -q -p no:cacheprovider
+      # Run directly as well: a missing browser must fail CI rather than skip.
+      - run: node tests/test_miniapp_frontend.cjs
+      - run: node tests/test_miniapp_browser.cjs
+  powershell:
+    runs-on: windows-latest
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pytest tests/test_launchers.py -k powershell -q -p no:cacheprovider

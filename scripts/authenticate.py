@@ -23,7 +23,7 @@ from telethon.sessions import StringSession
 from app.banner import print_banner
 from app.config import load_config
 from app.logger import setup_logger
-from app.session_manager import ensure_secure_file, get_local_session_path
+from app.session_manager import ensure_secure_file, get_local_session_file, get_local_session_path
 
 logger = setup_logger("authenticator")
 
@@ -42,11 +42,11 @@ async def authenticate() -> None:
         sys.exit(1)
 
     session_path = get_local_session_path(config.data_dir, config.session_name)
-    session_file = session_path.with_suffix(".session")
+    session_file = get_local_session_file(session_path)
 
     def _cleanup_old_session() -> None:
-        for ext in (".session", ".session-journal"):
-            f = session_path.with_suffix(ext)
+        for suffix in ("", "-journal", "-wal", "-shm"):
+            f = Path(str(session_file) + suffix)
             if f.exists():
                 try:
                     f.unlink()

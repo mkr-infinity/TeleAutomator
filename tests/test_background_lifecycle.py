@@ -49,7 +49,8 @@ def test_failed_reply_generation_is_not_retried_as_a_typing_error(tmp_path):
     s.generator.generate = MagicMock(side_effect=RuntimeError("Fixture provider failure"))
     asyncio.run(s.manager._process_incoming_message(123, "Contact", 1, 222, "Contact", "Any release update?"))
     s.generator.generate.assert_called_once()
-    assert all(call.args[0] == "me" for call in s.client.send_message.await_args_list)
+    # Nothing reaches the chat; failure alerts come from the generator's shared reporter, not this path.
+    s.client.send_message.assert_not_awaited()
 
 
 def test_default_cooldown_ranges_and_custom_chat_isolation(tmp_path):
@@ -63,8 +64,9 @@ def test_default_cooldown_ranges_and_custom_chat_isolation(tmp_path):
     assert (safety.min_global_cooldown, safety.max_global_cooldown) == (5, 60)
 
 
-def test_typing_runs_after_cooldown_and_immediately_before_send(tmp_path, clock):
+def test_typing_fills_the_end_of_the_cooldown_and_ends_at_send(tmp_path, clock, monkeypatch):
     s = make_stack(tmp_path)
+    monkeypatch.setattr("app.reply_manager.random.uniform", lambda low, high: 1.0 if (low, high) == (0.8, 1.4) else low)
     s.db.set_state("min_global_cooldown_seconds", "10")
     s.db.set_state("max_global_cooldown_seconds", "10")
     s.safety.set_chat_cooldown(123, 0, 0)
@@ -86,8 +88,9 @@ def test_typing_runs_after_cooldown_and_immediately_before_send(tmp_path, clock)
 
     s.client.send_message.side_effect = send
     assert asyncio.run(s.manager._deliver_message(123, "Next reply", typing_seconds=5))
-    assert moments[0][0] == "typing" and moments[0][1] >= last_send + 10
-    assert 5.8 <= moments[-1][1] - moments[0][1] <= 6.4
+    # The 5 s of typing (pause included) covers the end of the 10 s cooldown instead of following it.
+    assert moments[0] == ("typing", last_send + 5)
+    assert moments[-1] == ("sent", last_send + 10)
     assert moments[-1][1] == moments[-2][1]
 
 
@@ -151,13 +154,15 @@ def test_summary_merges_new_messages_with_prior_recap_and_keeps_notes(tmp_path):
         agent = s.manager.context_agent
         await agent.refresh(-100111, force=True)
         first = s.generator.summarize_chat_history.call_args.args[2]
-        assert "Release detail 9\n" not in first and "Release detail 10" in first and "Release detail 59" in first
+        # Oldest outstanding batch first, so no message is skipped by the 50-row payload cap.
+        assert "Release detail 0\n" in first and "Release detail 49" in first and "Release detail 50" not in first
         for number in range(8):
             s.db.record_chat_message(-100111, 61 + number, 222, "Contact", f"New test detail {number}")
         agent.last_attempt[-100111] = float("-inf")
         await agent.refresh(-100111)
         _title, previous, new = s.generator.summarize_chat_history.call_args.args
-        assert previous == "Launch Friday" and "New test detail 7" in new and "Release detail" not in new
+        assert previous == "Launch Friday" and "New test detail 7" in new
+        assert "Release detail 50" in new and "Release detail 59" in new and "Release detail 49" not in new
         assert s.db.get_chat_summary(123) == ""
         context_file = s.db._get_context_file_path(-100111).read_text()
         assert "Owner note" in context_file and "Owner pin" in context_file and "test the mobile release" in context_file
@@ -233,6 +238,7 @@ def test_typo_edit_rechecks_the_approving_operator(tmp_path, clock):
     s.bot._save_authorized({111, 222})
     s.db.set_state("bot_granted_cmds_222", "/approve")
     s.db.set_state("typo_correction_enabled", "1")
+    s.db.set_state("editfix_enabled", "1")  # Typo simulation needs both switches on.
     clock.on_sleep = lambda seconds: s.db.set_state("bot_granted_cmds_222", "/status") if seconds >= 1 else None
     with patch.object(s.manager, "maybe_inject_typo_correction", return_value=("Ready for relase tonight", "release")):
         assert asyncio.run(s.manager._send_reply(123, 1, "Ready for release tonight", adaptive_delay=False, approved=True, operator_id=222))
@@ -243,6 +249,7 @@ def test_typo_edit_rechecks_the_approving_operator(tmp_path, clock):
 def test_typo_correction_updates_persisted_duplicate_memory(tmp_path, clock):
     s = make_stack(tmp_path)
     s.db.set_state("typo_correction_enabled", "1")
+    s.db.set_state("editfix_enabled", "1")  # Typo simulation needs both switches on.
     with patch.object(s.manager, "maybe_inject_typo_correction", return_value=("Ready for relase tonight", "release")):
         assert asyncio.run(s.manager._send_reply(123, 1, "Ready for release tonight", adaptive_delay=False))
     s.client.edit_message.assert_awaited_once()

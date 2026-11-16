@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from app.ai.prompt_manager import VALID_STYLES
 
 MAX_BACKUP_BYTES = 1_000_000
+MAX_CONTEXT_NOTES = 8000
 BOOL_KEYS = {
     "group_mention_only", "reaction_enabled", "ownreact_enabled", "multibubble_enabled",
     "typo_correction_enabled", "editfix_enabled", "debounce_enabled", "spontaneous_followup_enabled",
@@ -138,7 +139,7 @@ def validate_preferences(payload, db):
         if ("cooldown_min" in chat) != ("cooldown_max" in chat) or bool(low) != bool(high) or (low and float(low) > float(high)):
             raise ValueError("Each chat cooldown needs a valid minimum and maximum")
         current = db.get_permanent_context(cid)
-        contexts.append({"id": cid, "notes": _text(chat.get("notes", current.get("notes", "")), "Chat notes"),
+        contexts.append({"id": cid, "notes": _text(chat.get("notes", current.get("notes", "")), "Chat notes", MAX_CONTEXT_NOTES),
                          "pinned_text": _text(chat.get("pinned_text", current.get("pinned_text", "")), "Pinned context")})
     for rule in rules:
         if not isinstance(rule, dict) or set(rule) != {"keyword", "reply"}:

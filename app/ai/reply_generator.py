@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from contextlib import nullcontext
 from typing import Any, Dict, List, Optional
 
 from app.ai.prompt_manager import PromptManager
@@ -81,6 +82,9 @@ def create_ai_provider(config: AppConfig, database: Optional[Any] = None) -> AIP
 class ReplyGenerator:
     """Generates suggested draft replies."""
 
+    # Optional callback(task, exc) for provider failures; runs in worker threads and must not block.
+    on_model_error = None
+
     def __init__(
         self,
         config: AppConfig,
@@ -107,15 +111,25 @@ class ReplyGenerator:
 
     def reload_provider(self) -> None:
         """Reload and rebuild the active AI provider using current database and config settings."""
-        self.provider = create_ai_provider(self.config, database=self.db)
+        with self.db._context_lock if self.db is not None else nullcontext():
+            self.provider = create_ai_provider(self.config, database=self.db)
 
-    def _generate_reply(self, prompt: str, instructions: str) -> str:
+    def _generate_reply(self, prompt: str, instructions: str, task: str = "reply") -> str:
         # History, pins, summaries and voice profiles need the same filtering as new messages.
         prompt = "\n".join(
             "[sensitive content omitted]" if any(p.search(line) for p in SENSITIVE_CONTENT_PATTERNS)
             else redact_secrets(line) for line in prompt.splitlines()
         )
-        return self.provider.generate_reply(prompt, redact_secrets(instructions))
+        try:
+            return self.provider.generate_reply(prompt, redact_secrets(instructions))
+        except Exception as exc:
+            callback = self.on_model_error
+            if callback is not None:
+                try:
+                    callback(task, exc)
+                except Exception:
+                    logger.debug("Model error callback failed")
+            raise
 
     def set_language(self, language: str) -> None:
         """Set language rule (dynamic, english, hindi, etc.)."""
@@ -155,6 +169,7 @@ class ReplyGenerator:
             is_group=is_group,
             is_mention=is_mention,
             persona_override=persona_override,
+            style_override=style_override,
         )
         instructions = self.prompt_manager.get_system_instructions(
             style_override=style_override,
@@ -197,11 +212,11 @@ class ReplyGenerator:
             f"Output ONLY the updated permanent memory text, no preamble."
         )
         try:
-            draft = self._generate_reply(prompt, "You are a concise chat-memory system. Output only the updated recap.")
+            draft = self._generate_reply(prompt, "You are a concise chat-memory system. Output only the updated recap.", task="chat summary")
             return draft.strip()[:1500]
         except Exception as e:
             logger.error(f"Failed to summarize chat history: {e}")
-            return ""
+            raise
 
     def generate_goodnight_signoff(self) -> str:
         """AI-written casual goodnight line for quiet-hours sign-off (never hardcoded)."""
@@ -214,8 +229,9 @@ class ReplyGenerator:
             "Max 8 words, casual human mobile texting, light slang or small emoji ok, no question marks. "
             f"Reply as {self.prompt_manager.owner_name} speaking to the group. Output ONLY the line."
         )
-        instructions = self.prompt_manager.get_system_instructions()
-        draft = self._generate_reply(prompt, instructions)
+        # Group rules only: the global DM persona and its word limit must not leak into group sign-offs.
+        instructions = self.prompt_manager.get_system_instructions(is_group=True)
+        draft = self._generate_reply(prompt, instructions, task="goodnight")
         return self.prompt_manager.clean_reply(draft)
 
     def generate_voice_profile(self, chat_title: str, raw_text: str) -> str:
@@ -241,7 +257,7 @@ class ReplyGenerator:
         )
         system_inst = "You are a chat-behavior analyst. Output only the requested profile text."
         try:
-            draft = self._generate_reply(prompt, system_inst)
+            draft = self._generate_reply(prompt, system_inst, task="voice profile")
             return draft.strip()[:1500]
         except Exception as e:
             logger.error(f"Failed to generate voice profile: {e}")
@@ -266,7 +282,7 @@ class ReplyGenerator:
         )
         system_inst = "You are a factual context summarizer. Be extremely concise, factual, and direct."
         try:
-            summary = self._generate_reply(prompt, system_inst)
+            summary = self._generate_reply(prompt, system_inst, task="pinned messages")
             clean_summary = summary.strip()
             if clean_summary:
                 return clean_summary

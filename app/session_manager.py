@@ -86,6 +86,11 @@ def get_local_session_path(data_dir: Path, session_name: str) -> Path:
     return (data_dir / session_name).resolve()
 
 
+def get_local_session_file(session_path: Path) -> Path:
+    """Match Telethon: append the extension without replacing dotted names."""
+    return session_path if str(session_path).endswith(".session") else Path(str(session_path) + ".session")
+
+
 def get_telethon_session(config: AppConfig) -> Union[str, RobustStringSession]:
     """Return appropriate Telethon session (file path string or RobustStringSession)."""
     if config.session_mode == "string":
@@ -96,7 +101,7 @@ def get_telethon_session(config: AppConfig) -> Union[str, RobustStringSession]:
 
     # Local mode: session file stored securely inside data_dir
     session_base = get_local_session_path(config.data_dir, config.session_name)
-    session_file = session_base.with_suffix(".session")
+    session_file = get_local_session_file(session_base)
     if session_file.exists():
         ensure_secure_file(session_file)
         logger.info(f"Loaded existing local session file: {session_file.name}")

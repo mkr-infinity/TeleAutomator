@@ -186,13 +186,13 @@ def test_writer_uses_chat_context_then_local_humanizer_with_one_model_call(tmp_p
     s.db.set_permanent_context(123, notes="Private family plans")
     s.db.set_state("chat_voice_profile_-100111", "Short technical replies")
     s.db.set_state("chat_prompt_-100111", "Reply in 2 words in English")
-    provider = SimpleNamespace(generate_reply=MagicMock(return_value="Deploy API today"))
+    provider = SimpleNamespace(generate_reply=MagicMock(return_value="Deploy API. Today works"))
     s.generator.provider = provider
     context = s.manager.context_agent.snapshot(-100111)
     with patch.object(s.generator, "humanize_reply", wraps=s.generator.humanize_reply) as humanizer:
         reply = s.generator.generate("Alice", "Which deployment?", context.history, persona_override=context.persona,
                                      permanent_context=context.background, is_group=True)
-    assert reply == "Deploy API"
+    assert reply == "Deploy API."
     humanizer.assert_called_once()
     provider.generate_reply.assert_called_once()
     prompt, instructions = provider.generate_reply.call_args.args

@@ -12,11 +12,14 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
+
 from app.ai.reply_generator import ReplyGenerator
 from app.banner import print_banner
 from app.config import load_config
 from app.health import HealthMonitor
 from app.logger import setup_logger
+from app.notifications import model_error_callback
 from app.privacy_manager import PrivacyManager
 from app.reply_manager import ReplyManager
 from app.safety_manager import SafetyManager
@@ -28,6 +31,7 @@ logger = setup_logger(__name__)
 
 def run_health_check() -> int:
     """Execute health check and return exit code for Docker/monitoring."""
+    load_dotenv(override=False)
     data_dir = Path(os.getenv("DATA_DIR", "data"))
     monitor = HealthMonitor(data_dir)
     if monitor.is_healthy():
@@ -59,6 +63,8 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
     if mode_override:
         config = replace(config, reply_mode=mode_override)
         db.set_state("reply_mode", mode_override)
+        db.set_state("safe_mode_active", "0")
+        db.set_state("safe_mode_prev_mode", "")
         logger.info(f"CLI mode override active: {mode_override}")
 
     safety = SafetyManager(config, db)
@@ -107,6 +113,7 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
 
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
+    generator.on_model_error = model_error_callback(loop, reply_mgr)
 
     def _signal_handler() -> None:
         logger.info("Received termination signal. Initiating shutdown...")
@@ -130,6 +137,7 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
     port_env = os.getenv("PORT", "8080")
     http_server = None
     miniapp_server = None
+    # Failure flag only; startup readiness comes from the HealthMonitor heartbeat.
     server_status = {"healthy": True, "error": None}
 
     try:
@@ -145,6 +153,7 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
             bot_control=reply_mgr.bot_control,
         )
         miniapp_ctx.health_status = server_status
+        miniapp_ctx.health_monitor = health
         miniapp_server = MiniAppServer(miniapp_ctx, port=int(port_env))
         miniapp_server.start()
         logger.info(f"TeleAutomator Mini App running on port {port_env}")
@@ -163,12 +172,11 @@ async def run_app(mode_override: Optional[str] = None, style_override: Optional[
             async def _handle_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
                 try:
                     await reader.read(1024)
-                    if not server_status["healthy"]:
+                    if not health.get_status()["ready"]:
                         body = json.dumps({
                             "status": "error",
                             "service": "teleautomator",
-                            "reason": "session_invalid_or_revoked",
-                            "detail": server_status["error"] or "Telegram session revoked",
+                            "reason": "telegram_not_ready",
                         }).encode("utf-8") + b"\n"
                         header = (
                             b"HTTP/1.1 503 Service Unavailable\r\n"

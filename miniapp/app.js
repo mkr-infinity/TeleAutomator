@@ -152,9 +152,7 @@
       buttons.push({
         label: isCurrentlyOn ? "Turn OFF" : "Turn ON",
         kind: isCurrentlyOn ? "danger" : "primary",
-        onClick: () => {
-          if (sw) sw.click();
-        },
+        onClick: () => runAction(sw.dataset.action, { value: isCurrentlyOn ? "off" : "on" }),
       });
     }
     buttons.push({ label: "Got it", kind: "" });
@@ -269,7 +267,7 @@
       owner_name: "Kaif", ai_engine: "Gemini", ai_model: "gemini-2.5-flash-lite", ai_base_url: "",
       available_models: ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"],
       models_manually_set: false,
-      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.9",
+      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.10",
       auto_reactions: true, ownreact: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
       thinking: "default", temperature: "0.7", lang: "english", max_tokens: "512",
       quiet_hours_start: "02:00", quiet_hours_end: "08:00", quiet_hours_schedule: "02:00 AM – 08:00 AM IST",
@@ -312,7 +310,7 @@
   };
 
   async function demoApi(path, body) {
-    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.9", user: { id: 555000111, name: "Kaif" } };
+    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.10", user: { id: 555000111, name: "Kaif" } };
     if (path === "/api/state") return DEMO_DATA.state;
     if (path === "/api/chats") return { chats: DEMO_DATA.chats, chatty_global: DEMO_DATA.state.chatty_global };
     if (path === "/api/pending") return { pending: DEMO_DATA.pending };
@@ -378,9 +376,10 @@
         return { ok: true, response: a === "approve" ? "Draft approved and sent!" : "Draft rejected and discarded." };
       }
       if (a === "approve_all" || a === "reject_all") {
-        const c = DEMO_DATA.pending.length;
-        DEMO_DATA.pending = [];
-        DEMO_DATA.state.pending_count = 0;
+        const before = DEMO_DATA.pending.length;
+        DEMO_DATA.pending = a === "approve_all" ? DEMO_DATA.pending.filter(item => !(p.ids || []).includes(Number(item.id))) : [];
+        const c = before - DEMO_DATA.pending.length;
+        DEMO_DATA.state.pending_count = DEMO_DATA.pending.length;
         return { ok: true, response: a === "approve_all" ? `All ${c} drafts approved and sent!` : `All ${c} drafts rejected.` };
       }
       if (a === "pause") {
@@ -629,6 +628,16 @@
     return `${f}%`;
   }
 
+  // Effective group rate and its source; older servers send only the saved per-chat value.
+  function chattyRate(c) {
+    if (!Number.isFinite(c.chatty_effective)) {
+      const pct = fmtPct(c.chatty);
+      return { pct, label: pct === "Default" ? "Global default" : pct };
+    }
+    const pct = `${Math.round(c.chatty_effective * 100)}%`;
+    return { pct, label: `${pct} (${{ chat: "per-chat", prompt: "from chat prompt" }[c.chatty_source] || "global default"})` };
+  }
+
   // ------------------------------------------------------------ IST & AM/PM Dates
   function formatIST(raw, showDate = true) {
     if (!raw) return "—";
@@ -750,6 +759,7 @@
 
   function openSheet(title, bodyHtml, buttons) {
     const sheet = $("sheet");
+    if (sheet.open && (sheetBusy || sheet.querySelector('[data-dirty="true"]'))) return false;
     hideToast();
     sheet.appendChild($("toast"));
     const version = ++sheetVersion;
@@ -777,6 +787,7 @@
         if (sheetBusy) return;
         if (!b.onClick) return closeSheet();
         const fields = [...bodyEl.querySelectorAll("input, textarea, select")];
+        const submitted = fields.map(field => field.type === "checkbox" ? field.checked : field.value);
         if (b.kind === "primary" && fields.some((field) => !field.reportValidity())) return;
         sheetBusy = true;
         $("sheet-close").disabled = true;
@@ -788,6 +799,10 @@
           if (version !== sheetVersion) return;
           if (result === false || (result && (result.ok === false || result.queued))) {
             $("sheet-error").textContent = result.response || "Your changes have not been saved. Review the values and try again.";
+            $("sheet-error").classList.remove("hidden");
+          } else if (fields.some((field, index) => (field.type === "checkbox" ? field.checked : field.value) !== submitted[index])) {
+            fields.forEach((field, index) => { field.dataset.syncedValue = String(submitted[index]); markFieldDirty(field); });
+            $("sheet-error").textContent = "Previous changes saved. Your newer edits are still here; save them when ready.";
             $("sheet-error").classList.remove("hidden");
           } else closeSheet(true);
         } catch (error) {
@@ -807,6 +822,10 @@
       });
       actions.appendChild(btn);
     });
+    bodyEl.querySelectorAll("input, textarea, select").forEach(field => {
+      field.dataset.syncedValue = String(field.type === "checkbox" ? field.checked : field.value);
+      field.dataset.dirty = "false";
+    });
     const inputs = [...bodyEl.querySelectorAll('input:not([type="checkbox"]), textarea, select')];
     inputs.forEach((field, index) => {
       field.enterKeyHint = index < inputs.length - 1 ? "next" : "done";
@@ -823,6 +842,7 @@
     $("sheet-title").focus({ preventScroll: true });
     updateTmaBackButton();
     haptic("light");
+    return true;
   }
 
   function closeSheet(saved = false) {
@@ -832,6 +852,7 @@
     if (sheet) sheet.classList.remove("is-expanded");
     const expBtn = $("sheet-expand");
     if (expBtn) expBtn.setAttribute("aria-expanded", "false");
+    ++sheetVersion;
     sheet.close();
     document.body.appendChild($("toast"));
     if (!$("toast").classList.contains("hidden") && $("toast").showPopover && !$("toast").matches(":popover-open")) $("toast").showPopover();
@@ -915,12 +936,13 @@
   // ------------------------------------------------------------ overview
 
   async function refreshOverview() {
-    const [s, acts] = await Promise.all([latestState || api("/api/state"), api("/api/activity")]);
+    const [s, acts] = await Promise.all([eventSource?.readyState === 1 && latestState ? latestState : api("/api/state"), api("/api/activity")]);
     if (!s || s.authorized === false) return maybePaywall(s);
     if (s.ok === false) throw new Error(s.response);
     renderState(s);
     if (acts.authorized === false) return maybePaywall(acts);
-    renderSparkline(acts && acts.activity ? acts.activity : [], s.replies_24h || 0);
+    if (acts.ok === false) throw new Error(acts.response || acts.error || "Could not load activity.");
+    renderSparkline(acts.hourly_activity || [], s.replies_24h || 0);
     const rows = (acts.activity || []).slice(0, 4);
     updateHtml("ov-activity", rows.length
       ? rows.map(feedRowHtml).join("")
@@ -939,21 +961,12 @@
     const now = Date.now();
 
     (activityList || []).forEach((item) => {
-      if (!item.ts) return;
-      const itemDate = new Date(item.ts.includes("T") ? item.ts : item.ts.replace(" ", "T"));
-      const diffHours = Math.floor((now - itemDate.getTime()) / (1000 * 60 * 60));
-      if (diffHours >= 0 && diffHours < 24) {
-        buckets[23 - diffHours]++;
-      }
+      if (!item.hour || !Number.isInteger(item.count) || item.count < 0) return;
+      let hour = String(item.hour);
+      if (!/(Z|[+-]\d{2}:?\d{2})$/i.test(hour)) hour = hour.replace(" ", "T") + "Z";
+      const diffHours = Math.floor(now / 3600000) - Math.floor(Date.parse(hour) / 3600000);
+      if (diffHours >= 0 && diffHours < 24) buckets[23 - diffHours] += item.count;
     });
-
-    const bucketSum = buckets.reduce((a, b) => a + b, 0);
-    if (replies24h > 0 && bucketSum === 0) {
-      buckets[23] = Math.max(1, Math.round(replies24h * 0.35));
-      buckets[22] = Math.max(0, Math.round(replies24h * 0.25));
-      buckets[21] = Math.max(0, Math.round(replies24h * 0.20));
-      buckets[20] = Math.max(0, Math.round(replies24h * 0.20));
-    }
 
     const maxVal = Math.max(1, ...buckets);
 
@@ -1174,7 +1187,9 @@
       ? `<a href="https://t.me/${encodeURIComponent(cleanUser)}" target="_blank" rel="noopener noreferrer" class="pill pill-neutral chat-user chat-user-link" title="Open @${esc(cleanUser)} in Telegram">@${esc(cleanUser)} ${SVGS.externalLink}</a>`
       : "";
 
-    const chattyDisplay = c.chatty !== "" && c.chatty !== null && c.chatty !== undefined ? `${Math.round(parseFloat(c.chatty) * 100)}%` : "Global default";
+    // Chatty only decides open group participation, so private chats get no control for it.
+    const isPrivate = c.type === "Private";
+    const chatty = chattyRate(c);
     const cooldownDisplay = c.cooldown_str || `Global Default (${c.cooldown_default_min ?? 5}s – ${c.cooldown_default_max ?? 60}s)`;
 
     const bodyHtml = `
@@ -1205,11 +1220,12 @@
         </div>
 
         <div class="chat-detail-summary-card">
+          ${isPrivate ? "" : `
           <div class="summary-item">
             <span class="summary-label">Chatty Frequency</span>
-            <span class="summary-val">${esc(chattyDisplay)}</span>
-          </div>
-          <div class="summary-item">
+            <span class="summary-val">${esc(chatty.label)}</span>
+          </div>`}
+          <div class="summary-item${isPrivate ? " full" : ""}">
             <span class="summary-label">Reply Cooldown</span>
             <span class="summary-val">${esc(cooldownDisplay)}</span>
           </div>
@@ -1241,13 +1257,13 @@
               <span class="action-btn-sub">Chat Memory</span>
             </div>
           </button>
-          <button type="button" class="clay-action-btn action-theme-chatty" data-action="chatty">
+          ${isPrivate ? "" : `<button type="button" class="clay-action-btn action-theme-chatty" data-action="chatty">
             <div class="action-btn-icon-wrap">${SVGS.msg}</div>
             <div class="action-btn-text">
               <span class="action-btn-title">Chatty</span>
-              <span class="action-btn-sub">${esc(fmtPct(c.chatty))} Chance</span>
+              <span class="action-btn-sub">${esc(chatty.pct)} Chance</span>
             </div>
-          </button>
+          </button>`}
           <button type="button" class="clay-action-btn action-theme-cooldown" data-action="cooldown">
             <div class="action-btn-icon-wrap">${SVGS.clock}</div>
             <div class="action-btn-text">
@@ -1315,6 +1331,7 @@
             <input type="number" id="cd-max-input" class="clay-input" min="0" value="${curMax}" step="0.1" required>
           </div>
         </div>
+        <p class="field-hint" style="margin:0">Replies also respect the account-wide gap after a reply in any chat (global cooldown), so a very small chat cooldown can't always be faster.</p>
         <div class="cooldown-presets-section">
           <span class="field-label" style="display:block;margin-bottom:6px">Quick Presets</span>
           <div class="cooldown-preset-chips">
@@ -1377,7 +1394,7 @@
       onClick: () => runAction("chat_chatty", { chat_id: c.id, value: String(p) }),
     }));
     buttons.push({ label: "Default", onClick: () => runAction("chat_chatty", { chat_id: c.id, value: "def" }) });
-    openSheet(`Chatty · ${c.name}`, `<p>Chance of occasionally joining a relevant conversation. Default follows the global setting. Messages addressed to other people are ignored.</p>`, buttons);
+    openSheet(`Chatty · ${c.name}`, `<p>Chance of occasionally joining a relevant conversation. Now: <strong>${esc(chattyRate(c).label)}</strong>. Default uses a rate set in this chat's prompt or notes, otherwise the global setting. Messages addressed to other people are ignored.</p>`, buttons);
   }
 
   function promptSheet(c) {
@@ -1396,7 +1413,7 @@
       `<textarea id="sheet-input" rows="5" placeholder="e.g. Solana meme coins, keep replies brief, focus on technical analysis">${esc(c.context || "")}</textarea>`,
       [
         { label: "Save notes", kind: "primary", onClick: () => runAction("setcontext", { chat_id: c.id, value: $("sheet-input").value.trim() }) },
-        { label: "Clear notes", onClick: () => runAction("delcontext", { chat_id: c.id }) },
+        { label: "Clear notes", onClick: () => runAction("setcontext", { chat_id: c.id, value: "" }) },
         { label: "Sync pins", onClick: () => runAction("syncpins", { chat_id: c.id }) },
       ]);
   }
@@ -1629,9 +1646,23 @@
       let startY = 0;
       let currentX = 0;
       let isSwiping = false;
+      let tracking = false;
+      const busy = () => wrap.getAttribute("aria-busy") === "true";
+      const resetSwipe = () => {
+        tracking = false;
+        isSwiping = false;
+        currentX = 0;
+        content.style.transition = "transform 0.25s ease";
+        content.style.transform = "translateX(0)";
+        if (approveHint) approveHint.style.opacity = "0";
+        if (rejectHint) rejectHint.style.opacity = "0";
+      };
+      wrap.addEventListener("touchcancel", resetSwipe, { passive: true });
 
       wrap.addEventListener("touchstart", (e) => {
-        if (!e.touches || !e.touches[0]) return;
+        resetSwipe();
+        if (busy() || !e.touches || e.touches.length !== 1) return;
+        tracking = true;
         startX = e.touches[0].clientX;
         startY = e.touches[0].clientY;
         currentX = 0;
@@ -1640,7 +1671,7 @@
       }, { passive: true });
 
       wrap.addEventListener("touchmove", (e) => {
-        if (!e.touches || !e.touches[0]) return;
+        if (!tracking || busy() || !e.touches || e.touches.length !== 1) { resetSwipe(); return; }
         const dx = e.touches[0].clientX - startX;
         const dy = e.touches[0].clientY - startY;
 
@@ -1648,6 +1679,7 @@
           if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) {
             isSwiping = true;
           } else if (Math.abs(dy) > 12) {
+            resetSwipe();
             return;
           }
         }
@@ -1666,7 +1698,9 @@
       }, { passive: true });
 
       wrap.addEventListener("touchend", () => {
-        if (!isSwiping) return;
+        if (!tracking || !isSwiping || busy()) { resetSwipe(); return; }
+        tracking = false;
+        isSwiping = false;
         content.style.transition = "transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1)";
         if (currentX > 80) {
           content.style.transform = "translateX(120%)";
@@ -1705,12 +1739,15 @@
     if (!changed) return;
     container.querySelectorAll(".model-chip").forEach((chip) => {
       chip.addEventListener("click", async () => {
-        const selected = [...selectedList];
+        if (container.getAttribute("aria-busy") === "true") return;
+        const selected = ($("ai-model").value || "").split(/[,;]/).map(value => value.trim().replace(/^models\//, "")).filter(Boolean);
         const idx = selected.indexOf(chip.dataset.model);
         if (idx === -1) selected.push(chip.dataset.model);
         else selected.splice(idx, 1);
         if (!selected.length) return toast("Keep at least one active model", "err");
+        container.setAttribute("aria-busy", "true");
         const res = await runAction("model", { value: selected.join(",") });
+        container.removeAttribute("aria-busy");
         if (res && res.ok) {
           $("ai-model").value = selected.join(",");
           renderModelChips(modelsList, selected);
@@ -1858,6 +1895,7 @@
     const file = input.files?.[0];
     if (!file) return;
     input.disabled = true;
+    const version = sheetVersion;
     try {
       if (DEMO) throw new Error("Connect to your engine to import preferences.");
       if (file.size > 1000000) throw new Error("Choose a backup smaller than 1 MB.");
@@ -1867,6 +1905,7 @@
       const preview = await api("/api/settings/preview", { backup });
       if (preview.authorized === false) return maybePaywall(preview);
       if (!preview.ok) throw new Error(preview.response || "This backup is invalid.");
+      if (version !== sheetVersion) return;
       const summary = preview.summary;
       openSheet("Review preference import", `<p>Merge <strong>${esc(summary.settings)} settings</strong>, <strong>${esc(summary.chats)} chat profiles</strong>, and <strong>${esc(summary.rules)} keyword rules</strong>.</p>
         <p>Access permissions and conversation memory are preserved. Existing preferences listed in this backup will be replaced.</p>
@@ -1886,7 +1925,10 @@
   function renderMoreControls(s) {
     if (!s) return;
     const pipeline = s.pipeline || { context: "Per-chat files and batched summaries", writer: "Selected model", humanizer: "Local checks; no extra model call" };
-    updateHtml("pipeline-status", [["Context stage", pipeline.context], ["Writer stage", pipeline.writer], ["Final style check", pipeline.humanizer]].map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join(""));
+    const last = pipeline.last_context;
+    const lastUpdate = last ? `${formatIST(last.created_at)} · ${{ success: "Success", failed: "Failed" }[last.status] || last.status}` : "None yet";
+    updateHtml("pipeline-status", [["Context stage", pipeline.context], ["Writer stage", pipeline.writer], ["Final style check", pipeline.humanizer],
+      ["Context jobs running", pipeline.context_jobs ?? 0], ["Last memory update", lastUpdate]].map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join(""));
     if (s.ai_model !== undefined) syncField("ai-model", s.ai_model);
     if (s.ai_base_url !== undefined) syncField("ai-baseurl", s.ai_base_url);
     if (Array.isArray(s.available_models)) {
@@ -2061,8 +2103,7 @@
 
   function enqueueAction(action, params) {
     if (!activeUserId || !safeQueuedAction({ action, params })) return false;
-    const queue = loadOfflineQueue();
-    if (queue.some(item => item.action === action && JSON.stringify(item.params) === JSON.stringify(params))) return true;
+    const queue = loadOfflineQueue().filter(item => item.action !== action || String(item.params.chat_id ?? "") !== String(params.chat_id ?? ""));
     queue.push({ id: Date.now() + "_" + Math.random().toString(36).slice(2, 6), action, params, time: new Date().toISOString() });
     const saved = saveOfflineQueue(queue);
     updateSyncBadge();
@@ -2082,6 +2123,7 @@
       for (let index = 0; index < queue.length; index++) {
         if (activeUserId !== userId) { remaining.push(...queue.slice(index)); break; }
         const item = queue[index];
+        if (!loadOfflineQueue(userId).some(current => current.id === item.id)) continue;
         try {
           const result = await api("/api/action", { action: item.action, params: item.params });
           if (result?.authorized === false) { remaining.push(...queue.slice(index)); break; }
@@ -2090,7 +2132,8 @@
         } catch { remaining.push(...queue.slice(index)); break; }
       }
       const ids = new Set(queue.map(item => item.id));
-      saveOfflineQueue([...remaining, ...loadOfflineQueue(userId).filter(item => !ids.has(item.id))], userId);
+      const added = loadOfflineQueue(userId).filter(item => !ids.has(item.id));
+      saveOfflineQueue([...remaining.filter(item => !added.some(next => next.action === item.action && String(next.params.chat_id ?? "") === String(item.params.chat_id ?? ""))), ...added], userId);
       if (activeUserId === userId) {
         updateSyncBadge();
         if (synced) { toast(`Synced ${synced} preference change(s)`, "ok"); loadView(currentView); }
@@ -2147,12 +2190,14 @@
   }
 
   async function runCmd(command) {
+    const version = sheetVersion;
     haptic();
     let res;
     try { res = await api("/api/cmd", { command }); }
     catch (error) { res = { ok: false, response: error.message || "Could not run the command. Try again." }; }
     latestState = null;
     if (res && res.authorized === false) return maybePaywall(res);
+    if (version !== sheetVersion) return res;
     haptic(res && res.ok ? "ok" : "err");
     openSheet(`/${command.split(" ")[0].slice(1)}`, formatStructuredAppResponse(res && res.response ? res.response : "No response."), [{ label: "Close" }]);
     loadView(currentView);
@@ -2287,6 +2332,13 @@
 
   // ---------------------------------------------------------------- init
 
+  function markFieldDirty(field) {
+    const current = field.type === "checkbox" ? field.checked : field.value;
+    const initial = field.dataset.syncedValue ?? (field.type === "checkbox" ? String(field.defaultChecked) : field.defaultValue);
+    field.dataset.dirty = String(String(current) !== initial);
+    updateClosingConfirmation();
+  }
+
   function wire() {
     $("retry-view").addEventListener("click", () => loadView(currentView));
     $("settings-history").addEventListener("toggle", () => { if ($("settings-history").open) refreshHistory(); });
@@ -2298,11 +2350,8 @@
     $("history-more").addEventListener("click", () => refreshHistory(false));
     $("settings-export").addEventListener("click", exportSettings);
     $("settings-file").addEventListener("change", previewSettingsFile);
-    document.addEventListener("input", (event) => {
-      const field = event.target;
-      if (!field.matches("input, textarea, select")) return;
-      field.dataset.dirty = String(field.value !== (field.dataset.syncedValue ?? field.defaultValue));
-      updateClosingConfirmation();
+    for (const type of ["input", "change"]) document.addEventListener(type, (event) => {
+      if (event.target.matches("input, textarea, select")) markFieldDirty(event.target);
     });
     document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.view)));
     const sheetCloseBtn = $("sheet-close");
@@ -2427,12 +2476,13 @@
     const btnApproveAll = $("btn-approve-all");
     if (btnApproveAll) {
       btnApproveAll.addEventListener("click", () => {
-        const count = document.querySelectorAll(".approval-card-wrap").length;
+        const ids = [...document.querySelectorAll(".approval-card-wrap")].map(card => Number(card.dataset.id)).filter(id => Number.isSafeInteger(id) && id > 0);
+        const count = ids.length;
         if (!count) return;
         openSheet("Approve pending batch",
           `<p>Send these <strong>${count} pending drafts</strong> in the background? ${approvalTotal > count ? `${approvalTotal - count} more drafts will remain for review.` : ""}</p>`,
           [
-            { label: `Approve batch (${count})`, kind: "primary", onClick: () => runAction("approve_all") },
+            { label: `Approve batch (${count})`, kind: "primary", onClick: () => runAction("approve_all", { ids }) },
             { label: "Cancel" }
           ]);
       });
@@ -2456,10 +2506,12 @@
       const button = $("goto-activity");
       if (button.disabled) return;
       button.disabled = true;
+      const version = sheetVersion;
       try {
         const acts = await api("/api/activity");
         if (acts.authorized === false) return maybePaywall(acts);
         if (acts.ok === false) throw new Error(acts.response);
+        if (version !== sheetVersion) return;
         const rows = acts.activity || [];
         openSheet("Recent replies", rows.length ? rows.map(feedRowHtml).join("") : "<p>Nothing yet.</p>", [{ label: "Close" }]);
       } catch (error) { toast(error.message || "Could not load recent replies. Try again.", "err"); }
@@ -2515,6 +2567,27 @@
       runAction("model", { value: v });
     });
     $("ai-model").addEventListener("keydown", (e) => { if (e.key === "Enter") $("ai-model-save").click(); });
+
+    for (const [fieldId, action] of [["ai-baseurl", "baseurl"], ["ai-key", "apikey"]]) {
+      const field = $(fieldId);
+      const button = $(`${fieldId}-save`);
+      button.addEventListener("click", async () => {
+        if (button.disabled) return;
+        const value = field.value.trim();
+        if (!value) return toast(action === "apikey" ? "Enter an API key" : "Enter an endpoint URL or default", "err");
+        button.disabled = true;
+        try {
+          const result = await runAction(action, { value });
+          if (result?.ok && field.value.trim() === value) {
+            field.value = action === "apikey" ? "" : value === "default" ? "" : value;
+            field.dataset.syncedValue = field.value;
+            field.dataset.dirty = "false";
+            updateClosingConfirmation();
+          }
+        } finally { button.disabled = false; }
+      });
+      field.addEventListener("keydown", event => { if (event.key === "Enter") button.click(); });
+    }
 
     // Modal popup: Select which fetched models to add to available models
     function showFetchModelsPopup(models) {
@@ -2580,12 +2653,12 @@
       const deselAll = $("popup-deselect-all");
       if (selAll) {
         selAll.addEventListener("click", () => {
-          document.querySelectorAll(".model-popup-cb").forEach((cb) => (cb.checked = true));
+          document.querySelectorAll(".model-popup-cb").forEach(cb => { cb.checked = true; markFieldDirty(cb); });
         });
       }
       if (deselAll) {
         deselAll.addEventListener("click", () => {
-          document.querySelectorAll(".model-popup-cb").forEach((cb) => (cb.checked = false));
+          document.querySelectorAll(".model-popup-cb").forEach(cb => { cb.checked = false; markFieldDirty(cb); });
         });
       }
     }
@@ -2657,6 +2730,7 @@
 
     // Health check candidate models
     async function checkModelsHealth() {
+      const version = sheetVersion;
       const btn = $("ai-check");
       const baseurl = $("ai-baseurl").value.trim();
       const apikey = $("ai-key").value.trim();
@@ -2689,6 +2763,7 @@
           api_key: apikey,
         });
 
+        if (version !== sheetVersion) return;
         if (res && res.ok && res.working_models && res.working_models.length > 0) {
           badge.className = "pill pill-positive";
           badge.textContent = `${res.working_models.length} Healthy`;
@@ -2742,6 +2817,7 @@
           }
         }
       } catch (e) {
+        if (version !== sheetVersion) return;
         badge.className = "pill pill-negative";
         badge.textContent = "Error";
         replyEl.textContent = "Health check request failed: " + e.message;
@@ -2763,6 +2839,7 @@
 
     // Fetch models from endpoint with interactive selection popup
     async function fetchModels() {
+      const version = sheetVersion;
       const btn = $("ai-fetch-models");
       const baseurl = $("ai-baseurl").value.trim();
       const apikey = $("ai-key").value.trim();
@@ -2770,6 +2847,7 @@
       btn.textContent = "Fetching...";
       try {
         const res = await api("/api/fetch_models", { base_url: baseurl, api_key: apikey });
+        if (version !== sheetVersion) return;
         if (!res || !res.ok) {
           const errDetail = (res && res.error) || "Failed to load models from endpoint";
           const errUrl = (res && res.url) || baseurl || "https://generativelanguage.googleapis.com/v1beta/models";
@@ -2804,6 +2882,7 @@
         }
         showFetchModelsPopup(models);
       } catch (e) {
+        if (version !== sheetVersion) return;
         openSheet(
           "Fetch Models Error",
           `<div class="health-summary-banner negative">
@@ -3177,6 +3256,7 @@
         } catch (_) {}
       });
       es.onerror = () => {
+        latestState = null;
         setConnectionStatus("connecting");
         api("/api/auth").then((auth) => { if (auth && auth.authorized === false) maybePaywall(auth); }).catch(() => {});
         // SSE reconnects automatically by browser spec
