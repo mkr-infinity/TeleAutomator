@@ -223,12 +223,13 @@ def test_sensitive_history_is_filtered_for_every_ai_path(tmp_path):
 def test_custom_persona_length_never_leaks_into_another_chat(tmp_path):
     s = make_stack(tmp_path)
     s.generator.prompt_manager.custom_prompt = "reply in 1 word"
-    s.generator.provider = SimpleNamespace(generate_reply=MagicMock(return_value="see you there tomorrow"))
-    assert s.generator.generate("Contact", "hi") == "see"
-    assert s.generator.generate("Contact", "hi", persona_override="reply in 2 words", is_group=True) == "see you"
-    assert s.generator.generate("Contact", "hi", persona_override="be casual", is_group=True) == "see you there tomorrow"
-    assert s.generator.generate("Contact", "hi", is_group=True) == "see you there tomorrow"
-    assert s.generator.generate("Contact", "hi") == "see"
+    # Length caps keep whole sentences only, so each cap selects a different complete prefix.
+    s.generator.provider = SimpleNamespace(generate_reply=MagicMock(return_value="Sure. ok. see you tomorrow"))
+    assert s.generator.generate("Contact", "hi") == "Sure."
+    assert s.generator.generate("Contact", "hi", persona_override="reply in 2 words", is_group=True) == "Sure. ok."
+    assert s.generator.generate("Contact", "hi", persona_override="be casual", is_group=True) == "Sure. ok. see you tomorrow"
+    assert s.generator.generate("Contact", "hi", is_group=True) == "Sure. ok. see you tomorrow"
+    assert s.generator.generate("Contact", "hi") == "Sure."
 
 
 def test_inflight_history_backfill_cannot_restore_cleared_memory(tmp_path):

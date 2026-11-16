@@ -236,7 +236,7 @@ def test_custom_prompt_wrapping_and_anti_ai_guardrails():
     assert "NATURAL MESSAGE LENGTH" in instructions
     assert "Automation or bot/human verification questions are left to the account owner" in instructions
     assert "MANDATORY REPLY POLICY" in instructions
-    assert "SLANG" in instructions
+    assert "configured persona and active style" in instructions
     assert "NO CODE" in instructions
 
     # Resetting custom persona
@@ -265,7 +265,7 @@ def test_custom_prompt_word_rule_priority():
     pm.custom_prompt = "Always reply in up to 5 words."
     assert pm.get_custom_word_limit() == 5
     ten_words = "one two three four five six seven eight nine ten"
-    assert len(pm.clean_reply(ten_words).split()) == 5
+    assert pm.clean_reply(ten_words) == ""
 
     # 3. With custom detailed/paragraphs directive
     pm.custom_prompt = "You are an author who provides detailed explanations."
@@ -472,9 +472,9 @@ def test_strict_word_limits_and_hard_cap():
     multiline = "sounds good bro 👍\ncheck this other thing out"
     assert pm.clean_reply(multiline) == multiline
 
-    # Excessively long run-on messages (>25 words) are capped for safety
+    # Excessively long run-on messages are suppressed instead of cut mid-thought
     thirty_words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour twentyfive twentysix twentyseven twentyeight twentynine thirty"
-    assert len(pm.clean_reply(thirty_words).split()) == 20
+    assert pm.clean_reply(thirty_words) == ""
 
 
 def test_ist_time_awareness_and_brevity_instructions_in_prompt():
@@ -493,7 +493,7 @@ def test_ist_time_awareness_and_brevity_instructions_in_prompt():
     assert "NO USELESS CONVERSATION" in prompt
     assert "humor" in prompt
     assert "vibe" in prompt
-    assert "NEVER explain" in prompt
+    assert "Answer directly without assistant preambles" in prompt
 
 
 def test_dynamic_owner_name_without_hardcoding(tmp_path: Path):

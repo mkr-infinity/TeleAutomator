@@ -157,6 +157,15 @@ class GeminiProvider(AIProvider):
             try:
                 with urllib.request.urlopen(req, timeout=15) as resp:
                     body = json.loads(resp.read().decode("utf-8"))
+                    if self.usage_callback and ("usageMetadata" in body or body.get("candidates")):
+                        try:
+                            meta = body.get("usageMetadata", {})
+                            pt = int(meta.get("promptTokenCount", 0))
+                            ct = int(meta.get("candidatesTokenCount", 0))
+                            tt = int(meta.get("totalTokenCount", pt + ct))
+                            self.usage_callback("gemini", m, pt, ct, tt)
+                        except Exception:
+                            pass
                     candidates = body.get("candidates", [])
                     if candidates:
                         parts = candidates[0].get("content", {}).get("parts", [])
@@ -166,15 +175,6 @@ class GeminiProvider(AIProvider):
                             if marker in ("null", "undefined", ""):
                                 logger.warning(f"Gemini model '{m}' returned malformed empty text. Trying fallback...")
                                 continue
-                            if self.usage_callback:
-                                try:
-                                    meta = body.get("usageMetadata", {})
-                                    pt = int(meta.get("promptTokenCount", 0))
-                                    ct = int(meta.get("candidatesTokenCount", 0))
-                                    tt = int(meta.get("totalTokenCount", pt + ct))
-                                    self.usage_callback("gemini", m, pt, ct, tt)
-                                except Exception:
-                                    pass
                             if marker == "none":
                                 logger.info(f"Gemini model '{m}' returned intentional silence (NONE).")
                                 return ""
@@ -271,6 +271,16 @@ class OpenAIProvider(AIProvider):
             try:
                 with urllib.request.urlopen(req, timeout=15) as resp:
                     body = json.loads(resp.read().decode("utf-8"))
+                    usage = body.get("usage", {})
+                    if self.usage_callback and usage:
+                        try:
+                            pt = int(usage.get("prompt_tokens", 0))
+                            ct = int(usage.get("completion_tokens", 0))
+                            tt = int(usage.get("total_tokens", pt + ct))
+                            self.usage_callback("custom", m, pt, ct, tt)
+                        except Exception as ue:
+                            logger.debug(f"Failed to record token usage: {ue}")
+
                     choices = body.get("choices", [])
                     if choices:
                         raw_content = choices[0].get("message", {}).get("content")
@@ -280,16 +290,6 @@ class OpenAIProvider(AIProvider):
                             continue
                         content = str(raw_content).strip().strip('"')
                         self.active_model = m
-
-                        usage = body.get("usage", {})
-                        if self.usage_callback and usage:
-                            try:
-                                pt = int(usage.get("prompt_tokens", 0))
-                                ct = int(usage.get("completion_tokens", 0))
-                                tt = int(usage.get("total_tokens", pt + ct))
-                                self.usage_callback("custom", m, pt, ct, tt)
-                            except Exception as ue:
-                                logger.debug(f"Failed to record token usage: {ue}")
 
                         if marker == "none":
                             logger.info(f"OpenAI-compatible model '{m}' returned intentional silence (NONE).")

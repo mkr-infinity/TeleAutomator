@@ -4,7 +4,7 @@ import io
 import json
 import logging
 import urllib.error
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -65,7 +65,12 @@ def test_empty_content_uses_fallback(provider, monkeypatch, caplog, text):
     urlopen = mock_requests(monkeypatch, response(provider, text), response(provider, "hello"))
     assert provider.generate_reply("prompt", "instructions") == "hello"
     assert urlopen.call_count == 2
-    assert_usage(provider, "fallback")
+    kind = "custom" if isinstance(provider, OpenAIProvider) else "gemini"
+    assert provider.usage_callback.call_args_list == [
+        call(kind, "primary", 11, 2, 13), call(kind, "fallback", 11, 2, 13),
+    ]
+    if isinstance(provider, OpenAIProvider):
+        assert provider.active_model == "fallback"
     assert any("malformed empty" in record.message and record.levelno == logging.WARNING
                for record in caplog.records)
     assert not any("intentional silence" in record.message for record in caplog.records)
@@ -114,6 +119,9 @@ def test_all_empty_responses_still_fail(provider, monkeypatch):
     with pytest.raises(RuntimeError, match="reply generation failed"):
         provider.generate_reply("prompt", "instructions")
     assert urlopen.call_count == 2
-    provider.usage_callback.assert_not_called()
+    kind = "custom" if isinstance(provider, OpenAIProvider) else "gemini"
+    assert provider.usage_callback.call_args_list == [
+        call(kind, "primary", 11, 2, 13), call(kind, "fallback", 11, 2, 13),
+    ]
     if isinstance(provider, OpenAIProvider):
         assert provider.active_model == ""

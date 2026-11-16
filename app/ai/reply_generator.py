@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from contextlib import nullcontext
 from typing import Any, Dict, List, Optional
 
 from app.ai.prompt_manager import PromptManager
@@ -107,7 +108,8 @@ class ReplyGenerator:
 
     def reload_provider(self) -> None:
         """Reload and rebuild the active AI provider using current database and config settings."""
-        self.provider = create_ai_provider(self.config, database=self.db)
+        with self.db._context_lock if self.db is not None else nullcontext():
+            self.provider = create_ai_provider(self.config, database=self.db)
 
     def _generate_reply(self, prompt: str, instructions: str) -> str:
         # History, pins, summaries and voice profiles need the same filtering as new messages.
@@ -155,6 +157,7 @@ class ReplyGenerator:
             is_group=is_group,
             is_mention=is_mention,
             persona_override=persona_override,
+            style_override=style_override,
         )
         instructions = self.prompt_manager.get_system_instructions(
             style_override=style_override,
@@ -201,7 +204,7 @@ class ReplyGenerator:
             return draft.strip()[:1500]
         except Exception as e:
             logger.error(f"Failed to summarize chat history: {e}")
-            return ""
+            raise
 
     def generate_goodnight_signoff(self) -> str:
         """AI-written casual goodnight line for quiet-hours sign-off (never hardcoded)."""
