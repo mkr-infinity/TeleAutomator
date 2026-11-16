@@ -29,3 +29,39 @@ def test_version_update_syncs_metadata_assets_and_detects_stale_urls(tmp_path):
     assert all(path.read_bytes() == content for path, content in before.items())
     updater.SW_JS.write_text(updater.SW_JS.read_text().replace("app.js?v=9.8.7", "app.js?v=0.0.1"))
     assert updater.scan_for_stale_versions("9.8.7")
+
+
+def test_check_mode_is_read_only_on_success_and_failure(tmp_path):
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parents[1]
+    for relative in ("scripts/update_version.py", "app/__init__.py", "pyproject.toml",
+                     "CITATION.cff", "miniapp/index.html", "miniapp/app.js", "miniapp/sw.js"):
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(root / relative, target)
+    command = [sys.executable, "-B", str(tmp_path / "scripts/update_version.py"), "--check"]
+    environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+
+    def snapshot():
+        return {path: (path.read_bytes(), path.stat().st_mtime_ns)
+                for path in tmp_path.rglob("*") if path.is_file()}
+
+    before = snapshot()
+    result = subprocess.run(command, env=environment, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert snapshot() == before
+    metadata = tmp_path / "pyproject.toml"
+    import re
+    metadata.write_text(re.sub(r'version = "[^"]+"', 'version = "0.0.1"', metadata.read_text(), count=1))
+    before = snapshot()
+    result = subprocess.run(command, env=environment, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert "pyproject.toml" in result.stdout
+    assert snapshot() == before
+    result = subprocess.run([*command, "9.8.7"], env=environment, capture_output=True, text=True)
+    assert result.returncode == 2
+    assert snapshot() == before

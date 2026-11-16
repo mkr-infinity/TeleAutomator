@@ -12,6 +12,7 @@ What gets synced/checked:
     /status, /prompt all read app.__version__ at runtime — never bump by hand)
 
 Usage:
+  python3 scripts/update_version.py --check    # read-only validation
   python3 scripts/update_version.py            # sync + scan for stale versions
   python3 scripts/update_version.py 2.9.0      # set a new version everywhere first
 
@@ -20,6 +21,7 @@ Exit code 1 if stale hardcoded versions are found anywhere (CI-friendly check).
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -54,17 +56,24 @@ def set_version(new_version: str) -> None:
         encoding="utf-8",
     )
     sync_static_copies(new_version)
-    print(f"✅ Version set to {new_version} in app/__init__.py")
+    print(f"•  Version set to {new_version} in app/__init__.py")
 
 
-def sync_static_copies(version: str) -> None:
-    """Sync every static copy of the version to the current one."""
+def sync_static_copies(version: str, check: bool = False) -> list[str]:
+    """Sync static copies, or return needed changes without writing in check mode."""
+    mismatches: list[str] = []
+
+    def save(path: Path, content: str) -> None:
+        mismatches.append(str(path.relative_to(ROOT)))
+        if not check:
+            path.write_text(content, encoding="utf-8")
+
     # pyproject.toml
     pyproject = PYPROJECT_FILE.read_text(encoding="utf-8")
     updated = re.sub(r'(version\s*=\s*)"[^"]+"', rf'\1"{version}"', pyproject, count=1)
     if updated != pyproject:
-        PYPROJECT_FILE.write_text(updated, encoding="utf-8")
-        print(f"✅ pyproject.toml -> {version}")
+        save(PYPROJECT_FILE, updated)
+        print(f"•  pyproject.toml -> {version}")
     else:
         print(f"•  pyproject.toml already at {version}")
 
@@ -73,8 +82,8 @@ def sync_static_copies(version: str) -> None:
         cff = CITATION_FILE.read_text(encoding="utf-8")
         updated_cff = re.sub(r'((?<!cff-)version:\s*)\d+\.\d+\.\d+', rf'\g<1>{version}', cff, count=1)
         if updated_cff != cff:
-            CITATION_FILE.write_text(updated_cff, encoding="utf-8")
-            print(f"✅ CITATION.cff -> {version}")
+            save(CITATION_FILE, updated_cff)
+            print(f"•  CITATION.cff -> {version}")
         else:
             print(f"•  CITATION.cff already at {version}")
 
@@ -84,8 +93,8 @@ def sync_static_copies(version: str) -> None:
         updated_html = re.sub(r'("softwareVersion":\s*)"\d+\.\d+\.\d+"', rf'\1"{version}"', html, count=1)
         updated_html = re.sub(r'((?:style\.css|app\.js)\?v=)\d+\.\d+\.\d+', rf'\g<1>{version}', updated_html)
         if updated_html != html:
-            INDEX_HTML.write_text(updated_html, encoding="utf-8")
-            print(f"✅ miniapp/index.html -> {version}")
+            save(INDEX_HTML, updated_html)
+            print(f"•  miniapp/index.html -> {version}")
         else:
             print(f"•  miniapp/index.html already at {version}")
 
@@ -94,8 +103,8 @@ def sync_static_copies(version: str) -> None:
         js = APP_JS.read_text(encoding="utf-8")
         updated_js = re.sub(r'(version:\s*)"\d+\.\d+\.\d+"', rf'\1"{version}"', js)
         if updated_js != js:
-            APP_JS.write_text(updated_js, encoding="utf-8")
-            print(f"✅ miniapp/app.js -> {version}")
+            save(APP_JS, updated_js)
+            print(f"•  miniapp/app.js -> {version}")
         else:
             print(f"•  miniapp/app.js already at {version}")
 
@@ -105,8 +114,8 @@ def sync_static_copies(version: str) -> None:
         updated_sw = re.sub(r'(CACHE_NAME\s*=\s*"teleautomator-v)\d+\.\d+\.\d+"', rf'\g<1>{version}"', sw)
         updated_sw = re.sub(r'((?:style\.css|app\.js)\?v=)\d+\.\d+\.\d+', rf'\g<1>{version}', updated_sw)
         if updated_sw != sw:
-            SW_JS.write_text(updated_sw, encoding="utf-8")
-            print(f"✅ miniapp/sw.js -> v{version}")
+            save(SW_JS, updated_sw)
+            print(f"•  miniapp/sw.js -> v{version}")
         else:
             print(f"•  miniapp/sw.js already at v{version}")
 
@@ -116,10 +125,12 @@ def sync_static_copies(version: str) -> None:
         major_minor = ".".join(version.split(".")[:2])
         updated = re.sub(r"(TELEAUTOMATOR\s+v)\d+\.\d+", rf"\g<1>{major_minor}", svg)
         if updated != svg:
-            BANNER_SVG.write_text(updated, encoding="utf-8")
-            print(f"✅ assets/banner.svg -> v{major_minor}")
+            save(BANNER_SVG, updated)
+            print(f"•  assets/banner.svg -> v{major_minor}")
         else:
             print(f"•  assets/banner.svg already at v{major_minor}")
+
+    return mismatches
 
 
 # Hardcoded PROJECT versions only matter in these contexts (dependency pins like
@@ -164,16 +175,23 @@ def scan_for_stale_versions(version: str) -> list[str]:
 
 
 def main() -> None:
-    args = sys.argv[1:]
-    if args:
-        set_version(args[0].lstrip("v"))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("version", nargs="?")
+    parser.add_argument("--check", action="store_true", help="Validate without changing files")
+    args = parser.parse_args()
+    if args.check and args.version:
+        parser.error("--check cannot be combined with a new version")
+    if args.version:
+        set_version(args.version.lstrip("v"))
 
     version = current_version()
     print(f"🔍 Current version: {version}")
-    sync_static_copies(version)
+    mismatches = sync_static_copies(version, check=args.check)
+    if args.check and mismatches:
+        print("Out-of-sync files: " + ", ".join(mismatches))
 
     stale = scan_for_stale_versions(version)
-    if stale:
+    if stale or (args.check and mismatches):
         print(f"\n⚠️  Found {len(stale)} hardcoded version string(s) that do NOT match {version}:")
         for entry in stale:
             print(f"   {entry}")
