@@ -71,6 +71,7 @@ def test_recovery_restores_mode_and_alerts(tmp_path: Path) -> None:
     db.set_state("safe_mode_active", "1")
     db.set_state("safe_mode_since", str(time.time() - 16 * 60))  # 16 min ago
 
+    mgr._process_started_at = time.time() - 16 * 60
     with patch.object(mgr, "_send_control_alert", fake_alert):
         asyncio.run(mgr.maybe_recover_safe_mode())
 

@@ -9,6 +9,7 @@ mode is restored automatically and the owner is alerted via the control channel.
 from __future__ import annotations
 
 import json
+import math
 import time
 from typing import Optional
 
@@ -26,11 +27,22 @@ def record_boot_and_maybe_safe_mode(db: Database, config) -> Optional[str]:
     """Record this boot; if too many boots happened recently while automation is in
     restricted_auto, force draft mode (safe mode). Returns a status string or None."""
     now = time.time()
+    db.set_state("process_started_at", str(now))
     try:
         history = json.loads(db.get_state("boot_history", "[]") or "[]")
     except Exception:
         history = []
-    history = [float(t) for t in history if float(t) > now - DEFAULT_WINDOW_SECONDS]
+    if not isinstance(history, list):
+        history = []
+    recent = []
+    for value in history:
+        try:
+            stamp = float(value)
+        except (ValueError, TypeError):
+            continue
+        if math.isfinite(stamp) and now - DEFAULT_WINDOW_SECONDS < stamp <= now:
+            recent.append(stamp)
+    history = recent
     history.append(now)
     db.set_state("boot_history", json.dumps(history))
 
@@ -43,20 +55,21 @@ def record_boot_and_maybe_safe_mode(db: Database, config) -> Optional[str]:
     rapid_boots = len([t for t in history if t > now - DEFAULT_WINDOW_SECONDS]) >= threshold
 
     if active:
+        db.set_state("reply_mode", "draft")
+        db.set_state("safe_mode_since", str(now))
         return "already-safe"
 
-    if rapid_boots and config.reply_mode == "restricted_auto":
-        current = db.get_state("reply_mode", config.reply_mode)
-        if current == "restricted_auto":
-            db.set_state("safe_mode_prev_mode", "restricted_auto")
-            db.set_state("reply_mode", "draft")
-            db.set_state("safe_mode_active", "1")
-            db.set_state("safe_mode_since", str(now))
-            logger.warning(
-                f"SAFE MODE: {len(history)} boots in {int(DEFAULT_WINDOW_SECONDS / 60)} minutes "
-                f"(threshold {threshold}). Automation held in DRAFT mode — nothing will be sent to chats. "
-                f"Auto-recovers after {int(db.get_state('safe_mode_recover_minutes', str(DEFAULT_RECOVER_MINUTES)))} min of calm uptime."
-            )
-            return "safe-mode"
+    current = db.get_state("reply_mode", config.reply_mode)
+    if rapid_boots and current == "restricted_auto":
+        db.set_state("safe_mode_prev_mode", "restricted_auto")
+        db.set_state("reply_mode", "draft")
+        db.set_state("safe_mode_active", "1")
+        db.set_state("safe_mode_since", str(now))
+        logger.warning(
+            f"SAFE MODE: {len(history)} boots in {int(DEFAULT_WINDOW_SECONDS / 60)} minutes "
+            f"(threshold {threshold}). Automation held in DRAFT mode — nothing will be sent to chats. "
+            "Auto-recovers after the configured period of calm uptime."
+        )
+        return "safe-mode"
 
     return None

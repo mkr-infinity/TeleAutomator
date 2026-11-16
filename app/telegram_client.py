@@ -47,8 +47,11 @@ class TelegramService:
         self.privacy = privacy_manager
         self.reply_manager = reply_manager
         self.health = health_monitor
+        self.health.connection_probe = lambda: bool(self._initialized and self._running and self.client and self.client.is_connected())
         self.client: Optional[TelegramClient] = None
         self._running = False
+        self._initialized = False
+        self._scheduled_tasks: dict[str, asyncio.Task] = {}
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._last_summary_check = 0.0
         self._last_daily_prune = 0.0
@@ -115,12 +118,12 @@ class TelegramService:
         raw_username = (me.username or "").strip().lstrip("@")
         logger.info(f"Connected personal Telegram account: {name} {username} [ID: {user_id}]")
 
-        # Automatically fetch owner persona name from connected Telegram profile
+        # Preserve an explicit persona; otherwise seed it from Telegram.
         # Fallback hierarchy: first_name -> full name / last_name -> username -> user ID
-        owner_name = (me.first_name or "").strip() or name or raw_username or str(user_id)
+        owner_name = self.db.get_state("owner_name") or (me.first_name or "").strip() or name or raw_username or str(user_id)
         self.db.set_state("owner_name", owner_name)
         self.reply_manager.generator.set_owner_name(owner_name)
-        logger.info(f"Automatically fetched and set AI owner persona from Telegram profile: '{owner_name}'")
+        logger.info("Owner persona loaded.")
 
         # Wire up reply manager and message filter
         self.reply_manager.set_telegram_client(self.client)
@@ -132,6 +135,7 @@ class TelegramService:
             database=self.db,
         )
 
+        self.reply_manager._context_startup_enabled = True
         register_handlers(
             client=self.client,
             my_user_id=user_id,
@@ -143,7 +147,43 @@ class TelegramService:
         if not self.db.get_state("first_run_welcomed"):
             self.db.set_state("first_run_welcomed", "1")
 
+        self._initialized = True
         return self.client
+
+    async def _initialize_allowed_chats(self) -> None:
+        """Warm allowlisted context with bounded workers without delaying controls."""
+        private, groups = self.privacy.get_all_allowed_chats()
+        pending = iter(private | groups)
+
+        async def worker():
+            for chat_id in pending:
+                if not self._running:
+                    return
+                try:
+                    await self.reply_manager.ensure_chat_context(chat_id)
+                except Exception as exc:
+                    logger.debug("Startup context initialization failed: %s", type(exc).__name__)
+
+        workers = [asyncio.create_task(worker()) for _ in range(min(3, len(private | groups)))]
+        try:
+            await asyncio.gather(*workers)
+        finally:
+            for task in workers:
+                task.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
+
+    def _schedule(self, name, operation) -> None:
+        previous = self._scheduled_tasks.get(name)
+        if previous is not None and not previous.done():
+            return
+
+        async def run():
+            try:
+                await operation()
+            except Exception as exc:
+                logger.debug("Scheduled %s failed: %s", name, type(exc).__name__)
+
+        self._scheduled_tasks[name] = asyncio.create_task(run())
 
     async def _heartbeat_loop(self) -> None:
         """Periodically write health status file and trigger scheduled tasks."""
@@ -152,33 +192,17 @@ class TelegramService:
             self.health.update_heartbeat(
                 is_connected=is_connected,
                 emergency_stop=self.safety.is_emergency_stopped,
+                ready=self._initialized,
             )
-            # Check quiet hours goodnight sign-off for active groups
-            try:
-                await self.reply_manager.maybe_send_quiet_hours_goodnight()
-            except Exception as e:
-                logger.debug(f"Quiet hours goodnight check error: {e}")
+            if self._initialized and is_connected:
+                self._schedule("quiet_hours", self.reply_manager.maybe_send_quiet_hours_goodnight)
+                self._schedule("pause_expiry", self.reply_manager.check_pause_expiry)
+                self._schedule("safe_mode", self.reply_manager.maybe_recover_safe_mode)
 
-            # Timed-pause auto-resume: emit the 'pause ended' control alert when the window expires
-            try:
-                await self.reply_manager.check_pause_expiry()
-            except Exception as e:
-                logger.debug(f"Pause expiry check error: {e}")
-
-            # Safe-mode boot guard: restore the real mode once the process proves stable
-            try:
-                await self.reply_manager.maybe_recover_safe_mode()
-            except Exception as e:
-                logger.debug(f"Safe-mode recovery check error: {e}")
-
-            # Backstop for coalesced context workers; each chat has its own batch/rate guard.
             now = time.monotonic()
-            if now - self._last_summary_check >= 60.0:
+            if self._initialized and is_connected and now - self._last_summary_check >= 60.0:
                 self._last_summary_check = now
-                try:
-                    await self.reply_manager.refresh_group_summaries()
-                except Exception as e:
-                    logger.debug(f"Group summary refresh error: {e}")
+                self._schedule("summaries", self.reply_manager.refresh_group_summaries)
 
             # Automated SQLite daily maintenance (every 24 hours / 1 day)
             # Performs non-blocking WAL checkpointing; messages and reactions are preserved
@@ -197,49 +221,59 @@ class TelegramService:
     async def run(self) -> None:
         """Run the client and sustain connection with exponential backoff on disconnects."""
         self._running = True
-        await self.initialize()
-
-        # Start health monitor loop
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-        logger.info(f"Client is running in mode: '{self.config.reply_mode}'. Listening for events.")
-
         backoff = 2
-        max_backoff = 60
-
-        while self._running:
-            try:
-                # Maintain connection until disconnected or stopped
-                if self.client:
+        try:
+            while self._running:
+                try:
+                    if not self._initialized:
+                        await self.initialize()
+                        self._schedule("startup_context", self._initialize_allowed_chats)
+                    elif self.client and not self.client.is_connected():
+                        await self.client.connect()
+                        if not await self.client.is_user_authorized():
+                            raise RuntimeError("Telegram session is unauthorized; re-authentication required.")
+                    connected_at = time.monotonic()
+                    self.health.update_heartbeat(True, self.safety.is_emergency_stopped, ready=True)
                     await self.client.run_until_disconnected()
-                if not self._running:
-                    break
-
-                logger.warning("Disconnected from Telegram. Attempting reconnection...")
-                await asyncio.sleep(backoff)
-                if self.client and not self.client.is_connected():
-                    await self.client.connect()
-                    logger.info("Successfully reconnected to Telegram MTProto.")
-                    backoff = 2
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Telegram connection error: {e}")
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, max_backoff)
+                    if time.monotonic() - connected_at >= 30:
+                        backoff = 2
+                except (AuthKeyDuplicatedError, AuthKeyUnregisteredError, SessionRevokedError, SessionExpiredError) as exc:
+                    raise RuntimeError("Telegram session REVOKED; re-authentication required.") from exc
+                except RuntimeError:
+                    raise
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.warning("Telegram connection failed: %s", type(exc).__name__)
+                    if not self._initialized and self.client:
+                        try:
+                            await self.client.disconnect()
+                        except Exception:
+                            pass
+                if self._running:
+                    self.health.update_heartbeat(False, self.safety.is_emergency_stopped, ready=False)
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 60)
+        finally:
+            self._initialized = False
+            self._running = False
+            self.health.update_heartbeat(False, self.safety.is_emergency_stopped, ready=False)
 
     async def stop(self) -> None:
         """Gracefully disconnect and stop background tasks."""
         logger.info("Stopping Telegram service...")
         self._running = False
 
-        await self.reply_manager.close()
-
+        tasks = list(self._scheduled_tasks.values())
         if self._heartbeat_task:
-            self._heartbeat_task.cancel()
-            try:
-                await self._heartbeat_task
-            except asyncio.CancelledError:
-                pass
+            tasks.append(self._heartbeat_task)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._scheduled_tasks.clear()
+
+        await self.reply_manager.close()
 
         if self.client:
             try:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import math
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Set
@@ -247,6 +248,10 @@ def load_config(env_path: Path | str | None = None) -> AppConfig:
         quiet_hours_end = os.getenv("QUIET_HOURS_END", "08:00").strip() or "08:00"
     except ValueError as e:
         raise ValueError(f"Invalid rate limit or message delay configuration: {e}")
+
+    for key, value in (("QUIET_HOURS_START", quiet_hours_start), ("QUIET_HOURS_END", quiet_hours_end)):
+        if not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", value):
+            raise ValueError(f"Invalid {key}: expected HH:MM in 24-hour time.")
 
     data_dir = Path(os.getenv("DATA_DIR", "data"))
 

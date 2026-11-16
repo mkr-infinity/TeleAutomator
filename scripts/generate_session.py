@@ -22,7 +22,7 @@ from telethon.errors import (
 from telethon.sessions import StringSession
 
 from app.config import AppConfig, load_config
-from app.session_manager import get_local_session_path
+from app.session_manager import get_local_session_file, get_local_session_path
 
 
 async def generate_new_cloud_session(config: AppConfig) -> None:
@@ -74,7 +74,7 @@ async def generate_new_cloud_session(config: AppConfig) -> None:
 async def export_existing_session(config: AppConfig) -> None:
     """Export the StringSession from an authorized local .session file."""
     session_path = get_local_session_path(config.data_dir, config.session_name)
-    session_file = session_path.with_suffix(".session")
+    session_file = get_local_session_file(session_path)
 
     if not session_file.exists():
         print(f"\n[ERROR] Local session file not found: {session_file}")

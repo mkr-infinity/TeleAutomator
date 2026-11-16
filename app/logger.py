@@ -54,9 +54,20 @@ class RedactingFormatter(logging.Formatter):
         return redact_secrets(original)
 
 
+_configured_loggers: set[logging.Logger] = set()
+_configured_level: int | None = None
+
+
 def setup_logger(name: str = "telegram_client", level_name: str | None = None) -> logging.Logger:
     """Set up and return the application logger."""
-    level = getattr(logging, (level_name or os.getenv("LOG_LEVEL", "INFO")).upper(), logging.INFO)
+    global _configured_level
+    if level_name is not None:
+        _configured_level = getattr(logging, level_name.upper(), logging.INFO)
+        for configured in _configured_loggers:
+            configured.setLevel(_configured_level)
+            for handler in configured.handlers:
+                handler.setLevel(_configured_level)
+    level = _configured_level if _configured_level is not None else getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO)
     logger = logging.getLogger(name)
     logger.setLevel(level)
 
@@ -71,4 +82,7 @@ def setup_logger(name: str = "telegram_client", level_name: str | None = None) -
         handler.setFormatter(formatter)
         logger.addHandler(handler)
 
+    for handler in logger.handlers:
+        handler.setLevel(level)
+    _configured_loggers.add(logger)
     return logger
