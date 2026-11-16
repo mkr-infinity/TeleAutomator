@@ -2,37 +2,44 @@
 # Windows PowerShell Setup Script for Telegram Chat Automation
 # =============================================================================
 
+$ErrorActionPreference = "Stop"
+Set-Location -LiteralPath $PSScriptRoot
+
 Write-Host "========================================================================" -ForegroundColor Cyan
 Write-Host " TeleAutomator - Telegram Chat Automation Windows Setup" -ForegroundColor Green
 Write-Host "========================================================================" -ForegroundColor Cyan
 
 # 1. Check Python
 $pythonCmd = $null
-if (Get-Command python -ErrorAction SilentlyContinue) {
-    $pythonCmd = "python"
-} elseif (Get-Command py -ErrorAction SilentlyContinue) {
-    $pythonCmd = "py"
+foreach ($candidate in @("python", "py")) {
+    if (Get-Command $candidate -ErrorAction SilentlyContinue) {
+        & $candidate -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"
+        if ($LASTEXITCODE -eq 0) {
+            $pythonCmd = $candidate
+            break
+        }
+    }
 }
-
 if (-not $pythonCmd) {
-    Write-Host "[ERROR] Python 3.10+ was not found in PATH." -ForegroundColor Red
-    Write-Host "Please install Python from https://www.python.org/downloads/ and check 'Add python.exe to PATH'." -ForegroundColor Yellow
-    exit 1
+    throw "Python 3.10+ is required. Install it and add it to PATH."
 }
-
-$pyVersion = & $pythonCmd -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
-Write-Host "[*] Found Python: $pyVersion" -ForegroundColor Green
 
 # 2. Virtual Environment
-if (-not (Test-Path ".venv")) {
+if (-not (Test-Path ".venv\Scripts\python.exe")) {
     Write-Host "[*] Creating virtual environment (.venv)..." -ForegroundColor Yellow
     & $pythonCmd -m venv .venv
+    if ($LASTEXITCODE -ne 0) { throw "Virtual environment creation failed." }
 }
+
+& .\.venv\Scripts\python.exe -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"
+if ($LASTEXITCODE -ne 0) { throw "Existing virtual environment requires Python 3.10+. Recreate it explicitly." }
 
 # 3. Activate & Install
 Write-Host "[*] Installing dependencies..." -ForegroundColor Yellow
 & .\.venv\Scripts\python.exe -m pip install --upgrade pip --quiet
+if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed; rerun setup to retry." }
 & .\.venv\Scripts\python.exe -m pip install -r requirements.txt --quiet
+if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed; rerun setup to retry." }
 Write-Host "[✓] Dependencies installed." -ForegroundColor Green
 
 # 4. Configuration

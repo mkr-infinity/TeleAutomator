@@ -10,7 +10,7 @@
 1. [Prerequisites](#1-prerequisites)
 2. [Step 1: Get a Cloud VPS Server](#step-1-get-a-cloud-vps-server)
 3. [Step 2: Obtain Telegram API Credentials (my.telegram.org)](#step-2-obtain-telegram-api-credentials-mytelegramorg)
-4. [Step 3: Get a Free Google Gemini API Key](#step-3-get-a-free-google-gemini-api-key)
+4. [Step 3: Get a Google Gemini API Key](#step-3-get-a-google-gemini-api-key)
 5. [Step 4: Connect to Server & Clone Repository](#step-4-connect-to-server--clone-repository)
 6. [Step 5: Run Automated Server Setup](#step-5-run-automated-server-setup)
 7. [Step 6: Authenticate Your Telegram Account](#step-6-authenticate-your-telegram-account)
@@ -18,14 +18,10 @@
    - [Option B: Headless StringSession (For Docker & Cloud PaaS)](#option-b-headless-stringsession-for-docker--cloud-paas)
 8. [Step 7: Configure Environment Variables (.env)](#step-7-configure-environment-variables-env)
 9. [Step 8: Launch 24/7 with Docker Compose (VPS)](#step-8-launch-247-with-docker-compose)
-10. [Railway.app Deployment (Recommended Cloud PaaS)](#railwayapp-deployment-recommended-cloud-paas)
-11. [Render.com Deployment (Free Cloud Hosting)](#rendercom-deployment-free-cloud-hosting)
-    - [Method 1: One-Click Render Blueprint (render.yaml)](#method-1-one-click-render-blueprint-renderyaml)
-    - [Method 2: Manual Render Web Service Setup](#method-2-manual-render-web-service-setup)
-    - [Keeping Render Free Tier Alive 24/7](#keeping-render-free-tier-alive-247)
-12. [Step 9: Test & Verify from Telegram](#step-9-test--verify-from-telegram)
-13. [Step 10: Server Management & Updates](#step-10-server-management--updates)
-14. [Troubleshooting & FAQ](#troubleshooting--faq)
+10. [Railway and Render](#railway-recommended-for-247-hosting)
+11. [Step 9: Test & Verify from Telegram](#step-9-test--verify-from-telegram)
+12. [Step 10: Server Management & Updates](#step-10-server-management--updates)
+13. [Troubleshooting & FAQ](#troubleshooting--faq)
 
 ---
 
@@ -43,12 +39,8 @@ Before starting, ensure you have:
 
 To keep TeleAutomator running 24/7 while your laptop is closed, you need a lightweight Linux server (VPS).
 
-1. Choose any cloud provider:
-   - **Hetzner** (~$4/month - CX22)
-   - **DigitalOcean** (~$4-6/month - Basic Droplet)
-   - **AWS Lightsail** (~$3.50/month)
-   - **Linode / Akamai** (~$5/month)
-   - **Vultr** (~$3.50/month)
+1. Choose your host, region, resources, and cost explicitly before creating a server.
+   This guide does not select a provider or assume current prices or available plans.
 2. Select the OS: **Ubuntu 24.04 LTS** or **Debian 12**.
 3. Once the server is created, open your terminal (PowerShell on Windows, Terminal on macOS/Linux) and log in:
    ```bash
@@ -80,9 +72,9 @@ Telegram requires an `api_id` and `api_hash` to connect MTProto personal clients
 
 ---
 
-## Step 3: Get a Free Google Gemini API Key
+## Step 3: Get a Google Gemini API Key
 
-TeleAutomator uses Google Gemini 3.5 Flash for natural, context-aware human replies.
+Configure a model available to your own provider account. Gemini is one supported provider; check your account limits and charges before enabling requests.
 
 1. Go to: **[Google AI Studio](https://aistudio.google.com/app/apikey)**.
 2. Sign in with your Google account.
@@ -111,7 +103,7 @@ cd TeleAutomator
 
 ## Step 5: Run Automated Server Setup
 
-TeleAutomator includes an auto-detecting setup script that installs Python, virtual environments, Docker, and dependencies automatically:
+TeleAutomator includes an auto-detecting setup script that checks an existing Python 3.10+ installation and installs Python dependencies into a virtual environment:
 
 ```bash
 ./setup.sh
@@ -123,7 +115,7 @@ TeleAutomator includes an auto-detecting setup script that installs Python, virt
 
 ## Step 6: Authenticate Your Telegram Account
 
-Choose either Option A (simplest) or Option B (best for ephemeral clouds):
+Use a file session when you run TeleAutomator directly on a server (`./start.sh`). Use a StringSession for Docker, Railway and Render. Containers also need durable storage for the database and chat memory (see below).
 
 ### Option A: Interactive File Session (Recommended)
 
@@ -146,10 +138,10 @@ If you prefer keeping your session in an environment variable rather than a file
 
 1. Generate a StringSession:
    ```bash
-   python3 scripts/generate_session.py
+   python run.py --new-session
    ```
 2. Enter your phone number, code, and 2FA password.
-3. The script will output an encrypted string starting with `1...`.
+3. The script outputs an encoded bearer credential, not an encrypted string. Local session files are also unencrypted; use filesystem permissions and disk encryption as appropriate.
 4. Copy the entire string.
 5. In `.env`, set:
    ```env
@@ -207,7 +199,23 @@ Save and exit: press `Ctrl + O`, then `Enter`, then `Ctrl + X`.
 
 ## Step 8: Launch 24/7 with Docker Compose
 
-Deploy the hardened, non-root Docker container:
+Compose keeps settings, history and chat memory in a **named Docker volume** (`app_data`).
+Docker creates it, the container fixes its ownership at start, and it survives rebuilds and
+`docker compose down`. Your host `./data` folder is never touched.
+
+Containers use a StringSession. Generate a dedicated one on your computer (the local sender must
+not run at the same time) and put it in `.env`:
+
+```bash
+./session.sh --new          # Windows: python run.py --new-session
+```
+
+```env
+TG_SESSION_MODE=string
+TG_SESSION_STRING=PASTE_THE_STRING_HERE
+```
+
+Then start it:
 
 ```bash
 # Build and start container in background
@@ -224,156 +232,71 @@ You should see the startup banner and:
 
 Press `Ctrl + C` to detach from logs. The container will remain running 24/7 in the background and will restart automatically if the server reboots.
 
----
+**Back up the volume** (stop the service first, and keep the file private):
 
-## Railway.app Deployment (Recommended Cloud PaaS)
-
-TeleAutomator comes pre-configured for **[Railway.app](https://railway.app)** with automated build detection via [`railway.json`](railway.json), [`Dockerfile`](Dockerfile), and [`Procfile`](Procfile).
-
-### Step 1: Generate Your StringSession (Run Once Locally)
-Cloud platforms do not permit interactive terminal prompts for SMS/OTP codes. You must generate a `TG_SESSION_STRING` on your computer first.
-
-You have two options:
-
-- **Option A (Dedicated Cloud Session - Recommended)**:
-  Generates an independent session registered as a separate device. You can run locally AND on Railway simultaneously without conflict:
-  ```bash
-  ./session.sh --new
-  # Or: python run.py --new-session
-  ```
-
-- **Option B (Export Existing Local Session)**:
-  Exports your current local `.session` file to a string:
-  ```bash
-  ./session.sh
-  # Or: python run.py --session
-  ```
-
-> [!CAUTION]
-> **DO NOT RUN LOCAL AND CLOUD INSTANCES SIMULTANEOUSLY WITH THE SAME SESSION!**  
-> If you export an existing local session (Option B), stop your local client before starting Railway. If Telegram MTProto detects the same session key connecting from two IP addresses at once, it permanently revokes the session with `AuthKeyDuplicatedError`. To run both concurrently, use Option A (`./session.sh --new`).
-
-Copy the exported session string (starts with `1...`).
-
-### Step 2: Deploy to Railway
-1. Log into **[Railway.app](https://railway.app)** and click **New Project** -> **Deploy from GitHub repo**.
-2. Select your repository. Railway will detect `railway.json` / `Dockerfile` and configure the build automatically.
-
-### Step 3: Enter Environment Variables in Railway Dashboard
-In your Railway service settings, go to the **Variables** tab and add the following:
-
-| Variable | Recommended Value / Description |
-| :--- | :--- |
-| `TG_API_ID` | Your numeric Telegram API ID from `my.telegram.org` |
-| `TG_API_HASH` | Your 32-character Telegram API Hash from `my.telegram.org` |
-| `TG_SESSION_STRING` | Your exported session string from `./session.sh` |
-| `AI_PROVIDER` | `gemini` (or `openai`, `custom`, `nvidia`, `groq`) |
-| `AI_API_KEY` | Your AI provider API key (e.g. `AIzaSy...` for Gemini or `sk-...` for OpenAI/custom) |
-| `AI_MODEL` | `gemini-2.5-flash` (or your model name, e.g. `gpt-4o-mini`) |
-| `AI_BASE_URL` | Base endpoint URL (only needed for `custom` OpenAI-compatible providers, e.g. `https://api.your-provider.com/v1`) |
-| `REASONING_EFFORT`| `low` (options: `low`, `medium`, `high`, `off`) |
-| `REPLY_MODE` | `restricted_auto` (or `approval`, `draft`) |
-| `AUTO_AUTHORIZE` | `true` |
-
-Once saved, Railway will immediately trigger a build, pass health checks, and begin running 24/7!
-
----
-
-## Render.com Deployment (Free Cloud Hosting)
-
-If you do not want to manage a VPS, you can host TeleAutomator on **[Render.com](https://render.com)** for free.
-
-### Why Render Needs a StringSession
-Cloud platforms like Render do not allow interactive terminal typing to enter your Telegram login code. You must generate your session string once on your local computer before deploying.
-
-#### Pre-Step: View or Generate Your Session String (1 Minute)
-If you already authenticated locally using `./authenticate.sh` (local mode), view your exported cloud session string directly in your terminal:
 ```bash
-./session.sh
-# Or on Windows / cross-platform:
-python run.py --session
+docker compose stop
+docker run --rm -v teleautomator_app_data:/data -v "$PWD":/backup python:3.12-slim \
+  tar czf /backup/teleautomator-data.tgz -C /data .
+docker compose start
 ```
-*(If you have not authenticated yet, run `./authenticate.sh` or `python run.py --auth` first).*
 
-- The terminal will display your complete string starting with `1...` (your `TG_SESSION_STRING`).
-- Copy this entire string to use in Render.com or Docker.
+Never run `docker compose down -v`: it deletes the volume.
 
 ---
 
-### Method 1: One-Click Render Blueprint (render.yaml)
+## Railway (recommended for 24/7 hosting)
 
-1. **Fork the Repository**:
-   - Go to [https://github.com/mkr-infinity/TeleAutomator](https://github.com/mkr-infinity/TeleAutomator).
-   - Click **Fork** (top-right) to copy the repository to your GitHub account.
-2. **Log into Render**:
-   - Visit **[https://dashboard.render.com](https://dashboard.render.com)** and sign in with GitHub.
-3. **Deploy Blueprint**:
-   - Click **New +** -> **Blueprint**.
-   - Select your forked `TeleAutomator` repository.
-   - Render automatically reads [`render.yaml`](render.yaml).
-4. **Enter Your Secrets**:
-   Render will prompt you for the following environment variables:
-   - **`TG_API_ID`**: Your numeric API ID from `my.telegram.org`.
-   - **`TG_API_HASH`**: Your 32-character API Hash from `my.telegram.org`.
-   - **`TG_SESSION_STRING`**: The session string you generated above.
-   - **`AI_API_KEY`**: Your Google Gemini API key (`AIzaSy...`).
-5. Click **Apply**. Render will build and launch your service!
+Railway builds the repository's `Dockerfile` (`railway.json`) and checks `/api/health` before it
+switches a deployment live. That check only passes once Telegram is connected.
 
----
+**One-time setup**
 
-### Method 2: Manual Render Web Service Setup
+1. Create a service from your GitHub repository.
+2. **Add a Volume** to the service (Service -> Settings -> Volumes) and mount it at `/app/data`.
+   A service can have one volume. The container refuses to start without one, because Railway's
+   filesystem is erased on every deploy and you would lose settings, chat memory and approvals.
+3. Open the **Variables** tab and set:
 
-If you prefer setting it up manually without a blueprint:
+```env
+TG_API_ID=YOUR_ID
+TG_API_HASH=YOUR_HASH
+TG_SESSION_MODE=string
+TG_SESSION_STRING=YOUR_DEDICATED_SESSION
+AI_ENABLED=true
+AI_PROVIDER=YOUR_PROVIDER
+AI_API_KEY=YOUR_KEY
+AI_MODEL=YOUR_MODEL
+BOT_API_KEY=YOUR_BOT_TOKEN
+BOT_AUTHORIZED_USERS=YOUR_TELEGRAM_ID
+REPLY_MODE=draft
+```
 
-1. In Render Dashboard, click **New +** -> **Web Service**.
-2. Connect your GitHub repository.
-3. Configure the settings:
-   - **Name**: `teleautomator`
-   - **Language / Runtime**: `Python 3`
-   - **Branch**: `main`
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `python3 -m app.main`
-   - **Instance Type**: `Free`
-4. Click **Advanced** -> **Add Environment Variable** and add each:
+4. Generate the dedicated session on your computer with `./session.sh --new` and stop the local
+   sender before deploying. Treat the string like a password.
+5. Deploy, then open the service's public domain to use the Mini App. Start in `draft` mode, review
+   the behaviour, then switch to automatic replies from the bot or Mini App.
 
-| Key | Value | Notes |
-| :--- | :--- | :--- |
-| `TG_API_ID` | `12345678` | From `my.telegram.org` |
-| `TG_API_HASH` | `0123456789abcdef...` | From `my.telegram.org` |
-| `TG_SESSION_MODE` | `string` | **Must be `string` on Render** |
-| `TG_SESSION_STRING` | `1BVts...` | The string from `generate_session.py` |
-| `AI_ENABLED` | `true` | Enables Google Gemini AI |
-| `AI_PROVIDER` | `gemini` | Google Gemini |
-| `AI_API_KEY` | `AIzaSy...` | From Google AI Studio |
-| `REPLY_MODE` | `restricted_auto` | Hands-free auto-replying |
-| `AUTO_AUTHORIZE` | `true` | Authorizes automated sends |
-| `MIN_REPLY_DELAY_SECONDS` | `5` | Adaptive delay lower bound |
-| `MAX_REPLY_DELAY_SECONDS` | `60` | Adaptive delay upper bound |
-| `TYPING_DELAY_SECONDS` | `2` | Typing action duration |
+**Why this keeps working after changes**
 
-5. Click **Create Web Service**.
-6. TeleAutomator automatically detects Render's `$PORT` and starts an internal health check server on `/` and `/health`, ensuring Render marks the deployment as **Healthy**!
+- Railway mounts volumes as root. The container starts as root only to fix ownership, then drops
+  to an unprivileged user (UID 10001) before the application runs. You do **not** need
+  `RAILWAY_RUN_UID`.
+- If you change the volume's mount path, the app follows `RAILWAY_VOLUME_MOUNT_PATH`
+  automatically. Re-attaching or restoring a volume also works; ownership is repaired at start.
+- Redeploys with a volume attached have a short downtime (Railway never runs two copies on one
+  volume). That is expected and protects the SQLite database.
+- Use one instance per Telegram account. Do not add replicas.
 
----
+**Back up and verify**: enable Railway's volume backups, and check the deploy logs for the
+startup banner. A successful build alone does not prove Telegram is connected; the health check
+does.
 
-### Keeping Render Free Tier Alive 24/7
+## Render
 
-> [!NOTE]  
-> Render's **Free Tier Web Services** automatically spin down into sleep mode after 15 minutes if no web requests are received.
-
-To keep TeleAutomator awake and responding 24/7 on the Free tier:
-1. Copy your Render web service URL (e.g. `https://teleautomator-xxxx.onrender.com`).
-2. Go to a free website monitoring service such as:
-   - **[UptimeRobot](https://uptimerobot.com)** (Free)
-   - **[cron-job.org](https://cron-job.org)** (Free)
-   - **[Better Stack](https://betterstack.com)** (Free)
-3. Create a **New Monitor / Cron Job**:
-   - **URL**: `https://teleautomator-xxxx.onrender.com`
-   - **Interval**: Every 10 minutes (or 5 minutes)
-   - **Method**: `HTTP GET`
-4. TeleAutomator's built-in HTTP server will reply with `200 OK {"status":"healthy"}`. This keeps your free container permanently awake 24/7 without ever entering sleep mode!
-
-*(Alternatively, upgrading to a Render Background Worker for $7/month runs 24/7 natively without needing web pings).*
+`render.yaml` selects the Docker runtime and sets `REQUIRE_PERSISTENT_STORAGE=true`. It does not
+create a disk or choose a plan. Add a persistent disk mounted at `/app/data` and pick your plan in
+Render before applying it. The same variables as above apply.
 
 ---
 
@@ -443,7 +366,7 @@ docker compose up -d --build
      # Or on Windows: python run.py --new-session
      ```
   3. Copy the newly generated string session and update `TG_SESSION_STRING` in your Railway dashboard (under the **Variables** tab).
-  4. Railway will automatically redeploy and start listening 24/7!
+  4. Verify the volume mount, startup logs, and health before enabling replies.
 
 ### Q: I received "Telegram API Error: PHONE_CODE_INVALID"
 - Telegram verification codes expire in a few minutes. Re-run `./authenticate.sh` and enter the newest code immediately.
@@ -458,7 +381,7 @@ docker compose up -d --build
 - **No**. The server runs independently 24/7. Your phone can be turned off, in airplane mode, or offline, and TeleAutomator will continue running.
 
 ### Q: Where do errors go?
-- TeleAutomator isolates all alerts and errors to your private **Control Bot**. Nothing is ever leaked to groups or contacts.
+- Inspect private server logs and the configured control channel. Logs and runtime state must be protected; error handling is not a guarantee that all third-party errors are private.
 
 ---
 *Maintained by Mohammad Kaif Raja ([@mkr_infinity](https://t.me/mkr_infinity)) • Repository: [TeleAutomator](https://github.com/mkr-infinity/TeleAutomator)*

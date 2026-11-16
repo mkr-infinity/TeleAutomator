@@ -23,23 +23,30 @@ def get_venv_python() -> Path:
     return ROOT_DIR / ".venv" / "bin" / "python3"
 
 
-def ensure_environment() -> Path:
+def ensure_environment(force_install: bool = False) -> Path:
     """Ensure virtual environment exists and dependencies are installed."""
     venv_python = get_venv_python()
     venv_dir = ROOT_DIR / ".venv"
 
+    marker = venv_dir / ".requirements-installed"
+    requirements = ROOT_DIR / "requirements.txt"
+    fingerprint = requirements.read_bytes()
     if not venv_python.exists():
+        marker.unlink(missing_ok=True)
         print(f"[*] Creating Python virtual environment at {venv_dir}...")
         import venv
         venv.create(venv_dir, with_pip=True)
 
+    if force_install or not marker.exists() or marker.read_bytes() != fingerprint:
+        marker.unlink(missing_ok=True)
         print("[*] Installing dependencies from requirements.txt...")
         subprocess.check_call([
             str(venv_python), "-m", "pip", "install", "--upgrade", "pip", "--quiet"
-        ])
+        ], cwd=ROOT_DIR)
         subprocess.check_call([
             str(venv_python), "-m", "pip", "install", "-r", str(ROOT_DIR / "requirements.txt"), "--quiet"
-        ])
+        ], cwd=ROOT_DIR)
+        marker.write_bytes(fingerprint)
         print("[✓] Virtual environment initialized and dependencies installed.")
 
     # Ensure .env exists
@@ -76,7 +83,9 @@ def main() -> None:
     parser.add_argument("--style", choices=["casual", "concise", "formal", "humorous"], help="Override AI reply style")
     args, extra = parser.parse_known_args()
 
-    venv_python = ensure_environment()
+    if sys.version_info < (3, 10):
+        parser.error("Python 3.10+ is required")
+    venv_python = ensure_environment(force_install=args.setup)
     python_str = str(venv_python)
 
     if args.setup:
@@ -85,23 +94,23 @@ def main() -> None:
 
     if args.auth:
         cmd = [python_str, str(ROOT_DIR / "scripts" / "authenticate.py")] + extra
-        sys.exit(subprocess.call(cmd))
+        sys.exit(subprocess.call(cmd, cwd=ROOT_DIR))
 
     if args.session:
         cmd = [python_str, str(ROOT_DIR / "scripts" / "generate_session.py")] + extra
-        sys.exit(subprocess.call(cmd))
+        sys.exit(subprocess.call(cmd, cwd=ROOT_DIR))
 
     if args.new_session:
         cmd = [python_str, str(ROOT_DIR / "scripts" / "generate_session.py"), "--new"] + extra
-        sys.exit(subprocess.call(cmd))
+        sys.exit(subprocess.call(cmd, cwd=ROOT_DIR))
 
     if args.test:
         cmd = [python_str, "-m", "pytest", str(ROOT_DIR / "tests")] + extra
-        sys.exit(subprocess.call(cmd))
+        sys.exit(subprocess.call(cmd, cwd=ROOT_DIR))
 
     if args.check:
         cmd = [python_str, str(ROOT_DIR / "scripts" / "check_connection.py")] + extra
-        sys.exit(subprocess.call(cmd))
+        sys.exit(subprocess.call(cmd, cwd=ROOT_DIR))
 
     # Default action: run main application daemon
     extra_flags = list(extra)
@@ -113,7 +122,7 @@ def main() -> None:
         extra_flags.extend(["--style", args.style])
 
     cmd = [python_str, "-m", "app.main"] + extra_flags
-    sys.exit(subprocess.call(cmd))
+    sys.exit(subprocess.call(cmd, cwd=ROOT_DIR))
 
 
 if __name__ == "__main__":

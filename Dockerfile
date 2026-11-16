@@ -1,9 +1,10 @@
-# Multi-stage/minimal secure container for Telegram Chat Automation
+# Non-root container for Telegram Chat Automation
 FROM python:3.12-slim
 
 # Prevent Python from writing .pyc files and enable unbuffered logging
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    DATA_DIR=/app/data
 
 # Create non-root user and group
 RUN groupadd -g 10001 appuser && \
@@ -31,8 +32,8 @@ RUN mkdir -p /app/data && \
     chmod 700 /app/data && \
     chmod +x /app/entrypoint.sh /app/healthcheck.sh
 
-# Switch to non-root user
-USER appuser
+# The container starts as root only so entrypoint.sh can fix ownership of a root-owned
+# volume (Railway mounts volumes as root). It drops to appuser (10001) before the app runs.
 
 # Health check using self-contained python health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
