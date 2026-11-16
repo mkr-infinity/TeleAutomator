@@ -52,6 +52,14 @@ vm.runInContext(source, context, { filename: file });
   context.testAPI.renderMoreControls({ emergency: false, state: "active", auto_reactions: false });
   assert.equal(element("btn-emergency-toggle").textContent, "Halt Engine");
   assert.equal(element("sw-reaction").dataset.state, "off");
+  assert.match(element("pipeline-status").innerHTML, /Context jobs running<\/span><strong>0<[\s\S]*Last memory update<\/span><strong>None yet</, "older servers without stage fields still render defaults");
+  const stages = last_context => {
+    context.testAPI.renderMoreControls({ pipeline: { context: "Files", writer: "Model", humanizer: "Local", context_jobs: 2, last_context } });
+    return element("pipeline-status").innerHTML;
+  };
+  assert.match(stages({ status: "success", detail: "", created_at: "2026-11-15 12:00:00" }), /Context jobs running<\/span><strong>2<[\s\S]*Nov 15, 5:30 PM IST · Success/, "SQLite UTC times render in IST");
+  assert.match(stages({ status: "failed", detail: "Summary update failed", created_at: "2026-11-15 12:00:00" }), /5:30 PM IST · Failed/);
+  assert.match(stages({ status: "<img src=x onerror=alert(1)>", created_at: "<b>" }), /&lt;b&gt; · &lt;img src=x onerror=alert\(1\)&gt;/, "stage values must be escaped");
 
   const field = element("ai-baseurl");
   context.testAPI.syncField("ai-baseurl", "https://original.test");

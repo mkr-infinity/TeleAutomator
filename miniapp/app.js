@@ -628,6 +628,16 @@
     return `${f}%`;
   }
 
+  // Effective group rate and its source; older servers send only the saved per-chat value.
+  function chattyRate(c) {
+    if (!Number.isFinite(c.chatty_effective)) {
+      const pct = fmtPct(c.chatty);
+      return { pct, label: pct === "Default" ? "Global default" : pct };
+    }
+    const pct = `${Math.round(c.chatty_effective * 100)}%`;
+    return { pct, label: `${pct} (${{ chat: "per-chat", prompt: "from chat prompt" }[c.chatty_source] || "global default"})` };
+  }
+
   // ------------------------------------------------------------ IST & AM/PM Dates
   function formatIST(raw, showDate = true) {
     if (!raw) return "—";
@@ -1177,7 +1187,9 @@
       ? `<a href="https://t.me/${encodeURIComponent(cleanUser)}" target="_blank" rel="noopener noreferrer" class="pill pill-neutral chat-user chat-user-link" title="Open @${esc(cleanUser)} in Telegram">@${esc(cleanUser)} ${SVGS.externalLink}</a>`
       : "";
 
-    const chattyDisplay = c.chatty !== "" && c.chatty !== null && c.chatty !== undefined ? `${Math.round(parseFloat(c.chatty) * 100)}%` : "Global default";
+    // Chatty only decides open group participation, so private chats get no control for it.
+    const isPrivate = c.type === "Private";
+    const chatty = chattyRate(c);
     const cooldownDisplay = c.cooldown_str || `Global Default (${c.cooldown_default_min ?? 5}s – ${c.cooldown_default_max ?? 60}s)`;
 
     const bodyHtml = `
@@ -1208,11 +1220,12 @@
         </div>
 
         <div class="chat-detail-summary-card">
+          ${isPrivate ? "" : `
           <div class="summary-item">
             <span class="summary-label">Chatty Frequency</span>
-            <span class="summary-val">${esc(chattyDisplay)}</span>
-          </div>
-          <div class="summary-item">
+            <span class="summary-val">${esc(chatty.label)}</span>
+          </div>`}
+          <div class="summary-item${isPrivate ? " full" : ""}">
             <span class="summary-label">Reply Cooldown</span>
             <span class="summary-val">${esc(cooldownDisplay)}</span>
           </div>
@@ -1244,13 +1257,13 @@
               <span class="action-btn-sub">Chat Memory</span>
             </div>
           </button>
-          <button type="button" class="clay-action-btn action-theme-chatty" data-action="chatty">
+          ${isPrivate ? "" : `<button type="button" class="clay-action-btn action-theme-chatty" data-action="chatty">
             <div class="action-btn-icon-wrap">${SVGS.msg}</div>
             <div class="action-btn-text">
               <span class="action-btn-title">Chatty</span>
-              <span class="action-btn-sub">${esc(fmtPct(c.chatty))} Chance</span>
+              <span class="action-btn-sub">${esc(chatty.pct)} Chance</span>
             </div>
-          </button>
+          </button>`}
           <button type="button" class="clay-action-btn action-theme-cooldown" data-action="cooldown">
             <div class="action-btn-icon-wrap">${SVGS.clock}</div>
             <div class="action-btn-text">
@@ -1318,6 +1331,7 @@
             <input type="number" id="cd-max-input" class="clay-input" min="0" value="${curMax}" step="0.1" required>
           </div>
         </div>
+        <p class="field-hint" style="margin:0">Replies also respect the account-wide gap after a reply in any chat (global cooldown), so a very small chat cooldown can't always be faster.</p>
         <div class="cooldown-presets-section">
           <span class="field-label" style="display:block;margin-bottom:6px">Quick Presets</span>
           <div class="cooldown-preset-chips">
@@ -1380,7 +1394,7 @@
       onClick: () => runAction("chat_chatty", { chat_id: c.id, value: String(p) }),
     }));
     buttons.push({ label: "Default", onClick: () => runAction("chat_chatty", { chat_id: c.id, value: "def" }) });
-    openSheet(`Chatty · ${c.name}`, `<p>Chance of occasionally joining a relevant conversation. Default follows the global setting. Messages addressed to other people are ignored.</p>`, buttons);
+    openSheet(`Chatty · ${c.name}`, `<p>Chance of occasionally joining a relevant conversation. Now: <strong>${esc(chattyRate(c).label)}</strong>. Default uses a rate set in this chat's prompt or notes, otherwise the global setting. Messages addressed to other people are ignored.</p>`, buttons);
   }
 
   function promptSheet(c) {
@@ -1911,7 +1925,10 @@
   function renderMoreControls(s) {
     if (!s) return;
     const pipeline = s.pipeline || { context: "Per-chat files and batched summaries", writer: "Selected model", humanizer: "Local checks; no extra model call" };
-    updateHtml("pipeline-status", [["Context stage", pipeline.context], ["Writer stage", pipeline.writer], ["Final style check", pipeline.humanizer]].map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join(""));
+    const last = pipeline.last_context;
+    const lastUpdate = last ? `${formatIST(last.created_at)} · ${{ success: "Success", failed: "Failed" }[last.status] || last.status}` : "None yet";
+    updateHtml("pipeline-status", [["Context stage", pipeline.context], ["Writer stage", pipeline.writer], ["Final style check", pipeline.humanizer],
+      ["Context jobs running", pipeline.context_jobs ?? 0], ["Last memory update", lastUpdate]].map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join(""));
     if (s.ai_model !== undefined) syncField("ai-model", s.ai_model);
     if (s.ai_base_url !== undefined) syncField("ai-baseurl", s.ai_base_url);
     if (Array.isArray(s.available_models)) {
