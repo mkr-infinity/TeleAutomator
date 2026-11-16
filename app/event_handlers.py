@@ -265,48 +265,7 @@ def register_handlers(
                     reply_manager.db.record_action("automation", "reply", "skipped", "No relevant contribution requested", chat_id=chat_id)
                     return
                 # Frequencies are ceilings for relevant messages, not permission to interrupt other threads.
-                prompt_chatty = None
-                try:
-                    chat_p_text = reply_manager.db.get_chat_prompt(chat_id) if hasattr(reply_manager.db, "get_chat_prompt") else reply_manager.db.get_state(f"chat_prompt_{chat_id}")
-                    perm_ctx = reply_manager.db.get_permanent_context(chat_id) if hasattr(reply_manager.db, "get_permanent_context") else {}
-                    notes_text = perm_ctx.get("notes", "") if perm_ctx else ""
-                    combined_rules = f"{chat_p_text or ''} {notes_text}".strip()
-                    if combined_rules:
-                        # Match "6 times in 10 sends", "6 out of 10 messages", "6/10"
-                        r_match = re.search(r"(\d+)\s*(?:times\s+in|out\s+of|\/)\s*(\d+)\s*(?:sends|messages|texts)?", combined_rules, re.IGNORECASE)
-                        if r_match:
-                            n_val = float(r_match.group(1))
-                            d_val = float(r_match.group(2))
-                            if d_val > 0:
-                                prompt_chatty = min(1.0, max(0.0, n_val / d_val))
-                        if prompt_chatty is None:
-                            pct_match = re.search(r"(?:reply|message|talk|send)\s*(?:rate|frequency|chance|probability)?\s*(?:of|at|is)?\s*(\d+)%", combined_rules, re.IGNORECASE)
-                            if pct_match:
-                                prompt_chatty = min(1.0, max(0.0, float(pct_match.group(1)) / 100.0))
-                except Exception as e:
-                    logger.debug(f"Could not parse prompt chatty ratio for chat {chat_id}: {e}")
-
-                per_chat_chatty = reply_manager.db.get_state(f"chat_chatty_{chat_id}")
-                global_chatty_raw = reply_manager.db.get_state("chatty_probability")
-                band_prob = float(getattr(reply_manager.config, "chatty_probability", 0.15))
-                if per_chat_chatty:
-                    try:
-                        chatty_prob = float(per_chat_chatty)
-                    except ValueError:
-                        chatty_prob = band_prob
-                    effective_prob = chatty_prob
-                elif prompt_chatty is not None:
-                    effective_prob = prompt_chatty
-                    logger.info(f"[PROMPT RATIO ENGAGEMENT] Group {chat_id} following custom prompt ratio: {prompt_chatty:.2f} (from instructions).")
-                elif global_chatty_raw:
-                    try:
-                        chatty_prob = float(global_chatty_raw)
-                    except ValueError:
-                        chatty_prob = band_prob
-                    effective_prob = chatty_prob
-                else:
-                    chatty_prob = band_prob
-                    effective_prob = chatty_prob
+                effective_prob = reply_manager.group_chatty_probability(chat_id)
 
                 # Quiet rooms can reduce the configured chance, never increase it.
                 try:
@@ -371,7 +330,8 @@ def register_handlers(
                     for m in reversed(recent_msgs):
                         m_id = getattr(m, "id", None)
                         m_text = (getattr(m, "raw_text", "") or "").strip()
-                        if not m_text or reply_manager.safety.is_sensitive(m_text):
+                        if (not m_text or reply_manager.safety.is_sensitive(m_text)
+                                or not reply_manager.privacy.is_user_allowed(getattr(m, "sender_id", None))):
                             continue
                         m_out = getattr(m, "out", False)
                         m_sender_id = getattr(m, "sender_id", None)
@@ -407,7 +367,9 @@ def register_handlers(
 
         if reply_msg and getattr(reply_msg, "raw_text", None):
             r_text = reply_msg.raw_text.strip()
-            if r_text and not any(h.get("text") == r_text for h in conversation_history):
+            if (r_text and reply_manager.privacy.is_user_allowed(getattr(reply_msg, "sender_id", None))
+                    and not reply_manager.safety.is_sensitive(r_text)
+                    and not any(h.get("text") == r_text for h in conversation_history)):
                 r_sender = "You" if (getattr(reply_msg, "out", False) or getattr(reply_msg, "sender_id", None) == my_user_id) else (reply_target_name or "Contact")
                 conversation_history.append({"sender": f"{r_sender} (in reply to)", "text": r_text})
 

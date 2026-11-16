@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import json
+import math
 import random
 import re
 import time
@@ -58,6 +59,11 @@ class ReplyManager(CommandRouterMixin):
         self._approval_batch_task = None
         self._background_tasks = set()
         self._context_initializing = set()
+        self._context_init_tasks = {}
+        self._context_ready = set()
+        self._context_startup_enabled = False
+        self._process_started_at = time.time()
+        self._last_delivery_parts = {}
         self._closed = False
         self._client: Any = None
         # Optional Bot API control channel (set by main.py when BOT_API_KEY is configured).
@@ -121,12 +127,55 @@ class ReplyManager(CommandRouterMixin):
         clean = mode.strip().lower()
         if clean in ("draft", "approval", "restricted_auto"):
             self.db.set_state("reply_mode", clean)
+            self.db.set_state("safe_mode_active", "0")
             return True
         return False
 
     def set_telegram_client(self, client: Any) -> None:
         """Attach the active Telethon client."""
         self._client = client
+
+    def schedule_chat_context(self, chat_id):
+        task = self._context_init_tasks.get(chat_id)
+        if task is None or task.done():
+            self._context_ready.discard(chat_id)
+            task = self.start_background(self.init_chat_context(chat_id))
+            self._context_init_tasks[chat_id] = task
+        return task
+
+    async def ensure_chat_context(self, chat_id):
+        if chat_id in self._context_ready or not self._client or self._closed:
+            return
+        task = self._context_init_tasks.get(chat_id)
+        if task is None:
+            task = self.schedule_chat_context(chat_id)
+        if task is not asyncio.current_task():
+            await asyncio.shield(task)
+
+    def group_chatty_probability(self, chat_id):
+        raw = self.db.get_state(f"chat_chatty_{chat_id}")
+        if not raw:
+            rules = self.db.get_chat_prompt(chat_id) + " " + self.db.get_permanent_context(chat_id).get("notes", "")
+            ratio = re.search(r"\b(?:reply|respond|participate|message|talk|send)\s+(?:(?:rate|frequency|chance|probability)\s*(?:of|at|is)?\s*)?(\d+(?:\.\d+)?)\s*(?:times\s+in|out\s+of|/)\s*(\d+)\s*(?:sends|messages|texts)?", rules, re.I)
+            percent = re.search(r"\b(?:reply|respond|participate|message|talk|send)\s*(?:rate|frequency|chance|probability)?\s*(?:of|at|is)?\s*(\d+(?:\.\d+)?)%", rules, re.I)
+            if ratio and float(ratio[2]) > 0:
+                raw = str(float(ratio[1]) / float(ratio[2]))
+            elif percent:
+                raw = str(float(percent[1]) / 100)
+        if not raw:
+            raw = self.db.get_state("chatty_probability", str(getattr(self.config, "chatty_probability", 0.15)))
+        try:
+            value = float(raw)
+            return min(1.0, max(0.0, value)) if math.isfinite(value) else 0.0
+        except (ValueError, TypeError):
+            return 0.0
+
+    def _context_current(self, context, approved=False):
+        if not self.context_agent.is_current(context):
+            return False
+        if context is not None and context.chat_id < 0 and not approved and not getattr(context, "is_mention", False):
+            return self.db.get_state("group_mention_only", "0") != "1" and self.group_chatty_probability(context.chat_id) > 0
+        return True
 
     def start_background(self, coroutine):
         task = asyncio.create_task(coroutine)
@@ -158,6 +207,7 @@ class ReplyManager(CommandRouterMixin):
         self._debounce_first_time.clear()
         self._debounce_last_time.clear()
         self._pending_deferred_replies.clear()
+        self._context_init_tasks.clear()
         await self.context_agent.close()
 
     def _outgoing_text_reason(self, chat_id: int, text: str, names=()) -> str:
@@ -224,7 +274,7 @@ class ReplyManager(CommandRouterMixin):
             return None
         while True:
             async with self._outgoing_lock:
-                if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours) or not self.context_agent.is_current(context) or not self._operator_allowed(operator_id):
+                if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours) or not self._context_current(context, approved) or not self._operator_allowed(operator_id):
                     return None
                 if not self._prevent_duplicate_reply(chat_id, text):
                     return None
@@ -237,7 +287,7 @@ class ReplyManager(CommandRouterMixin):
                 if can_send and wait <= 0:
                     await self._type_before_send(chat_id, typing_seconds)
                     if (not self._outgoing_allowed(chat_id, approved, allow_quiet_hours)
-                            or not self.context_agent.is_current(context) or not self._operator_allowed(operator_id)):
+                            or not self._context_current(context, approved) or not self._operator_allowed(operator_id)):
                         return None
                     if not self.safety.can_reply(chat_id, text, allow_quiet_hours=allow_quiet_hours)[0] or self.safety.burst_wait_needed(chat_id) > 0:
                         continue
@@ -250,6 +300,11 @@ class ReplyManager(CommandRouterMixin):
                     except Exception as e:
                         if not reply_to or "reply" not in str(e).lower() or not self._outgoing_allowed(chat_id, approved, allow_quiet_hours):
                             raise
+                        if (not self._context_current(context, approved) or not self._operator_allowed(operator_id)
+                                or self._outgoing_text_reason(chat_id, text)
+                                or not self.safety.can_reply(chat_id, text, allow_quiet_hours=allow_quiet_hours)[0]
+                                or self.safety.burst_wait_needed(chat_id) > 0):
+                            return None
                         message = await self._client.send_message(chat_id, text)
                     self.safety.mark_reply_sent(chat_id)
                     self.safety.record_burst_send(chat_id)
@@ -333,7 +388,8 @@ class ReplyManager(CommandRouterMixin):
                 return None
             if pinned_msgs:
                 texts = [self.privacy.sanitize_text(m.text.strip()) for m in pinned_msgs
-                         if getattr(m, "text", None) and m.text.strip() and not self.safety.is_sensitive(m.text)]
+                         if getattr(m, "text", None) and m.text.strip() and not self.safety.is_sensitive(m.text)
+                         and self.privacy.is_user_allowed(getattr(m, "sender_id", None))]
                 if texts:
                     raw_combined = "\n---\n".join(texts)
                     loop = asyncio.get_running_loop()
@@ -346,6 +402,8 @@ class ReplyManager(CommandRouterMixin):
                     self.db.set_permanent_context(chat_id, pinned_text=pinned_content)
                     logger.info(f"AI-distilled permanent pinned context for '{chat_title}' ({chat_id}): {len(pinned_content)} chars")
                     return pinned_content
+            # A successful empty fetch invalidates old announcements; failures retain them.
+            self.db.set_permanent_context(chat_id, pinned_text="")
         except Exception as e:
             logger.debug(f"Could not fetch pinned messages for chat {chat_id}: {e}")
         return None
@@ -364,7 +422,7 @@ class ReplyManager(CommandRouterMixin):
             lines: list[str] = []
             for m in msgs:
                 txt = (getattr(m, "text", "") or "").strip()
-                if not txt or self.safety.is_sensitive(txt):
+                if not txt or self.safety.is_sensitive(txt) or not self.privacy.is_user_allowed(getattr(m, "sender_id", None)):
                     continue
                 sender = "someone"
                 try:
@@ -536,13 +594,22 @@ class ReplyManager(CommandRouterMixin):
         """Process a single or stitched incoming message."""
         if self._closed or not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
             return
+        if self._context_startup_enabled or chat_id in self._context_init_tasks:
+            await self.ensure_chat_context(chat_id)
+            if self._closed or not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
+                return
+        if not self.privacy.is_user_allowed(sender_id):
+            return
+        pending = self._pending_deferred_replies.pop(chat_id, None)
+        if pending and pending is not asyncio.current_task() and not pending.done():
+            pending.cancel()
         if self.current_mode == "restricted_auto" and self.safety.action_block_reason():
             return
         # Sanitize incoming text before passing to generator
         clean_text = self.privacy.sanitize_text(text)
 
         age_question = re.search(r"\b(?:how old are you|(?:your|ur|tumhari|aapki)\s+(?:age|umar)|kitne saal ke)\b", text, re.IGNORECASE)
-        if age_question and self.generator.prompt_manager.known_owner_age(self.db.get_chat_prompt(chat_id)) is None:
+        if age_question and self.generator.prompt_manager.known_owner_age(self.db.get_chat_prompt(chat_id), is_group=chat_id < 0) is None:
             self.db.record_action("automation", "reply", "skipped", "Age is not configured; answer left to the account owner", chat_id=chat_id)
             return
 
@@ -585,7 +652,7 @@ class ReplyManager(CommandRouterMixin):
                     pinned_text = fetched_pin
 
             # Rebuild after fetching pins; each stage receives the same chat snapshot.
-            if not self.context_agent.is_current(context):
+            if not self._context_current(context):
                 return
             context = self.context_agent.snapshot(chat_id, conversation_history, is_mention=is_mention)
             if context is None:
@@ -645,7 +712,7 @@ class ReplyManager(CommandRouterMixin):
                 )
             return
 
-        if not self.context_agent.is_current(context):
+        if not self._context_current(context):
             self.db.record_action("humanizer", "reply", "skipped", "Conversation changed while the reply was being written", chat_id=chat_id)
             return
 
@@ -838,7 +905,8 @@ class ReplyManager(CommandRouterMixin):
                         recent_msgs = await self._client.get_messages(chat_id, limit=20)
                         for m in reversed(recent_msgs):
                             m_text = getattr(m, "message", None) or getattr(m, "text", None) or ""
-                            if not m_text.strip() or self.safety.is_sensitive(m_text):
+                            if (not m_text.strip() or self.safety.is_sensitive(m_text)
+                                    or not self.privacy.is_user_allowed(getattr(m, "sender_id", None))):
                                 continue
                             sender_name = "Contact"
                             try:
@@ -868,6 +936,7 @@ class ReplyManager(CommandRouterMixin):
 
             if self.db:
                 self.db.sync_chat_context_file(chat_id)
+            self._context_ready.add(chat_id)
             logger.info(f"[INIT CONTEXT] Successfully initialized permanent context for chat {chat_id} ({title}).")
         except Exception as e:
             logger.warning(f"[INIT CONTEXT] Error initializing context for chat {chat_id}: {e}")
@@ -890,7 +959,7 @@ class ReplyManager(CommandRouterMixin):
         delay_started_at = time.monotonic()
         try:
             while True:
-                if not self._outgoing_allowed(chat_id) or not self.context_agent.is_current(context):
+                if not self._outgoing_allowed(chat_id) or not self._context_current(context):
                     return
                 can_send, reason = self.safety.can_reply(chat_id, draft)
                 if can_send:
@@ -1178,7 +1247,7 @@ class ReplyManager(CommandRouterMixin):
             recover_min = max(1, int(self.db.get_state("safe_mode_recover_minutes", "15")))
         except ValueError:
             return
-        if time.time() - since < recover_min * 60:
+        if time.time() - max(since, self._process_started_at) < recover_min * 60:
             return
         prev = self.db.get_state("safe_mode_prev_mode", "restricted_auto")
         self.db.set_state("reply_mode", prev)
@@ -1763,7 +1832,8 @@ class ReplyManager(CommandRouterMixin):
         if not self._client:
             logger.error("Cannot send reply: Telegram client is not attached.")
             return False
-        if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours) or not self.context_agent.is_current(context):
+        self._last_delivery_parts[chat_id] = 0
+        if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours) or not self._context_current(context, approved):
             return False
         if self.safety.is_sensitive(text):
             return False
@@ -1773,6 +1843,7 @@ class ReplyManager(CommandRouterMixin):
             return False
 
         async with self._get_chat_send_lock(chat_id):
+            self._last_delivery_parts[chat_id] = 0
             # Cancel any pending deferred reply task for this chat to avoid double-sends
             curr_task = asyncio.current_task()
             old_task = self._pending_deferred_replies.get(chat_id)
@@ -1804,6 +1875,7 @@ class ReplyManager(CommandRouterMixin):
             sent_any = False
             try:
                 chat_min, _ = self.safety._get_chat_cooldown_range(chat_id)
+                initial_range = self.safety._get_chat_cooldown_range(chat_id)
 
                 # Strict per-chat minimum cooldown check
                 now_check = time.time()
@@ -1868,8 +1940,21 @@ class ReplyManager(CommandRouterMixin):
                     )
 
                     # Phase 1: Reading/thinking pause
-                    if reading_delay > 0:
-                        await asyncio.sleep(reading_delay)
+                    remaining_reading = reading_delay
+                    while remaining_reading > 0:
+                        if not self._outgoing_allowed(chat_id, approved, allow_quiet_hours) or not self._context_current(context, approved):
+                            return False
+                        current_range = self.safety._get_chat_cooldown_range(chat_id)
+                        if current_range != initial_range:
+                            new_target = self.calculate_adaptive_delay(chat_id, first_part, is_mention=is_mention) if adaptive_delay else 0.0
+                            elapsed_reading = reading_delay - remaining_reading + elapsed_wait
+                            remaining_reading = min(remaining_reading, max(0.0, max(new_target, current_range[0]) - typing_duration - elapsed_reading))
+                            initial_range = current_range
+                        if remaining_reading <= 0:
+                            break
+                        step = min(1.0, remaining_reading)
+                        await asyncio.sleep(step)
+                        remaining_reading -= step
 
                     # Abort if emergency stop was triggered during reading delay
                     if self.safety.is_emergency_stopped:
@@ -1882,6 +1967,7 @@ class ReplyManager(CommandRouterMixin):
                 if first_sent is None:
                     return False
                 sent_any = True
+                self._last_delivery_parts[chat_id] = 1
                 self._last_sent_reply_by_chat[chat_id] = first_part
                 if chat_id < 0:
                     self.mark_group_activity(chat_id)
@@ -1915,7 +2001,7 @@ class ReplyManager(CommandRouterMixin):
                 if edit_fix_original is not None and first_msg_id and not self.safety.is_emergency_stopped:
                     await asyncio.sleep(random.uniform(1.5, 3.0))
                     if (not self._outgoing_allowed(chat_id, approved, allow_quiet_hours)
-                            or not self._operator_allowed(operator_id) or not self.context_agent.is_current(context)
+                            or not self._operator_allowed(operator_id) or not self._context_current(context, approved)
                             or self._outgoing_text_reason(chat_id, edit_fix_original)):
                         return True
                     try:
@@ -1981,6 +2067,7 @@ class ReplyManager(CommandRouterMixin):
                     sub_sent = await self._deliver_message(chat_id, part, approved=approved, allow_quiet_hours=allow_quiet_hours, context=context, operator_id=operator_id, typing_seconds=followup_typing)
                     if sub_sent is None:
                         break
+                    self._last_delivery_parts[chat_id] = idx
                     sub_msg_id = getattr(sub_sent, "id", 0)
                     if not isinstance(sub_msg_id, int):
                         sub_msg_id = 0
@@ -1995,7 +2082,10 @@ class ReplyManager(CommandRouterMixin):
                     )
                     logger.info(f"Successfully sent reply part {idx}/{len(msg_parts)} to chat {chat_id}.")
 
-                return True
+                complete = self._last_delivery_parts[chat_id] == len(msg_parts)
+                if not complete:
+                    self.db.record_action("automation", "reply", "failed", f"Partial delivery: {self._last_delivery_parts[chat_id]}/{len(msg_parts)} parts sent; not retried automatically", chat_id=chat_id)
+                return complete
             except Exception as e:
                 # Check for Telegram FloodWaitError
                 self.db.record_action("automation", "reply", "failed", "Telegram delivery failed: " + type(e).__name__, chat_id=chat_id)
@@ -2014,7 +2104,7 @@ class ReplyManager(CommandRouterMixin):
                         incoming_text=text,
                         message_id=reply_to_msg_id,
                     )
-                    return sent_any
+                    return False
 
                 # Check for Telegram PeerFloodError (account restricted by Telegram anti-spam)
                 if (PeerFloodError and isinstance(e, PeerFloodError)) or "peerflood" in e.__class__.__name__.lower():
@@ -2031,7 +2121,7 @@ class ReplyManager(CommandRouterMixin):
                         incoming_text=text,
                         message_id=reply_to_msg_id,
                     )
-                    return sent_any
+                    return False
 
                 self.safety.record_error()
                 logger.error(f"Failed to send message to chat {chat_id}: {e}")
@@ -2043,4 +2133,4 @@ class ReplyManager(CommandRouterMixin):
                     incoming_text=text,
                     message_id=reply_to_msg_id,
                 )
-                return sent_any
+                return False
