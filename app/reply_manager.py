@@ -887,6 +887,7 @@ class ReplyManager(CommandRouterMixin):
         context=None,
     ) -> None:
         """Queue and send a deferred reply after cooldown expires so no reply is sent prematurely or dropped."""
+        delay_started_at = time.monotonic()
         try:
             while True:
                 if not self._outgoing_allowed(chat_id) or not self.context_agent.is_current(context):
@@ -902,7 +903,8 @@ class ReplyManager(CommandRouterMixin):
 
             if self._pending_deferred_replies.get(chat_id) is asyncio.current_task():
                 self._pending_deferred_replies.pop(chat_id, None)
-            sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True, is_mention=is_mention, context=context)
+            sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True, is_mention=is_mention, context=context,
+                                          delay_started_at=delay_started_at)
             if sent:
                 self.start_background(self.refresh_single_chat_summary(chat_id))
                 logger.info(f"[DEFERRED REPLY SENT] Successfully replied to chat {chat_id} after cooldown.")
@@ -1753,8 +1755,11 @@ class ReplyManager(CommandRouterMixin):
         allow_quiet_hours: bool = False,
         context=None,
         operator_id=None,
+        delay_started_at: Optional[float] = None,
     ) -> bool:
         """Send message using Telethon client with adaptive human reading/typing delay and error handling."""
+        if delay_started_at is None:
+            delay_started_at = time.monotonic()
         if not self._client:
             logger.error("Cannot send reply: Telegram client is not attached.")
             return False
@@ -1849,13 +1854,17 @@ class ReplyManager(CommandRouterMixin):
                         reading_delay = natural_reading_pause
                     total_delay = reading_delay + typing_duration
 
+                elapsed_wait = max(0.0, time.monotonic() - delay_started_at)
+                reading_delay = max(0.0, reading_delay - elapsed_wait)
+                total_delay = reading_delay + typing_duration
+
                 if total_delay > 0:
                     env_type = "Group" if chat_id < 0 else "Private DM"
                     mention_str = " (Mention)" if is_mention else ""
                     logger.info(
                         f"[{env_type} Delay{mention_str}] Total delay: {total_delay:.1f}s "
                         f"(reading: {reading_delay:.1f}s, typing indicator: {typing_duration:.1f}s) "
-                        f"for chat {chat_id} (chat_min={chat_min}s)."
+                        f"for chat {chat_id} (chat_min={chat_min}s, already_waited={elapsed_wait:.1f}s)."
                     )
 
                     # Phase 1: Reading/thinking pause

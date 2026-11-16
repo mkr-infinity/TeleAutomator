@@ -269,7 +269,7 @@
       owner_name: "Kaif", ai_engine: "Gemini", ai_model: "gemini-2.5-flash-lite", ai_base_url: "",
       available_models: ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"],
       models_manually_set: false,
-      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.9",
+      chats_allowed: 6, pending_count: 2, replies_24h: 41, tokens_today: 18320, version: "3.0.10",
       auto_reactions: true, ownreact: true, multibubble: true, typo: true, debounce: true, followup: false, mention_only: false,
       thinking: "default", temperature: "0.7", lang: "english", max_tokens: "512",
       quiet_hours_start: "02:00", quiet_hours_end: "08:00", quiet_hours_schedule: "02:00 AM – 08:00 AM IST",
@@ -312,7 +312,7 @@
   };
 
   async function demoApi(path, body) {
-    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.9", user: { id: 555000111, name: "Kaif" } };
+    if (path === "/api/auth") return { authorized: true, is_main: true, version: "3.0.10", user: { id: 555000111, name: "Kaif" } };
     if (path === "/api/state") return DEMO_DATA.state;
     if (path === "/api/chats") return { chats: DEMO_DATA.chats, chatty_global: DEMO_DATA.state.chatty_global };
     if (path === "/api/pending") return { pending: DEMO_DATA.pending };
