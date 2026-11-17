@@ -49,6 +49,7 @@ Before implementing a new task:
 - Do not emit participant names, usernames, mentions, email addresses, or links in automatic conversational text. Group replies must not quote/tag another user's message. Preserve outgoing filters; prompts alone are not enforcement.
 - Capitalize the first alphabetic character of every outgoing automated message bubble without altering the rest unnecessarily. Keep final delivery guards for queued, approved, follow-up, and correction paths.
 - Context files live under the configured data directory's `contexts/` folder, separated by chat ID. Preserve user notes and pins when updating model summaries. Filter sensitive content before model calls/storage; handle concurrent writes and allowlist revocation.
+- Pending group replies survive incoming chatter; owner activity, revoked access, cleared memory, reduced chatty, mention-only, and final delivery guards still apply. Private drafts remain superseded by newer incoming messages.
 - Preserve lifecycle cancellation, duplicate prevention, bounded summary jobs, provider fallback behavior, permission checks, and atomic settings updates.
 - Mini App changes must work on mobile, especially Telegram Android: fullscreen/expanded layout where supported, safe-area/keyboard handling, stable popups, swipe behavior, visible errors, and no duplicate actions. Keep startup, polling, payloads, and rendering lightweight.
 
@@ -168,7 +169,7 @@ Paths below are repository-relative. Read actual code before using this map as a
 | `tests/test_deferred_delay_budget.py` | Queue/lock time credited toward reading without skipping typing or Stop. |
 | `tests/test_delivery_integrity.py` | Delivery retry guards, stale drafts, chatty parsing, approval batches, and sleep pauses. |
 | `tests/test_frontend.py` | Pytest wrappers for Node and browser workflow tests. |
-| `tests/test_group_engagement.py` | Open invitations, thread joining, 100% chatty, reaction share, skip logs, pending-reply tolerance, and summary back-off. |
+| `tests/test_group_engagement.py` | Open invitations, thread joining, 100% chatty, reaction share, skip logs, pending-reply authorization, and summary back-off. |
 | `tests/test_human_text_policy.py` | Two-line limit, code and instruction guards, and human-text cleaning. |
 | `tests/test_launchers.py` | Launcher and container entrypoint behavior (ownership, privilege drop, storage checks). |
 | `tests/test_logger.py` | Log redaction. |

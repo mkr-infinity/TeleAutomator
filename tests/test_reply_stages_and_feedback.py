@@ -147,16 +147,15 @@ def test_context_summary_jobs_have_a_global_concurrency_bound(tmp_path):
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("change", ["new_topic", "clear_memory"])
+@pytest.mark.parametrize("change", ["owner_reply", "clear_memory"])
 def test_reply_is_discarded_if_its_context_changes_during_generation(tmp_path, change):
     s = make_stack(tmp_path)
     s.db.record_chat_message(-100111, 1, 222, "Alice", "When does this release ship?")
     s.manager.sync_pinned_context_from_telegram = AsyncMock(return_value="")
 
     def generate(**_):
-        if change == "new_topic":
-            for number in range(2, 6):  # the room moved on: more messages than a pending group reply tolerates
-                s.db.record_chat_message(-100111, number, 333, "Bob", f"Let's discuss the next meetup instead {number}")
+        if change == "owner_reply":
+            s.manager.owner_recently_active = lambda _: True
         else:
             s.db.clear_chat_context(-100111)
         return "The release is due Friday"
@@ -170,8 +169,7 @@ def test_reply_is_discarded_if_its_context_changes_during_generation(tmp_path, c
 def test_deferred_and_transport_paths_also_reject_stale_context(tmp_path):
     s = make_stack(tmp_path)
     context = s.manager.context_agent.snapshot(-100111)
-    for number in range(2, 6):
-        s.db.record_chat_message(-100111, number, 333, "Bob", f"New topic {number}")
+    s.db.clear_chat_context(-100111)
 
     async def run():
         await s.manager._schedule_deferred_reply(-100111, 1, "Old reply", context=context)

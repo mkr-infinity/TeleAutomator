@@ -78,7 +78,7 @@ class ReplyManager(CommandRouterMixin):
         self.safety = safety_manager
         self.privacy = privacy_manager
         self.generator = reply_generator
-        self.context_agent = ContextAgent(database, privacy_manager, reply_generator)
+        self.context_agent = ContextAgent(database, privacy_manager, reply_generator, self.group_chatty_probability)
         self._approval_batch_task = None
         self._background_tasks = set()
         self._context_initializing = set()
@@ -219,7 +219,9 @@ class ReplyManager(CommandRouterMixin):
         if not self.context_agent.is_current(context):
             return False
         if context is not None and context.chat_id < 0 and not approved and not getattr(context, "is_mention", False):
-            return self.db.get_state("group_mention_only", "0") != "1" and self.group_chatty_probability(context.chat_id) > 0
+            probability = self.group_chatty_probability(context.chat_id)
+            return (self.db.get_state("group_mention_only", "0") != "1"
+                    and probability > 0 and probability >= context.chatty_probability)
         return True
 
     def start_background(self, coroutine):
@@ -1854,7 +1856,7 @@ class ReplyManager(CommandRouterMixin):
         elif invite:
             mode, chance = "open", max(base, self.OPEN_INVITE_MIN_CHANCE)
         elif full or self.is_group_message_relevant(chat_id, text, chat_title):
-            mode, chance = "", base
+            mode, chance = "active" if full else "", base
         else:
             return 0.0, "", "No relevant contribution requested"
         if not full and mode != "open":

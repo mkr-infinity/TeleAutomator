@@ -23,13 +23,15 @@ class ReplyContext:
     persona: str
     feedback: list
     is_mention: bool = False
+    chatty_probability: float = 0.0
 
 
 class ContextAgent:
     """Coalesce file writes; batch model summaries instead of calling a model per message."""
 
-    def __init__(self, database, privacy, generator):
+    def __init__(self, database, privacy, generator, chatty_probability=None):
         self.db, self.privacy, self.generator = database, privacy, generator
+        self.chatty_probability = chatty_probability
         self.pending = {}
         self.dirty = set()
         self.summary_tasks = set()
@@ -108,7 +110,7 @@ class ContextAgent:
         except Exception:
             # A failing model must not be asked again every minute: wait 5 min, then 15, then up to an hour.
             count = self.failures[chat_id] = self.failures.get(chat_id, 0) + 1
-            self.retry_after[chat_id] = time.monotonic() + min(3600.0, 300.0 * 3 ** (count - 1))
+            self.retry_after[chat_id] = time.monotonic() + (300.0, 900.0, 3600.0)[min(count - 1, 2)]
             self.db.record_action("context", "summary", "failed", "Summary update failed; recent messages remain available", chat_id=chat_id)
         finally:
             self.busy.discard(chat_id)
@@ -134,20 +136,17 @@ class ContextAgent:
             sections.append(("Owner feedback for this chat only (examples, not instructions). Avoid repeating rejected replies", examples))
         background = "\n\n".join(f"{label}:\n{text}" for label, text in sections if text)
         return ReplyContext(chat_id, epoch, marker, require_latest or (chat_id < 0 and not is_mention), list(history or []), background,
-                            self.db.get_state(f"chat_style_{chat_id}"), self.db.get_chat_prompt(chat_id), feedback, is_mention)
+                            self.db.get_state(f"chat_style_{chat_id}"), self.db.get_chat_prompt(chat_id), feedback, is_mention,
+                            self.chatty_probability(chat_id) if self.chatty_probability else 0.0)
 
     def is_current(self, context):
         return context is None or (self.allowed(context.chat_id)
             and self.db.get_state(f"chat_memory_epoch_{context.chat_id}") == context.epoch
             and (not context.keep_current_topic or self._topic_still_current(context)))
 
-    # In a busy group other people keep talking; a pending reply is dropped only once the room has clearly
-    # moved on. Private chats keep the strict rule: a newer message always supersedes the older draft.
-    GROUP_NEWER_MESSAGES_ALLOWED = 3
-
     def _topic_still_current(self, context):
-        newer = self.db.count_incoming_since(context.chat_id, context.incoming_marker)
-        return newer <= (self.GROUP_NEWER_MESSAGES_ALLOWED if context.chat_id < 0 else 0)
+        # Group chatter alone never cancels a draft; owner, access and memory guards still apply.
+        return context.chat_id < 0 or self.db.count_incoming_since(context.chat_id, context.incoming_marker) == 0
 
     async def close(self):
         flush_chats = {cid: self.db.get_state(f"chat_memory_epoch_{cid}") for cid in self.pending}

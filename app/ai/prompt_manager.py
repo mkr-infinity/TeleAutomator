@@ -504,6 +504,9 @@ class PromptManager:
                     "or someone starting a conversation). A real member would usually join in, so answer naturally using the "
                     "pinned info, notes, voice and recent messages above, and follow the owner's persona and context. "
                     "This overrides the general advice that greetings need no reply. Use NONE only when you truly have nothing natural to add.\n")
+        if engagement == "active":
+            return ("Group Engagement: The owner selected full participation for this group. Join naturally using the "
+                    "current conversation, notes, pins and configured persona; use NONE when no useful reply fits.\n")
         if engagement == "thread":
             return ("Group Engagement: This message is part of a conversation between other members. Join only because it "
                     "concerns this group's own topics and details from the notes and pins above; keep it short and natural, "
@@ -602,7 +605,7 @@ class PromptManager:
         )
 
         engagement_instruction = (
-            "First decide whether a useful reply is needed. In groups, occasionally join a relevant open conversation; ignore other people's threads. "
+            "First decide whether a useful reply is needed. In groups, occasionally join a relevant open conversation; join other people's threads only when the Group Engagement guidance below permits it. "
             "Examine recent messages to adopt the chat's actual conversational style, casing, abbreviations, and informal rhythm. "
             f"{mention_rule} "
             "NEVER send messages saying 'haha', 'lol', or 'lmao' as text; use emoji reactions or express real thoughts. "

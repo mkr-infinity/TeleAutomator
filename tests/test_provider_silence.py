@@ -197,3 +197,30 @@ def test_empty_answer_logs_why(monkeypatch, caplog):
     with caplog.at_level("WARNING"), pytest.raises(RuntimeError, match="empty content"):
         provider.generate_reply("hi", "x")
     assert "finish_reason=length" in caplog.text and "max_tokens=3000" in caplog.text
+
+
+@pytest.mark.parametrize("base", ["https://inceptionlabs.example/v1", "https://custom.example/inceptionlabs", "https://openai.com.example/v1", "https://custom.example/nvidia"])
+def test_custom_provider_does_not_inherit_vendor_models_or_limits(base):
+    provider = OpenAIProvider("fixture", model="custom-model", base_url=base, max_tokens=512)
+    assert provider.get_candidate_models() == ["custom-model"]
+    assert provider.effective_max_tokens() == 512
+
+
+@pytest.mark.parametrize("content,working", [("Ready", True), (None, False), ("", False), ("NONE", True)])
+def test_model_check_uses_custom_endpoint_fallback_and_rejects_empty_answers(monkeypatch, content, working):
+    provider = OpenAIProvider("fixture", model="custom-model", base_url="https://custom.example")
+    requests = []
+
+    def request(req, timeout):
+        requests.append(req.full_url)
+        if req.full_url.endswith(".example/chat/completions"):
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+        reply = MagicMock()
+        reply.read.return_value = json.dumps({"choices": [{"message": {"content": content}}]}).encode()
+        reply.__enter__.return_value = reply
+        return reply
+
+    monkeypatch.setattr("urllib.request.urlopen", request)
+    assert provider.check_working_models()[0][1] is working
+    assert requests == ["https://custom.example/chat/completions", "https://custom.example/v1/chat/completions"]
+    assert provider.endpoint_url == requests[-1]

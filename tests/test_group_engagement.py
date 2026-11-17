@@ -43,7 +43,7 @@ def test_unrelated_statement_is_skipped_at_default_but_not_at_full_chatty(tmp_pa
     assert plan(s, "my cat knocked a glass over")[0] == 0.0
     s.db.set_state("chat_chatty_-100111", "1.0")
     chance, mode, _ = plan(s, "my cat knocked a glass over", recent_active=0)
-    assert chance == 1.0 and mode == ""  # no quiet-room reduction at 100%
+    assert chance == 1.0 and mode == "active"  # no quiet-room reduction at 100%
 
 
 def test_quiet_room_still_reduces_ordinary_chances_below_full(tmp_path):
@@ -78,8 +78,11 @@ def test_prompt_tells_the_model_how_to_join_without_sample_text(tmp_path):
     assert "addresses another participant" not in open_prompt
     thread_prompt = pm.build_user_prompt("Sam", "validator news", is_group=True, engagement="thread")
     assert "between other members" in thread_prompt
+    assert "ignore other people's threads" not in thread_prompt
+    active = pm.build_user_prompt("Sam", "news today", is_group=True, engagement="active")
+    assert "full participation" in active
     plain = pm.build_user_prompt("Sam", "validator news", is_group=True)
-    assert "Group Engagement" not in plain and "addresses another participant" in plain
+    assert "Group Engagement:" not in plain and "addresses another participant" in plain
 
 
 def build_handler(s):
@@ -139,7 +142,7 @@ def test_skips_are_logged_with_a_reason(tmp_path, caplog):
     assert s.db.list_actions("skipped")[0]["detail"].startswith("Message is addressed")
 
 
-def test_pending_group_reply_survives_a_few_unrelated_messages_but_not_a_new_topic(tmp_path):
+def test_pending_group_reply_survives_chatter_but_not_memory_clear(tmp_path):
     s = make_stack(tmp_path)
     s.db.record_chat_message(GROUP, 1, 222, "Alice", "anyone know when the release ships")
     context = s.manager.context_agent.snapshot(GROUP)
@@ -147,6 +150,8 @@ def test_pending_group_reply_survives_a_few_unrelated_messages_but_not_a_new_top
         s.db.record_chat_message(GROUP, number, 333, "Bob", f"random chatter {number}")
     assert s.manager.context_agent.is_current(context)
     s.db.record_chat_message(GROUP, 5, 333, "Bob", "more chatter")
+    assert s.manager.context_agent.is_current(context)
+    s.db.clear_chat_context(GROUP)
     assert not s.manager.context_agent.is_current(context)
 
 
@@ -171,3 +176,74 @@ def test_failing_summaries_back_off_instead_of_retrying_every_minute(tmp_path):
         await agent.close()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("change", ["owner", "revoke", "clear", "lower_chatty", "mention_only"])
+def test_pending_group_reply_keeps_final_authorization_guards(tmp_path, change):
+    s = make_stack(tmp_path)
+    s.db.set_state("chat_chatty_-100111", "1")
+    context = s.manager.context_agent.snapshot(GROUP)
+    for number in range(1, 12):
+        s.db.record_chat_message(GROUP, number, 222, "Member", "More conversation")
+    assert s.manager._context_current(context)
+    if change == "owner":
+        s.manager.owner_recently_active = lambda _: True
+    elif change == "revoke":
+        s.privacy.is_chat_allowed = lambda *_: False
+    elif change == "clear":
+        s.db.clear_chat_context(GROUP)
+    elif change == "lower_chatty":
+        s.db.set_state("chat_chatty_-100111", "0.5")
+    else:
+        s.db.set_state("group_mention_only", "1")
+    assert not s.manager._context_current(context)
+
+
+def test_summary_backoff_schedule_caps_and_resets_after_success(tmp_path):
+    s = make_stack(tmp_path)
+    s.db.record_chat_message(GROUP, 1, 222, "Member", "Release details")
+    agent = s.manager.context_agent
+    s.generator.summarize_chat_history = MagicMock(side_effect=RuntimeError("offline"))
+
+    async def run():
+        with patch("app.ai.chat_context.time", SimpleNamespace(monotonic=lambda: 10000)):
+            for delay in (300, 900, 3600, 3600):
+                await agent.refresh(GROUP, force=True)
+                assert agent.retry_after[GROUP] == 10000 + delay
+            s.generator.summarize_chat_history.side_effect = None
+            s.generator.summarize_chat_history.return_value = "Release details"
+            await agent.refresh(GROUP, force=True)
+            assert GROUP not in agent.failures and GROUP not in agent.retry_after
+        await agent.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("base,effort,expected", [("https://api.inceptionlabs.ai/v1", "default", 3000), ("https://api.inceptionlabs.ai/v1", "instant", 512), ("https://custom.example", "default", 512)])
+def test_miniapp_playground_obeys_provider_limits_and_url_fallback(tmp_path, monkeypatch, base, effort, expected):
+    import json
+    import urllib.error
+    from app.ai.provider import OpenAIProvider
+    s = make_stack(tmp_path)
+    s.generator.provider = OpenAIProvider("fixture", model="selected", base_url=base, max_tokens=512, reasoning_effort=effort)
+    s.db.set_state("ai_reasoning_effort", effort)
+    requests = []
+
+    def request(req, timeout):
+        requests.append(req)
+        if req.full_url == "https://custom.example/chat/completions":
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+        reply = MagicMock()
+        reply.read.return_value = json.dumps({"choices": [{"message": {"content": "Ready"}}]}).encode()
+        reply.__enter__.return_value = reply
+        return reply
+
+    monkeypatch.setattr("urllib.request.urlopen", request)
+    result = s.api.handle_test_model(model="selected", base_url=base, api_key="fixture")
+    assert result["ok"]
+    payload = json.loads(requests[-1].data)
+    assert payload["max_tokens"] == expected
+    if effort == "instant":
+        assert payload["reasoning_effort"] == "instant"
+    if base == "https://custom.example":
+        assert requests[-1].full_url == base + "/v1/chat/completions"

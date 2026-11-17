@@ -249,7 +249,7 @@ def register_handlers(
             # Mention-only filter (default: OFF / "0" so account actively engages in group)
             strict_mention = reply_manager.db.get_state("group_mention_only", "0") == "1"
             if strict_mention and not is_mention:
-                logger.debug(f"Group message in {chat_id} ignored: strict mention-only active.")
+                logger.info("[GROUP SKIP] chat %s: strict mention-only active", chat_id)
                 return
 
             def skip(reason):

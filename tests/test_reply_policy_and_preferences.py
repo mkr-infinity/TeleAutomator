@@ -222,3 +222,23 @@ def test_http_history_and_private_download_expiry(http_server):
     with pytest.raises(urllib.error.HTTPError) as expired:
         urllib.request.urlopen(download)
     assert expired.value.code == 404
+
+
+def test_instant_and_max_tokens_share_the_command_engine(tmp_path):
+    from app.ai.provider import OpenAIProvider
+    s = make_stack(tmp_path)
+    s.generator.provider = OpenAIProvider("fixture", model="mercury-3", base_url="https://api.inceptionlabs.ai/v1")
+
+    async def run():
+        result = await s.manager.handle_control_command("/maxtokens 512")
+        assert "3000" in result
+        assert s.generator.provider.effective_max_tokens() == 3000
+        await s.manager.handle_control_command("/thinking instant")
+        assert s.db.get_state("ai_reasoning_effort") == "instant"
+        assert s.generator.provider.effective_max_tokens() == 512
+        await s.manager.handle_control_command("/maxtokens default")
+        assert s.generator.provider.effective_max_tokens() is None
+        assert s.db.get_state("ai_max_tokens") == ""
+        await s.manager.context_agent.close()
+
+    asyncio.run(run())

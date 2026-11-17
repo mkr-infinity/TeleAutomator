@@ -448,7 +448,7 @@ def test_natural_emoji_rule_and_selective_group_engagement():
     assert "generic filler" in prompt
 
     assert "occasionally join a relevant open conversation" in prompt
-    assert "ignore other people's threads" in prompt
+    assert "join other people's threads only when the Group Engagement guidance below permits it" in prompt
     assert "output exactly NONE" in prompt
 
 

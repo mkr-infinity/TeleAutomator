@@ -2066,7 +2066,7 @@
     if (["chatstyle", "chat_chatty"].includes(item.action) && !/^-?\d+$/.test(String(item.params.chat_id || ""))) return false;
     if (["style", "chatstyle"].includes(item.action)) return ["casual", "concise", "formal", "humorous"].includes(value);
     if (item.action === "lang") return /^[a-zA-Z][a-zA-Z -]{0,39}$/.test(value);
-    if (item.action === "thinking") return ["default", "off", "none", "low", "medium", "high"].includes(value);
+    if (item.action === "thinking") return ["default", "off", "none", "instant", "low", "medium", "high"].includes(value);
     if (item.action === "maxtokens" && value === "default") return true;
     if (item.action === "chat_chatty" && ["def", "default"].includes(value)) return true;
     const number = Number(value);

@@ -518,6 +518,8 @@
           <button type="button" class="seg" data-param="thinking" data-val="off">Off</button>
         </div>
 
+        <p class="field-hint">For Inception Mercury, Instant is recommended for fast casual replies. Other providers keep their native reasoning behavior.</p>
+
         <label>Creativity (Temperature)</label>
         <div class="segrow" id="seg-temp">
           <button type="button" class="seg" data-param="temp" data-val="0.2">0.2 Precise</button>
@@ -542,7 +544,7 @@
           <button type="button" class="seg" data-param="maxtokens" data-val="1024">1024 Detailed</button>
           <button type="button" class="seg" data-param="maxtokens" data-val="2048">2048 Long</button>
         </div>
-        <p class="field-hint">Mercury and other thinking models spend part of this limit on reasoning, so Inception endpoints raise anything under 3000 automatically. Chat replies stay short either way.</p>
+        <p class="field-hint">Mercury and other thinking models spend part of this limit on reasoning, so Inception endpoints raise explicit limits below 3000 automatically (256 with Instant). Provider Default leaves the limit to the provider. Chat replies stay short either way.</p>
       </div>
 
       <!-- Keyword Auto-Reply Rules -->

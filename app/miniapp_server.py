@@ -35,7 +35,7 @@ from typing import Any, Optional
 
 from app import __version__ as APP_VERSION
 from app.ai.prompt_manager import VALID_STYLES
-from app.ai.provider import normalize_base_url
+from app.ai.provider import OpenAIProvider, normalize_base_url
 from app.ai.reply_generator import create_ai_provider
 from app.bot_control import authorized_user_ids, can_run_command
 from app.logger import setup_logger
@@ -1335,13 +1335,10 @@ class MiniAppAPI:
                 except Exception as e:
                     results.append({"model": clean_m, "ok": False, "detail": str(e)[:120]})
         else:
-            raw_endpoint = (effective_base or "https://api.openai.com/v1").rstrip("/")
-            if raw_endpoint.endswith("/models"):
-                raw_endpoint = raw_endpoint[:-len("/models")].rstrip("/")
-            if not raw_endpoint.endswith("/chat/completions"):
-                endpoint = f"{raw_endpoint}/chat/completions"
-            else:
-                endpoint = raw_endpoint
+            probe = OpenAIProvider(key, base_url=effective_base,
+                                   max_tokens=getattr(expected_provider, "max_tokens", None),
+                                   reasoning_effort=self.ctx.db.get_state("ai_reasoning_effort", "default"))
+            endpoint = probe.endpoint_url
 
             for m in candidates:
                 remaining = deadline - time.monotonic()
@@ -1351,9 +1348,12 @@ class MiniAppAPI:
                 payload = {
                     "model": m,
                     "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 300,
                     "temperature": 0.7,
                 }
+                if probe.effective_max_tokens() is not None:
+                    payload["max_tokens"] = probe.effective_max_tokens()
+                if probe._is_inception() and probe.reasoning_effort not in ("default", "off", "none", ""):
+                    payload["reasoning_effort"] = probe.reasoning_effort
                 data = json.dumps(payload).encode("utf-8")
                 req = urllib.request.Request(
                     endpoint,
@@ -1362,20 +1362,29 @@ class MiniAppAPI:
                     method="POST",
                 )
                 try:
-                    with urllib.request.urlopen(req, timeout=min(12.0, remaining)) as resp:
-                        body = json.loads(resp.read().decode("utf-8"))
-                        choices = body.get("choices", [])
-                        if choices:
-                            content = choices[0].get("message", {}).get("content") or ""
-                            content = str(content).strip()
-                            if content and content.lower() not in ("none", "null", "undefined"):
-                                working_models.append(m)
-                                results.append({"model": m, "ok": True, "detail": "Working"})
-                                if not reply_text:
-                                    reply_text = content
-                                    first_working_model = m
-                                continue
-                        results.append({"model": m, "ok": False, "detail": "Empty choices response"})
+                    try:
+                        with urllib.request.urlopen(req, timeout=min(12.0, remaining)) as resp:
+                            body = json.loads(resp.read().decode("utf-8"))
+                    except urllib.error.HTTPError as error:
+                        alternate = probe._fallback_endpoint() if error.code == 404 else ""
+                        remaining = deadline - time.monotonic()
+                        if not alternate or remaining <= 0:
+                            raise
+                        with urllib.request.urlopen(probe._build_request(alternate, data), timeout=min(12.0, remaining)) as resp:
+                            body = json.loads(resp.read().decode("utf-8"))
+                        endpoint = probe.endpoint_url = alternate
+                    choices = body.get("choices", [])
+                    if choices:
+                        content = choices[0].get("message", {}).get("content") or ""
+                        content = str(content).strip()
+                        if content and content.lower() not in ("none", "null", "undefined"):
+                            working_models.append(m)
+                            results.append({"model": m, "ok": True, "detail": "Working"})
+                            if not reply_text:
+                                reply_text = content
+                                first_working_model = m
+                            continue
+                    results.append({"model": m, "ok": False, "detail": "Empty choices response"})
                 except urllib.error.HTTPError as e:
                     detail = f"HTTP {e.code}"
                     try:

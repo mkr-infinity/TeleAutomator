@@ -222,16 +222,16 @@ class OpenAIProvider(AIProvider):
             if cleaned and cleaned not in candidates:
                 candidates.append(cleaned)
 
-        endpoint_lower = self.endpoint_url.lower()
-        if "inceptionlabs" in endpoint_lower:
+        host = urllib.parse.urlsplit(self.endpoint_url).hostname or ""
+        if self._is_inception():
             for fallback in ("mercury-3", "mercury-3-preview-1014", "mercury-3-preview-1002"):
                 if fallback not in candidates:
                     candidates.append(fallback)
-        elif "openai.com" in endpoint_lower:
+        elif host == "api.openai.com":
             for fallback in ("gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"):
                 if fallback not in candidates:
                     candidates.append(fallback)
-        elif "nvidia" in endpoint_lower:
+        elif host == "integrate.api.nvidia.com":
             for fallback in ("meta/llama-3.1-70b-instruct", "meta/llama-3.1-8b-instruct"):
                 if fallback not in candidates:
                     candidates.append(fallback)
@@ -244,7 +244,8 @@ class OpenAIProvider(AIProvider):
     INSTANT_TOKEN_FLOOR = 256
 
     def _is_inception(self) -> bool:
-        return "inceptionlabs" in self.endpoint_url.lower()
+        host = urllib.parse.urlsplit(self.endpoint_url).hostname or ""
+        return host == "inceptionlabs.ai" or host.endswith(".inceptionlabs.ai")
 
     def effective_max_tokens(self) -> Optional[int]:
         """The limit actually sent: the owner's value, raised when it would starve a reasoning model."""
@@ -355,7 +356,7 @@ class OpenAIProvider(AIProvider):
         candidates = self.get_candidate_models()
         results: list[tuple[str, bool, str]] = []
         working: list[str] = []
-        is_inception = "inceptionlabs" in self.endpoint_url.lower()
+        is_inception = self._is_inception()
 
         for m in candidates:
             payload: Dict[str, Any] = {
@@ -374,13 +375,23 @@ class OpenAIProvider(AIProvider):
                 method="POST",
             )
             try:
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    body = json.loads(resp.read().decode("utf-8"))
-                    if body.get("choices"):
-                        results.append((m, True, "200 OK"))
-                        working.append(m)
-                    else:
-                        results.append((m, False, "Empty choices"))
+                try:
+                    with urllib.request.urlopen(req, timeout=timeout) as resp:
+                        body = json.loads(resp.read().decode("utf-8"))
+                except urllib.error.HTTPError as error:
+                    alternate = self._fallback_endpoint() if error.code == 404 else ""
+                    if not alternate:
+                        raise
+                    with urllib.request.urlopen(self._build_request(alternate, data), timeout=timeout) as resp:
+                        body = json.loads(resp.read().decode("utf-8"))
+                    self.endpoint_url = alternate
+                choices = body.get("choices") or []
+                content = (choices[0].get("message") or {}).get("content") if choices else None
+                if _reply_marker(str(content) if content is not None else "") not in ("", "null", "undefined"):
+                    results.append((m, True, "200 OK"))
+                    working.append(m)
+                else:
+                    results.append((m, False, "Empty content"))
             except urllib.error.HTTPError as e:
                 results.append((m, False, f"HTTP {e.code}"))
             except Exception as e:
