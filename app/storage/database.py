@@ -767,10 +767,17 @@ class Database:
                 return False
             if marker is not None and int(self.get_state(f"chat_summary_marker_{chat_id}", "0")) > marker:
                 return False
-            self.set_state(f"chat_summary_{chat_id}", (summary or "").strip())
+            states = [(f"chat_summary_{chat_id}", (summary or "").strip()),
+                      (f"chat_context_file_pending_{chat_id}", "1")]
             if marker is not None:
-                self.set_state(f"chat_summary_marker_{chat_id}", str(marker))
-            self.sync_chat_context_file(chat_id)
+                states.append((f"chat_summary_marker_{chat_id}", str(marker)))
+            with self._get_connection() as conn:
+                conn.executemany(
+                    "INSERT INTO runtime_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    states,
+                )
+            if not self.sync_chat_context_file(chat_id):
+                self.record_action("context", "file_sync", "failed", "Summary saved in database; context file sync pending", chat_id=chat_id)
             return True
 
     def prune_messages_older_than(self, max_age_seconds: float) -> int:
@@ -949,7 +956,13 @@ class Database:
         """Read, recover, and write a context snapshot under the same lock."""
         with self._context_lock:
             ctx = self.get_permanent_context(chat_id)
-            return self._sync_context_to_disk(chat_id, ctx["pinned_text"], ctx["notes"])
+            self.set_state(f"chat_context_file_pending_{chat_id}", "1")
+            saved = self._sync_context_to_disk(chat_id, ctx["pinned_text"], ctx["notes"])
+            if saved:
+                self.set_state(f"chat_context_file_pending_{chat_id}", "0")
+            else:
+                logger.warning("Context file sync failed for chat %s; database memory remains available", chat_id)
+            return saved
 
     def set_permanent_context(
         self, chat_id: int, pinned_text: Optional[str] = None, notes: Optional[str] = None,

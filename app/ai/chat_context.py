@@ -86,12 +86,16 @@ class ContextAgent:
     async def refresh(self, chat_id, min_new_messages=8, force=False, max_payload=50):
         if not self.allowed(chat_id) or chat_id in self.busy or len(self.busy) >= 2:
             return
-        if not force and time.monotonic() - self.last_attempt.get(chat_id, float("-inf")) < 60:
-            return
-        if not force and time.monotonic() < self.retry_after.get(chat_id, 0.0):
-            return
         self.busy.add(chat_id)
         try:
+            if self.db.get_state(f"chat_context_file_pending_{chat_id}") == "1":
+                await asyncio.to_thread(self._sync_file, chat_id)
+                if not self.allowed(chat_id):
+                    return
+            if not force and time.monotonic() - self.last_attempt.get(chat_id, float("-inf")) < 60:
+                return
+            if not force and time.monotonic() < self.retry_after.get(chat_id, 0.0):
+                return
             epoch = self.db.get_state(f"chat_memory_epoch_{chat_id}")
             marker = int(self.db.get_state(f"chat_summary_marker_{chat_id}", "0"))
             if not force and self.db.count_chat_messages_since(chat_id, marker) < min_new_messages:
@@ -104,7 +108,10 @@ class ContextAgent:
             summary = await asyncio.to_thread(self.generator.summarize_chat_history, title,
                                              self.db.get_chat_summary(chat_id), raw, is_group=chat_id < 0)
             if summary and self.allowed(chat_id) and self.db.set_chat_summary(chat_id, summary, epoch=epoch, marker=latest):
-                self.db.record_action("context", "summary", "success", "Chat memory updated from a batch of messages", chat_id=chat_id)
+                detail = ("Summary saved in database; context file sync pending"
+                          if self.db.get_state(f"chat_context_file_pending_{chat_id}") == "1"
+                          else "Chat memory updated and saved to context file")
+                self.db.record_action("context", "summary", "success", detail, chat_id=chat_id)
             self.failures.pop(chat_id, None)
             self.retry_after.pop(chat_id, None)
         except Exception:

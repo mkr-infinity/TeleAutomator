@@ -273,3 +273,85 @@ def test_close_does_not_flush_after_allowlist_revocation(tmp_path):
     asyncio.run(run())
     assert not (db.contexts_dir / "123.json").exists()
     agent.generator.summarize_chat_history.assert_not_called()
+
+
+def test_worker_persists_generated_summary_and_context_across_restart(tmp_path):
+    db = Database(tmp_path / "state.db")
+    db.set_permanent_context(-123, notes="Owner notes", pinned_text="Pinned rules")
+    for mid in range(1, 9):
+        db.record_chat_message(-123, mid, 2, "Contact", f"Release detail {mid}")
+    agent = agent_for(db)
+
+    async def run():
+        agent.observe(-123)
+        await asyncio.gather(*list(agent.pending.values()))
+        await asyncio.gather(*list(agent.summary_tasks))
+        await agent.close()
+
+    asyncio.run(run())
+    data = json.loads((db.contexts_dir / "-123.json").read_text())
+    assert data["ai_memory"] == "Recap"
+    assert data["notes"] == "Owner notes" and data["pinned_text"] == "Pinned rules"
+    assert len(data["recent_messages"]) == 8
+    restarted = Database(db.db_path)
+    assert "Recap" in agent_for(restarted).snapshot(-123).background
+    assert restarted.get_state("chat_summary_marker_-123") == "8"
+    assert restarted.get_state("chat_context_file_pending_-123") == "0"
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_failed_summary_file_write_recovers_without_new_messages_or_model_call(tmp_path, monkeypatch, restart):
+    db = Database(tmp_path / "state.db")
+    db.set_permanent_context(123, notes="Keep notes", pinned_text="Keep pins")
+    db.set_chat_summary(123, "Old recap")
+    db.record_chat_message(123, 1, 2, "Contact", "Latest detail")
+    agent = agent_for(db)
+
+    async def run():
+        with monkeypatch.context() as patcher:
+            patcher.setattr(db, "_sync_context_to_disk", lambda *_: False)
+            await agent.refresh(123, force=True)
+        assert db.get_chat_summary(123) == "Recap"
+        assert db.get_state("chat_summary_marker_123") == "1"
+        assert db.get_state("chat_context_file_pending_123") == "1"
+        assert json.loads((db.contexts_dir / "123.json").read_text())["ai_memory"] == "Old recap"
+        assert any(row["action"] == "file_sync" for row in db.list_actions("failed"))
+        assert "file sync pending" in db.list_actions("success")[0]["detail"]
+        recovering = agent_for(Database(db.db_path)) if restart else agent
+        recovering.retry_after[123] = float("inf")  # Disk repair must not wait for a model retry.
+        await recovering.refresh(123)
+        assert recovering.db.get_state("chat_context_file_pending_123") == "0"
+        data = json.loads((db.contexts_dir / "123.json").read_text())
+        assert data["ai_memory"] == "Recap"
+        assert data["notes"] == "Keep notes" and data["pinned_text"] == "Keep pins"
+        assert data["recent_messages"][-1]["text"] == "Latest detail"
+        assert agent.generator.summarize_chat_history.call_count == 1
+        if restart:
+            recovering.generator.summarize_chat_history.assert_not_called()
+            await recovering.close()
+        await agent.close()
+
+    asyncio.run(run())
+
+
+def test_model_failure_preserves_summary_file_and_updates_recent_context(tmp_path):
+    db = Database(tmp_path / "state.db")
+    db.set_permanent_context(123, notes="Keep notes", pinned_text="Keep pins")
+    db.set_chat_summary(123, "Last working recap", marker=0)
+    for mid in range(1, 9):
+        db.record_chat_message(123, mid, 2, "Contact", f"New detail {mid}")
+    agent = agent_for(db)
+    agent.generator.summarize_chat_history.side_effect = RuntimeError("provider unavailable")
+
+    async def run():
+        agent.observe(123)
+        await asyncio.gather(*list(agent.pending.values()))
+        await asyncio.gather(*list(agent.summary_tasks))
+        await agent.close()
+
+    asyncio.run(run())
+    data = json.loads((db.contexts_dir / "123.json").read_text())
+    assert data["ai_memory"] == "Last working recap"
+    assert data["notes"] == "Keep notes" and data["pinned_text"] == "Keep pins"
+    assert len(data["recent_messages"]) == 8
+    assert db.get_state("chat_summary_marker_123") == "0"
