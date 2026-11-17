@@ -98,7 +98,7 @@ class ContextAgent:
                     self.retry_after[chat_id] = max(0.0, float(saved_retry["retry_after"]))
                 except (KeyError, TypeError, ValueError, json.JSONDecodeError):
                     logger.warning("Invalid persisted summary retry state for chat %s; clearing it", chat_id)
-                    self.db.set_state(retry_key, "")
+                    self.db.set_chat_summary_retry_state(chat_id, "")
                     self.failures.pop(chat_id, None)
                     self.retry_after.pop(chat_id, None)
             if self.db.get_state(f"chat_context_file_pending_{chat_id}") == "1":
@@ -128,13 +128,13 @@ class ContextAgent:
             self.failures.pop(chat_id, None)
             self.retry_after.pop(chat_id, None)
             if retry_state:
-                self.db.set_state(retry_key, "")
+                self.db.set_chat_summary_retry_state(chat_id, "")
         except Exception:
             # A failing model must not be asked again every minute: wait 5 min, then 15, then up to an hour.
             count = self.failures[chat_id] = self.failures.get(chat_id, 0) + 1
             retry_after = time.time() + (300.0, 900.0, 3600.0)[min(count - 1, 2)]
             self.retry_after[chat_id] = retry_after
-            self.db.set_state(f"chat_summary_retry_{chat_id}", json.dumps(
+            self.db.set_chat_summary_retry_state(chat_id, json.dumps(
                 {"failures": count, "retry_after": retry_after}, separators=(",", ":")))
             self.db.record_action("context", "summary", "failed", "Summary update failed; recent messages remain available", chat_id=chat_id)
         finally:

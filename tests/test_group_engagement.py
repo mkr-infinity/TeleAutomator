@@ -181,7 +181,7 @@ def test_failing_summaries_back_off_instead_of_retrying_every_minute(tmp_path):
         await agent.refresh(GROUP)
         assert s.generator.summarize_chat_history.call_count == 1  # still backing off
         agent.retry_after[GROUP] = 0.0
-        s.db.set_state(f"chat_summary_retry_{GROUP}", "")
+        s.db.set_chat_summary_retry_state(GROUP, "")
         await agent.refresh(GROUP)
         assert s.generator.summarize_chat_history.call_count == 2
         assert agent.failures[GROUP] == 2
@@ -241,14 +241,17 @@ def test_summary_backoff_survives_context_agent_restart(tmp_path):
 
     async def run():
         with patch("app.ai.chat_context.time", SimpleNamespace(monotonic=lambda: 10000, time=lambda: 50000)):
+            original_revision = s.db.get_state("state_revision")
             await first.refresh(GROUP, force=True)
             assert first.failures[GROUP] == 1
+            assert s.db.get_state("state_revision") == original_revision
             saved = s.db.get_state(f"chat_summary_retry_{GROUP}")
             assert '"retry_after":50300.0' in saved
 
             from app.ai.chat_context import ContextAgent
             from app.storage.database import Database
             restarted_db = Database(s.db.db_path)
+            revision = restarted_db.get_state("state_revision")
             restarted = ContextAgent(restarted_db, s.privacy, s.generator)
             await restarted.refresh(GROUP)
             s.generator.summarize_chat_history.assert_called_once()
@@ -261,6 +264,7 @@ def test_summary_backoff_survives_context_agent_restart(tmp_path):
                 await restarted.refresh(GROUP)
             assert s.generator.summarize_chat_history.call_count == 2
             assert restarted_db.get_state(f"chat_summary_retry_{GROUP}") == ""
+            assert restarted_db.get_state("state_revision") == revision
             await restarted.close()
         await first.close()
 

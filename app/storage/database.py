@@ -298,6 +298,23 @@ class Database:
             ).fetchone()
             return str(row["value"]) if row else default
 
+    def _set_worker_state(self, key: str, value: str) -> None:
+        """Persist background-worker state without invalidating user settings edits."""
+        with self._context_lock, self._get_connection() as conn:
+            conn.execute(
+                "INSERT INTO runtime_state (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
+    def set_chat_summary_retry_state(self, chat_id: int, value: str) -> None:
+        """Persist worker retry metadata without changing the user's settings revision."""
+        self._set_worker_state(f"chat_summary_retry_{chat_id}", value)
+
+    def set_chat_context_file_pending(self, chat_id: int, pending: bool) -> None:
+        """Track a context-file repair without changing the user's settings revision."""
+        self._set_worker_state(f"chat_context_file_pending_{chat_id}", "1" if pending else "0")
+
     def get_chat_panel_data(self, chat_ids):
         """Read chat cards in one connection instead of opening a connection for every field."""
         ids = tuple(chat_ids)
@@ -956,10 +973,10 @@ class Database:
         """Read, recover, and write a context snapshot under the same lock."""
         with self._context_lock:
             ctx = self.get_permanent_context(chat_id)
-            self.set_state(f"chat_context_file_pending_{chat_id}", "1")
+            self.set_chat_context_file_pending(chat_id, True)
             saved = self._sync_context_to_disk(chat_id, ctx["pinned_text"], ctx["notes"])
             if saved:
-                self.set_state(f"chat_context_file_pending_{chat_id}", "0")
+                self.set_chat_context_file_pending(chat_id, False)
             else:
                 logger.warning("Context file sync failed for chat %s; database memory remains available", chat_id)
             return saved
