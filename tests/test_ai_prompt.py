@@ -1,6 +1,8 @@
 """Tests for PromptManager and ReplyGenerator."""
 
 from pathlib import Path
+
+import pytest
 from app.ai.prompt_manager import PromptManager, VALID_STYLES
 from app.ai.reply_generator import ReplyGenerator
 from app.ai.provider import LocalRuleProvider
@@ -566,4 +568,23 @@ def test_reply_generator_end_to_end_with_custom_prompt():
     assert len(reply) > 0
 
 
+@pytest.mark.parametrize("persona", ["I teach Hindi", "I speak Hindi", "I write Hindi poems", "Never reply in Hindi", "Use natural language", "Reply in 2 words", "Discuss French cinema", "Be friendly"])
+def test_persona_language_facts_do_not_disable_default_english(persona):
+    pm = PromptManager(prompt_file=None, custom_prompt=persona)
+    assert "DEFAULT LANGUAGE (ENGLISH)" in pm.get_system_instructions()
+    assert "English Only" in pm.build_user_prompt("Member", "आज क्या हुआ?")
 
+
+@pytest.mark.parametrize("persona", ["Reply in Hindi", "Answer only in Spanish", "Reply in 2 words in English", "Use Hinglish", "Speak in French", "Hindi only", "Reply language: Hindi", "Match the sender's language"])
+def test_explicit_output_language_stays_configurable(persona):
+    pm = PromptManager(prompt_file=None, custom_prompt=persona)
+    assert "Reply in that requested language" in pm.get_system_instructions()
+    assert "language requested by the custom prompt" in pm.build_user_prompt("Member", "Hello")
+
+
+def test_generator_defaults_to_english_and_honors_explicit_configuration(tmp_path):
+    cfg = AppConfig(api_id=123, api_hash="fixture", data_dir=tmp_path)
+    assert ReplyGenerator(cfg).language == "english"
+    from dataclasses import replace
+    cfg = replace(cfg, default_chat_language="hindi")
+    assert ReplyGenerator(cfg).language == "hindi"

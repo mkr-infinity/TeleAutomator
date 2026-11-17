@@ -113,6 +113,7 @@ def test_cleared_pins_preserve_notes(tmp_path):
 
 def test_ignored_history_never_enters_context_or_voice(tmp_path):
     s = make_stack(tmp_path, ignored_users={333})
+    s.client.get_entity.return_value = SimpleNamespace(title="Development", username=None)
     ignored = SimpleNamespace(id=1, text='Hidden participant text', message='Hidden participant text', sender_id=333, out=False)
     s.client.get_messages.return_value = [ignored] * 12
     s.generator.generate_voice_profile = MagicMock()

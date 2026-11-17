@@ -171,14 +171,14 @@ class GeminiProvider(AIProvider):
                         parts = candidates[0].get("content", {}).get("parts", [])
                         if parts:
                             raw_text = parts[0].get("text")
-                            marker = _reply_marker(str(raw_text)) if raw_text is not None else ""
+                            marker = _reply_marker(raw_text) if isinstance(raw_text, str) else ""
                             if marker in ("null", "undefined", ""):
                                 logger.warning(f"Gemini model '{m}' returned malformed empty text. Trying fallback...")
                                 continue
                             if marker == "none":
                                 logger.info(f"Gemini model '{m}' returned intentional silence (NONE).")
                                 return ""
-                            return str(raw_text).strip().strip('"')
+                            return raw_text.strip().strip('"')
             except urllib.error.HTTPError as e:
                 last_error = e
                 logger.warning(f"Gemini model '{m}' request failed ({e.code}). Trying fallback...")
@@ -322,7 +322,7 @@ class OpenAIProvider(AIProvider):
                 choices = body.get("choices", [])
                 if choices:
                     raw_content = choices[0].get("message", {}).get("content")
-                    marker = _reply_marker(str(raw_content)) if raw_content is not None else ""
+                    marker = _reply_marker(raw_content) if isinstance(raw_content, str) else ""
                     if marker in ("null", "undefined", ""):
                         message = choices[0].get("message", {}) or {}
                         logger.warning(
@@ -334,7 +334,7 @@ class OpenAIProvider(AIProvider):
                         )
                         last_error = RuntimeError(f"{m} returned empty content (finish_reason={choices[0].get('finish_reason')})")
                         continue
-                    content = str(raw_content).strip().strip('"')
+                    content = raw_content.strip().strip('"')
                     self.active_model = m
 
                     if marker == "none":
@@ -387,7 +387,7 @@ class OpenAIProvider(AIProvider):
                     self.endpoint_url = alternate
                 choices = body.get("choices") or []
                 content = (choices[0].get("message") or {}).get("content") if choices else None
-                if _reply_marker(str(content) if content is not None else "") not in ("", "null", "undefined"):
+                if isinstance(content, str) and _reply_marker(content) not in ("", "null", "undefined"):
                     results.append((m, True, "200 OK"))
                     working.append(m)
                 else:

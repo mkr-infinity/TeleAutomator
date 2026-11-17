@@ -2767,7 +2767,7 @@
         if (res && res.ok && res.working_models && res.working_models.length > 0) {
           badge.className = "pill pill-positive";
           badge.textContent = `${res.working_models.length} Healthy`;
-          modelEl.textContent = `Active rotation: ${res.active_model}`;
+          modelEl.textContent = `Healthy models: ${res.active_model}`;
           replyEl.textContent = `"${res.reply}"`;
 
           if (res.auto_applied) {

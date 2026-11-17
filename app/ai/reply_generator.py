@@ -96,7 +96,8 @@ class ReplyGenerator:
         self.db = database
         self.provider = provider or create_ai_provider(config, database=database)
         custom_p = database.get_state("custom_system_prompt", "") if database else ""
-        saved_lang = database.get_state("chat_language", "english") if database else "english"
+        default_lang = getattr(config, "default_chat_language", "english")
+        saved_lang = database.get_state("chat_language", default_lang) if database else default_lang
         saved_owner = database.get_state("owner_name", "") if database else ""
         self.prompt_manager = PromptManager(
             style=style,

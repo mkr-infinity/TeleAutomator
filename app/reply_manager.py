@@ -636,8 +636,7 @@ class ReplyManager(CommandRouterMixin):
             else:
                 stitched_text = "\n".join(m["text"].strip() for m in items if m["text"].strip())
                 logger.info(
-                    f"[MESSAGE STITCHING] Stitched {len(items)} rapid burst messages in chat {chat_id} "
-                    f"into single cohesive thought: '{stitched_text[:60]}...'"
+                    "[MESSAGE STITCHING] Stitched %s rapid burst messages in chat %s", len(items), chat_id
                 )
 
             ttl_hours = float(self.db.get_state("context_ttl_hours", "4.0"))
@@ -749,8 +748,10 @@ class ReplyManager(CommandRouterMixin):
             if context is None:
                 return
             permanent_context_str = context.background or None
+            if chat_id < 0:
+                permanent_context_str = f"Group title: {chat_title}\n\n{context.background}"
             if matched_rule:
-                permanent_context_str = (context.background + "\n\nOwner keyword reply intent (rewrite naturally for this conversation, never copy verbatim):\n" + matched_rule)
+                permanent_context_str = ((permanent_context_str or "") + "\n\nOwner keyword reply intent (rewrite naturally for this conversation, never copy verbatim):\n" + matched_rule)
             chat_style, chat_persona = context.style, context.persona
             conversation_history = context.history
 
@@ -1761,7 +1762,7 @@ class ReplyManager(CommandRouterMixin):
 
         for past in recent:
             if clean_lower == past.lower():
-                logger.warning(f"Suppressed duplicate reply in chat {chat_id}: '{clean}' was sent recently.")
+                logger.warning("Suppressed duplicate reply in chat %s: reply was sent recently", chat_id)
                 return ""
         return clean
 
@@ -1849,9 +1850,11 @@ class ReplyManager(CommandRouterMixin):
         clean = text.strip().lower()
         invite = self.is_open_group_invite(clean) or idle_before
         if is_reply_to_other:
-            # Joining other people's thread is fine only when it is about this group's own details.
-            if not self._matches_group_context(chat_id, clean, chat_title):
-                return 0.0, "", "Thread between other members, unrelated to this group's topics"
+            # The existing writer judges semantic relevance using this chat's context in any language.
+            context = self.db.get_permanent_context(chat_id)
+            if not (context.get("notes") or context.get("pinned_text") or self.db.get_chat_summary(chat_id)
+                    or len(self.db.get_recent_chat_messages(chat_id, limit=2, max_age_seconds=1200)) > 1):
+                return 0.0, "", "No group context available to judge a thread between other members"
             mode, chance = "thread", base
         elif invite:
             mode, chance = "open", max(base, self.OPEN_INVITE_MIN_CHANCE)

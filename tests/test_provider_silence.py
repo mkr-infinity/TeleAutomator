@@ -76,6 +76,33 @@ def test_empty_content_uses_fallback(provider, monkeypatch, caplog, text):
     assert not any("intentional silence" in record.message for record in caplog.records)
 
 
+@pytest.mark.parametrize("content", [{"unexpected": "object"}, ["unexpected"], 123, False, True])
+def test_non_text_content_uses_fallback_without_losing_usage(provider, monkeypatch, content):
+    requests = mock_requests(monkeypatch, response(provider, content), response(provider, "Ready"))
+    assert provider.generate_reply("prompt", "instructions") == "Ready"
+    assert requests.call_count == 2
+    kind = "custom" if isinstance(provider, OpenAIProvider) else "gemini"
+    assert provider.usage_callback.call_args_list == [
+        call(kind, "primary", 11, 2, 13), call(kind, "fallback", 11, 2, 13),
+    ]
+
+
+def test_null_message_uses_fallback_and_preserves_usage(provider, monkeypatch):
+    if isinstance(provider, OpenAIProvider):
+        malformed = {"choices": [{"message": None}],
+                     "usage": {"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13}}
+    else:
+        malformed = {"candidates": [{"content": None}],
+                     "usageMetadata": {"promptTokenCount": 11, "candidatesTokenCount": 2, "totalTokenCount": 13}}
+    requests = mock_requests(monkeypatch, io.BytesIO(json.dumps(malformed).encode()), response(provider, "NONE"))
+    assert provider.generate_reply("prompt", "instructions") == ""
+    assert requests.call_count == 2
+    kind = "custom" if isinstance(provider, OpenAIProvider) else "gemini"
+    assert provider.usage_callback.call_args_list == [
+        call(kind, "primary", 11, 2, 13), call(kind, "fallback", 11, 2, 13),
+    ]
+
+
 @pytest.mark.parametrize("failure", ["http", "network", "invalid-json", "json-null", "missing-content"])
 def test_failed_or_invalid_response_uses_fallback(provider, monkeypatch, failure):
     failures = {
@@ -206,7 +233,7 @@ def test_custom_provider_does_not_inherit_vendor_models_or_limits(base):
     assert provider.effective_max_tokens() == 512
 
 
-@pytest.mark.parametrize("content,working", [("Ready", True), (None, False), ("", False), ("NONE", True)])
+@pytest.mark.parametrize("content,working", [("Ready", True), (None, False), ("", False), ("NONE", True), ({"text": "unexpected"}, False), (["unexpected"], False), (123, False), (False, False)])
 def test_model_check_uses_custom_endpoint_fallback_and_rejects_empty_answers(monkeypatch, content, working):
     provider = OpenAIProvider("fixture", model="custom-model", base_url="https://custom.example")
     requests = []

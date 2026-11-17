@@ -1,6 +1,6 @@
 /* Cache public assets only. API responses and Telegram credentials stay on the network. */
 // Refresh cached controls for this change without changing the application version.
-const CACHE_NAME = "teleautomator-v3.0.10" + "-engagement";
+const CACHE_NAME = "teleautomator-v3.0.10" + "-thread-context";
 const ASSETS_TO_CACHE = [
   "./",
   "./index.html",

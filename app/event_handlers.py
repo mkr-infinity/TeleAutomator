@@ -256,6 +256,10 @@ def register_handlers(
                 reply_manager.db.record_action("automation", "reply", "skipped", reason, chat_id=chat_id)
                 logger.info("[GROUP SKIP] chat %s: %s", chat_id, reason)
 
+            if is_reply_to_other and reply_msg is None and not is_mention:
+                skip("Reply target could not be resolved")
+                return
+
             if not is_mention and re.match(r"\s*@\w+", text):
                 skip("Message is addressed to a specific member")
                 return

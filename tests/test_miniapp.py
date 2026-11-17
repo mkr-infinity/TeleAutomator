@@ -911,3 +911,90 @@ def test_native_sheet_dialog_and_explicit_expand_control():
 
 
 
+
+
+@pytest.mark.parametrize("base", ["https://custom.example/googleapis.com/v1", "https://googleapis.com.example/v1", "https://custom.example/inceptionlabs"])
+def test_custom_model_discovery_uses_real_host_not_vendor_text(tmp_path, monkeypatch, base):
+    from unittest.mock import MagicMock
+    ctx, _ = make_ctx(tmp_path)
+    seen = []
+
+    def request(req, timeout):
+        seen.append(req.full_url)
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = json.dumps({"data": [{"id": "custom-model"}]}).encode()
+        return response
+
+    monkeypatch.setattr(urllib.request, "urlopen", request)
+    result = MiniAppAPI(ctx).handle_fetch_models(base, "fixture-key")
+    assert result["ok"] and result["models"] == ["custom-model"]
+    assert seen == [base + "/models"]
+
+
+def test_custom_playground_does_not_route_googleapis_path_to_google(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+    ctx, _ = make_ctx(tmp_path)
+    seen = []
+
+    def request(req, timeout):
+        seen.append(req.full_url)
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = json.dumps({"choices": [{"message": {"content": "Ready"}}]}).encode()
+        return response
+
+    monkeypatch.setattr(urllib.request, "urlopen", request)
+    result = MiniAppAPI(ctx).handle_test_model(model="custom-model", base_url="https://custom.example/googleapis.com/v1", api_key="fixture-key")
+    assert result["ok"]
+    assert seen == ["https://custom.example/googleapis.com/v1/chat/completions"]
+
+
+@pytest.mark.parametrize("status", [404, 401, 429])
+def test_root_model_discovery_only_retries_missing_v1_path(tmp_path, monkeypatch, status):
+    from unittest.mock import MagicMock
+    ctx, _ = make_ctx(tmp_path)
+    seen = []
+
+    def request(req, timeout):
+        seen.append(req.full_url)
+        assert req.get_header("Authorization") == "Bearer fixture-key"
+        if req.full_url == "https://custom.example/models":
+            raise urllib.error.HTTPError(req.full_url, status, "Unavailable", {}, None)
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = json.dumps({"data": [{"id": "custom-model"}]}).encode()
+        return response
+
+    monkeypatch.setattr(urllib.request, "urlopen", request)
+    result = MiniAppAPI(ctx).handle_fetch_models("https://custom.example", "fixture-key")
+    if status == 404:
+        assert result["ok"] and result["models"] == ["custom-model"]
+        assert seen == ["https://custom.example/models", "https://custom.example/v1/models"]
+        assert result["url"] == seen[-1]
+    else:
+        assert not result["ok"]
+        assert seen == ["https://custom.example/models"]
+
+
+@pytest.mark.parametrize("kind", ["gemini", "custom"])
+@pytest.mark.parametrize("content", [{"unexpected": "text"}, ["unexpected"], True, 42])
+def test_model_playground_rejects_nontext_content_without_applying_settings(tmp_path, monkeypatch, kind, content):
+    from unittest.mock import MagicMock
+    ctx, _ = make_ctx(tmp_path)
+    ctx.db.set_state("ai_model", "saved-model")
+    previous_provider = ctx.generator.provider
+    if kind == "gemini":
+        body = {"candidates": [{"content": {"parts": [{"text": content}]}}]}
+        base = "https://generativelanguage.googleapis.com"
+    else:
+        body = {"choices": [{"message": {"content": content}}]}
+        base = "https://custom.example/v1"
+    response = MagicMock()
+    response.__enter__.return_value = response
+    response.read.return_value = json.dumps(body).encode()
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: response)
+    result = MiniAppAPI(ctx).handle_test_model(model="tested-model", base_url=base, api_key="fixture-key", auto_apply=True)
+    assert not result["ok"]
+    assert ctx.db.get_state("ai_model") == "saved-model"
+    assert ctx.generator.provider is previous_provider

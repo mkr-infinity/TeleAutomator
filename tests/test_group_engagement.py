@@ -60,14 +60,14 @@ def test_message_tagging_a_specific_member_is_never_joined(tmp_path):
     assert chance == 0.0 and "specific member" in reason
 
 
-def test_thread_between_others_is_joined_only_when_about_the_group_topics(tmp_path):
+def test_thread_relevance_is_delegated_to_the_existing_writer(tmp_path):
     s = make_stack(tmp_path)
     s.db.set_state("chat_chatty_-100111", "1.0")
     s.db.set_permanent_context(GROUP, notes="Daily staking rewards and validator updates")
     chance, mode, _ = plan(s, "validator rewards were lower today", is_reply_to_other=True)
     assert mode == "thread" and chance == 1.0
     chance, mode, reason = plan(s, "lol that movie was great", is_reply_to_other=True)
-    assert chance == 0.0 and "unrelated" in reason
+    assert chance == 1.0 and mode == "thread" and not reason
 
 
 def test_prompt_tells_the_model_how_to_join_without_sample_text(tmp_path):
@@ -247,3 +247,48 @@ def test_miniapp_playground_obeys_provider_limits_and_url_fallback(tmp_path, mon
         assert payload["reasoning_effort"] == "instant"
     if base == "https://custom.example":
         assert requests[-1].full_url == base + "/v1/chat/completions"
+
+
+@pytest.mark.parametrize("incoming", ["The payout shrank again", "aaj kam mila kyun", "आज इतना कम क्यों मिला", "That movie was great"])
+def test_thread_writer_gets_context_across_languages_and_can_choose_silence(tmp_path, incoming):
+    s = make_stack(tmp_path)
+    s.db.set_state("chat_chatty_-100111", "1")
+    s.db.set_permanent_context(GROUP, notes="Daily staking rewards and validator updates")
+    s.db.record_chat_message(GROUP, 1, 222, "Member", "Staking rewards fell this week")
+    chance, mode, reason = plan(s, incoming, is_reply_to_other=True)
+    assert chance == 1 and mode == "thread" and not reason
+    provider = SimpleNamespace(generate_reply=MagicMock(return_value=""))
+    s.generator.provider = provider
+    s.manager.sync_pinned_context_from_telegram = AsyncMock(return_value="")
+    asyncio.run(s.manager._process_incoming_message(GROUP, "Crypto Builders", 2, 333, "Member", incoming, engagement=mode))
+    provider.generate_reply.assert_called_once()
+    prompt, instructions = provider.generate_reply.call_args.args
+    assert incoming in prompt and "Staking rewards fell" in prompt
+    assert "Daily staking rewards" in prompt and "Crypto Builders" in prompt
+    assert "Use NONE for unrelated threads" in prompt
+    assert "paraphrases, Hindi and Hinglish" in prompt
+    assert "English Only" in prompt
+    s.client.send_message.assert_not_awaited()
+
+
+def test_duplicate_suppression_logs_no_conversation_text(tmp_path, caplog):
+    s = make_stack(tmp_path)
+    secret_text = "Private conversation fixture"
+    s.manager._recent_replies_history[GROUP] = [secret_text]
+    with caplog.at_level("WARNING"):
+        assert s.manager._prevent_duplicate_reply(GROUP, secret_text) == ""
+    assert "Suppressed duplicate" in caplog.text
+    assert secret_text not in caplog.text
+
+
+def test_stitching_logs_counts_without_conversation_text(tmp_path, clock, caplog):
+    s = make_stack(tmp_path)
+    secret_text = "Private burst fixture"
+    s.manager._debounce_buffers[GROUP] = [dict(message_id=i, sender_name="Member", sender_id=222,
+                                             chat_title="Group", text=secret_text) for i in (1, 2)]
+    s.manager._process_incoming_message = AsyncMock()
+    with caplog.at_level("INFO"):
+        asyncio.run(s.manager._debounce_worker(GROUP, 0))
+    assert "Stitched 2" in caplog.text
+    assert secret_text not in caplog.text
+    s.manager._process_incoming_message.assert_awaited_once()
