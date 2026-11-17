@@ -110,6 +110,7 @@ class ReplyManager(CommandRouterMixin):
         self._chat_send_locks: dict[int, asyncio.Lock] = {}
         self._outgoing_lock = asyncio.Lock()
         self._pending_deferred_replies: dict[int, asyncio.Task] = {}
+        self._group_processing_locks: dict[int, asyncio.Lock] = {}
         self._alert_send_lock: asyncio.Lock = asyncio.Lock()
         self._last_alert_time: float = 0.0
         self._alert_min_cooldown: float = 4.0
@@ -254,6 +255,7 @@ class ReplyManager(CommandRouterMixin):
         self._debounce_first_time.clear()
         self._debounce_last_time.clear()
         self._pending_deferred_replies.clear()
+        self._group_processing_locks.clear()
         self._context_init_tasks.clear()
         await self.context_agent.close()
 
@@ -673,6 +675,32 @@ class ReplyManager(CommandRouterMixin):
         is_mention: bool = False,
         engagement: str = "",
     ) -> None:
+        """Serialize group work so a cooldown reply is sent before later messages are handled."""
+        if chat_id >= 0:
+            await self._process_incoming_message_now(
+                chat_id, chat_title, message_id, sender_id, sender_name, text,
+                conversation_history, is_mention, engagement,
+            )
+            return
+        lock = self._group_processing_locks.setdefault(chat_id, asyncio.Lock())
+        async with lock:
+            await self._process_incoming_message_now(
+                chat_id, chat_title, message_id, sender_id, sender_name, text,
+                conversation_history, is_mention, engagement,
+            )
+
+    async def _process_incoming_message_now(
+        self,
+        chat_id: int,
+        chat_title: str,
+        message_id: int,
+        sender_id: Optional[int],
+        sender_name: str,
+        text: str,
+        conversation_history: Optional[Any] = None,
+        is_mention: bool = False,
+        engagement: str = "",
+    ) -> None:
         """Process a single or stitched incoming message."""
         if self._closed or not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
             return
@@ -682,9 +710,15 @@ class ReplyManager(CommandRouterMixin):
                 return
         if not self.privacy.is_user_allowed(sender_id):
             return
-        pending = self._pending_deferred_replies.pop(chat_id, None)
+        pending = self._pending_deferred_replies.get(chat_id)
         if pending and pending is not asyncio.current_task() and not pending.done():
-            pending.cancel()
+            if chat_id < 0:
+                # Deliver the already-written group reply first. Later work then sees the
+                # updated history and can continue the conversation with the right context.
+                await asyncio.shield(pending)
+            else:
+                self._pending_deferred_replies.pop(chat_id, None)
+                pending.cancel()
         if self.current_mode == "restricted_auto" and self.safety.action_block_reason():
             return
         if self.current_mode == "restricted_auto" and self.owner_recently_active(chat_id):
@@ -1053,8 +1087,6 @@ class ReplyManager(CommandRouterMixin):
                 # Re-read live settings so a shortened or reset cooldown takes effect promptly.
                 await asyncio.sleep(1.0)
 
-            if self._pending_deferred_replies.get(chat_id) is asyncio.current_task():
-                self._pending_deferred_replies.pop(chat_id, None)
             sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True, is_mention=is_mention, context=context,
                                           delay_started_at=delay_started_at)
             if sent:

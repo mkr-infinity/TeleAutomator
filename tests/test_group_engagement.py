@@ -232,6 +232,57 @@ def test_pending_group_reply_keeps_final_authorization_guards(tmp_path, change):
     assert not s.manager._context_current(context)
 
 
+def test_pending_group_reply_sends_before_later_messages_and_uses_current_context(tmp_path):
+    s = make_stack(tmp_path)
+    s.db.set_state("chat_chatty_-100111", "1")
+    queued_context = s.manager.context_agent.snapshot(GROUP)
+    release_pending = asyncio.Event()
+    generated = []
+    original_send = s.manager._send_reply
+    send_order = []
+
+    async def send_with_order(chat_id, message_id, text, **kwargs):
+        send_order.append(text)
+        kwargs["adaptive_delay"] = False
+        return await original_send(chat_id, message_id, text, **kwargs)
+
+    s.manager._send_reply = send_with_order
+
+    async def pending_delivery():
+        await release_pending.wait()
+        await original_send(GROUP, 90, "Queued group reply", adaptive_delay=False, context=queued_context)
+        send_order.append("Queued group reply")
+        s.manager._pending_deferred_replies.pop(GROUP, None)
+
+    def write_reply(**kwargs):
+        generated.append((kwargs["incoming_text"], [row["text"] for row in kwargs["conversation_history"]]))
+        return f"A useful thought about {kwargs['incoming_text']}"
+
+    s.generator.generate = MagicMock(side_effect=write_reply)
+
+    async def run():
+        pending = asyncio.create_task(pending_delivery())
+        s.manager._pending_deferred_replies[GROUP] = pending
+        await asyncio.sleep(0)
+        s.db.record_chat_message(GROUP, 1, 222, "Member", "First newer group message")
+        s.db.record_chat_message(GROUP, 2, 333, "Another", "Second newer group message")
+        first = asyncio.create_task(s.manager._process_incoming_message(
+            GROUP, "Crypto Builders", 1, 222, "Member", "First newer group message"))
+        second = asyncio.create_task(s.manager._process_incoming_message(
+            GROUP, "Crypto Builders", 2, 333, "Another", "Second newer group message"))
+        await asyncio.sleep(0.05)
+        assert not pending.cancelled()
+        assert generated == []
+        release_pending.set()
+        await asyncio.gather(pending, first, second)
+
+    asyncio.run(run())
+    assert send_order[0] == "Queued group reply"
+    assert [item[0] for item in generated] == ["First newer group message", "Second newer group message"]
+    assert all("First newer group message" in history and "Second newer group message" in history
+               for _, history in generated)
+
+
 def test_summary_backoff_schedule_caps_and_resets_after_success(tmp_path):
     s = make_stack(tmp_path)
     s.db.record_chat_message(GROUP, 1, 222, "Member", "Release details")
