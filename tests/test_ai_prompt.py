@@ -581,18 +581,26 @@ def test_reply_generator_end_to_end_with_custom_prompt():
     assert len(reply) > 0
 
 
-@pytest.mark.parametrize("persona", ["I teach Hindi", "I speak Hindi", "I write Hindi poems", "I want to learn Hindi", "Never reply in Hindi", "Don't use Hindi", "Use natural language", "Reply in 2 words", "Discuss French cinema", "Be friendly"])
+@pytest.mark.parametrize("persona", ["I teach Hindi", "I speak Hindi", "I write Hindi poems", "I want to learn Hindi", "I prefer Hindi movies", "Write about Hindi literature", "Speak about Hindi cinema", "Never reply in Hindi", "Don't use Hindi", "Do not write in Hindi", "Use natural language", "Reply in 2 words", "Discuss French cinema", "Be friendly"])
 def test_persona_language_facts_do_not_disable_default_english(persona):
     pm = PromptManager(prompt_file=None, custom_prompt=persona)
     assert "DEFAULT LANGUAGE (ENGLISH)" in pm.get_system_instructions()
     assert "English Only" in pm.build_user_prompt("Member", "आज क्या हुआ?")
+    group_instructions = pm.get_system_instructions(persona_override=persona, is_group=True)
+    group_prompt = pm.build_user_prompt("Member", "आज क्या हुआ?", is_group=True, persona_override=persona)
+    assert "DEFAULT LANGUAGE (ENGLISH)" in group_instructions
+    assert "English Only" in group_prompt
 
 
-@pytest.mark.parametrize("persona", ["Reply in Hindi", "Answer only in Spanish", "Reply in 2 words in English", "Use Hinglish", "Speak in French", "Hindi only", "Reply language: Hindi", "Match the sender's language", "I want you to reply in Hindi", "- Reply in Hindi", "Preference: respond in Hindi", "The reply should be written in Hindi", "Language: Spanish"])
+@pytest.mark.parametrize("persona", ["Reply in Hindi", "Answer only in Spanish", "Reply in 2 words in English", "Use Hinglish", "Speak in French", "Speak Hindi", "Hindi only", "Reply language: Hindi", "Match the sender's language", "Use the same language as the sender", "I want you to reply in Hindi", "I want you to speak Hindi", "- Reply in Hindi", "Preference: respond in Hindi", "The reply should be written in Hindi", "Language: Spanish", "Output language is German", "The default reply language is Arabic", "Please keep all replies in Hindi", "I want all replies in Hindi", "My preferred language is Hindi", "I prefer Hindi", "I prefer Hindi for all replies", "Keep all conversations in French", "Write all messages in Arabic"])
 def test_explicit_output_language_stays_configurable(persona):
     pm = PromptManager(prompt_file=None, custom_prompt=persona)
     assert "Reply in that requested language" in pm.get_system_instructions()
     assert "language requested by the custom prompt" in pm.build_user_prompt("Member", "Hello")
+    group_instructions = pm.get_system_instructions(persona_override=persona, is_group=True)
+    group_prompt = pm.build_user_prompt("Member", "Hello", is_group=True, persona_override=persona)
+    assert "Reply in that requested language" in group_instructions
+    assert "language requested by the custom prompt" in group_prompt
 
 
 def test_generator_defaults_to_english_and_honors_explicit_configuration(tmp_path):

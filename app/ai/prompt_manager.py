@@ -490,23 +490,50 @@ class PromptManager:
     @staticmethod
     def has_language_instruction(text: str) -> bool:
         """Distinguish output-language directions from biographical facts about languages."""
-        languages = ("english|hindi|hinglish|spanish|french|german|russian|arabic|portuguese|japanese|"
-                     "chinese|italian|bengali|urdu|punjabi|marathi|telugu|tamil|gujarati|korean|turkish|"
-                     "vietnamese|polish|dutch|indonesian")
-        return bool(re.search(
-            rf"(?:^|[.!?;,\n]|\band\b)\s*(?:[-*•]\s*)?(?:please\s+)?"
-            rf"(?:(?:i\s+(?:want|would like|need)\s+you\s+to|make\s+sure\s+you|"
-            rf"(?:my\s+)?preference\s*:\s*|language\s*:\s*)\s*)?"
-            rf"(?:(?:always|only|you must|you should)\s+)?"
-            rf"(?:reply|respond|answer|write|speak|talk|use)\b[^.!?;\n]{{0,80}}\b(?:{languages})\b"
-            rf"|(?:^|[.!?;,\n])\s*(?:[-*•]\s*)?(?:the\s+)?(?:reply|response|answer|output)\s+"
-            rf"(?:should|must|needs to)\s+be\s+(?:written\s+)?in\s+(?:{languages})\b"
-            rf"|(?:^|[.;\n])\s*(?:{languages})\s+only\b"
-            r"|\b(?:reply|response|output)\s+language\s*[:=]"
-            rf"|(?:^|[.;\n])\s*(?:preferred\s+)?language\s*[:=]\s*(?:{languages})\b"
-            r"|\bmatch\s+(?:the\s+)?(?:sender(?:'s)?|conversation|chat)(?:\s+\w+){0,2}\s+language\b",
-            text, re.IGNORECASE,
-        ))
+        languages = (
+            "afrikaans|albanian|amharic|arabic|armenian|assamese|azerbaijani|basque|belarusian|bengali|"
+            "bosnian|bulgarian|burmese|cambodian|cebuano|chinese|croatian|czech|danish|dutch|english|"
+            "estonian|farsi|filipino|finnish|french|georgian|german|greek|gujarati|hausa|hebrew|hindi|"
+            "hinglish|hungarian|icelandic|igbo|indonesian|irish|italian|japanese|javanese|kannada|kazakh|"
+            "khmer|korean|kurdish|kyrgyz|lao|latin|latvian|lithuanian|macedonian|malay|malayalam|maltese|"
+            "maori|marathi|mongolian|nepali|norwegian|odia|oriya|pashto|persian|polish|portuguese|punjabi|"
+            "romanian|russian|serbian|sinhala|slovak|slovenian|somali|spanish|swahili|swedish|tagalog|"
+            "tajik|tamil|telugu|thai|tibetan|turkish|ukrainian|urdu|uzbek|vietnamese|welsh|yoruba|zulu"
+        )
+        language = rf"(?:{languages})"
+        clause = r"(?:^|[.!?;,\n]|\b(?:and|but)\b)\s*(?:[-*•]\s*)?"
+        qualifier = r"(?:please\s+)?(?:(?:i\s+(?:want|would like|need)\s+you\s+to|make\s+sure\s+you)\s+)?"
+        output_objects = r"(?:(?:all|my|your|the)\s+)*(?:replies|responses|answers|messages|conversations?)"
+        patterns = (
+            # Directly say what language the replies should use; require an output-language preposition.
+            rf"{clause}{qualifier}(?:(?:always|only|you must|you should)\s+)?"
+            rf"(?:reply|respond|answer|write|speak|talk)\b[^.!?;\n]{{0,80}}\b(?:in|using)\s+{language}\b",
+            rf"{clause}{qualifier}(?:(?:always|only)\s+)?(?:speak|talk)\s+{language}\b",
+            # Direct language commands and explicit instructions about keeping all output in one language.
+            rf"{clause}{qualifier}(?:(?:always|only)\s+)?use\s+(?:only\s+)?{language}\b",
+            rf"{clause}{qualifier}keep\s+{output_objects}\s+(?:in|using)\s+{language}\b",
+            rf"{clause}(?:i\s+(?:want|would like|need)\s+)?{output_objects}\s+(?:in|using)\s+{language}\b",
+            rf"{clause}(?:my\s+)?preference\s*[:=]\s*(?:please\s+)?"
+            rf"(?:reply|respond|answer|write|speak|talk)\b[^.!?;\n]{{0,80}}\b(?:in|using)\s+{language}\b",
+            rf"{clause}{qualifier}(?:i\s+(?:want|would like|need)\s+)?{output_objects}\s+"
+            rf"(?:to be|written)\s+(?:only\s+)?in\s+{language}\b",
+            # A stated language preference is meaningful only when it refers to replies/output or ends the clause.
+            rf"{clause}(?:my\s+|your\s+)?preferred\s+(?:output\s+)?language\s+(?:is|[:=])\s*{language}\b",
+            rf"{clause}(?:my\s+)?language\s+preference\s+(?:is|[:=])\s*{language}\b",
+            rf"{clause}preference\s*[:=]\s*{language}(?=\s*(?:$|[.!?;,\n]))",
+            rf"{clause}i\s+(?:prefer|would prefer)\s+{language}\b"
+            rf"(?=\s*(?:$|[.!?;,\n]|for\s+(?:(?:all|my|your)\s+)*(?:replies|responses|answers|messages)))",
+            rf"{clause}{language}\s+only\b",
+            rf"{clause}(?:the\s+)?(?:reply|response|answer|output)\s+"
+            rf"(?:should|must|needs to)\s+be\s+(?:written\s+)?in\s+{language}\b",
+            rf"{clause}(?:reply|response|output|preferred)\s+language\s*[:=]\s*{language}\b",
+            rf"{clause}(?:the\s+)?(?:(?:default|preferred|output|reply|response)\s+)?"
+            rf"(?:reply|response|output|preferred)?\s*language\s+(?:is|should be|[:=])\s*{language}\b",
+            rf"{clause}language\s*[:=]\s*{language}\b",
+            r"\bmatch\s+(?:the\s+)?(?:sender(?:'s)?|conversation|chat)(?:\s+\w+){0,2}\s+language\b",
+            r"\b(?:match|use|reply in|respond in)\s+(?:the\s+)?same language as\s+(?:the\s+)?(?:sender|user|person|conversation|group)\b",
+        )
+        return any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns)
 
     @staticmethod
     def engagement_note(engagement: str) -> str:
