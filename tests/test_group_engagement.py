@@ -26,6 +26,14 @@ def test_default_chatty_still_answers_messages_for_everyone(tmp_path, text):
     assert chance >= s.manager.OPEN_INVITE_MIN_CHANCE
 
 
+@pytest.mark.parametrize("text", ["Any update?", "Who knows?", "Is it live?"])
+def test_short_open_questions_are_invites_at_default_chatty(tmp_path, text):
+    s = make_stack(tmp_path)
+    chance, mode, reason = plan(s, text, recent_active=4)
+    assert mode == "open" and reason == ""
+    assert chance >= s.manager.OPEN_INVITE_MIN_CHANCE
+
+
 def test_conversation_starter_after_a_quiet_spell_is_an_invitation(tmp_path):
     s = make_stack(tmp_path)
     chance, mode, _ = plan(s, "new wallet update dropped today", idle_before=True)

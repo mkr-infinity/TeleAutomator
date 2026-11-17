@@ -1830,7 +1830,7 @@ class ReplyManager(CommandRouterMixin):
             return False
         if self.is_group_broadcast_or_greeting(clean):
             return True
-        return len(clean.split()) >= 3 and bool(re.search(
+        return len(clean.split()) >= 2 and bool(re.search(
             r"[?？]|\b(?:anyone|anybody|everyone|guys|thoughts|opinions|suggestions)\b|^(?:how|what|which|why|where|when|who|can|could|does|has|have|is|are|any)\b", clean
         ))
 
