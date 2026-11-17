@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from dataclasses import dataclass
 
@@ -88,13 +89,25 @@ class ContextAgent:
             return
         self.busy.add(chat_id)
         try:
+            retry_key = f"chat_summary_retry_{chat_id}"
+            retry_state = self.db.get_state(retry_key)
+            if retry_state:
+                try:
+                    saved_retry = json.loads(retry_state)
+                    self.failures[chat_id] = max(0, int(saved_retry["failures"]))
+                    self.retry_after[chat_id] = max(0.0, float(saved_retry["retry_after"]))
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                    logger.warning("Invalid persisted summary retry state for chat %s; clearing it", chat_id)
+                    self.db.set_state(retry_key, "")
+                    self.failures.pop(chat_id, None)
+                    self.retry_after.pop(chat_id, None)
             if self.db.get_state(f"chat_context_file_pending_{chat_id}") == "1":
                 await asyncio.to_thread(self._sync_file, chat_id)
                 if not self.allowed(chat_id):
                     return
             if not force and time.monotonic() - self.last_attempt.get(chat_id, float("-inf")) < 60:
                 return
-            if not force and time.monotonic() < self.retry_after.get(chat_id, 0.0):
+            if not force and time.time() < self.retry_after.get(chat_id, 0.0):
                 return
             epoch = self.db.get_state(f"chat_memory_epoch_{chat_id}")
             marker = int(self.db.get_state(f"chat_summary_marker_{chat_id}", "0"))
@@ -114,10 +127,15 @@ class ContextAgent:
                 self.db.record_action("context", "summary", "success", detail, chat_id=chat_id)
             self.failures.pop(chat_id, None)
             self.retry_after.pop(chat_id, None)
+            if retry_state:
+                self.db.set_state(retry_key, "")
         except Exception:
             # A failing model must not be asked again every minute: wait 5 min, then 15, then up to an hour.
             count = self.failures[chat_id] = self.failures.get(chat_id, 0) + 1
-            self.retry_after[chat_id] = time.monotonic() + (300.0, 900.0, 3600.0)[min(count - 1, 2)]
+            retry_after = time.time() + (300.0, 900.0, 3600.0)[min(count - 1, 2)]
+            self.retry_after[chat_id] = retry_after
+            self.db.set_state(f"chat_summary_retry_{chat_id}", json.dumps(
+                {"failures": count, "retry_after": retry_after}, separators=(",", ":")))
             self.db.record_action("context", "summary", "failed", "Summary update failed; recent messages remain available", chat_id=chat_id)
         finally:
             self.busy.discard(chat_id)

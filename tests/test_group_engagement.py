@@ -181,6 +181,7 @@ def test_failing_summaries_back_off_instead_of_retrying_every_minute(tmp_path):
         await agent.refresh(GROUP)
         assert s.generator.summarize_chat_history.call_count == 1  # still backing off
         agent.retry_after[GROUP] = 0.0
+        s.db.set_state(f"chat_summary_retry_{GROUP}", "")
         await agent.refresh(GROUP)
         assert s.generator.summarize_chat_history.call_count == 2
         assert agent.failures[GROUP] == 2
@@ -217,15 +218,51 @@ def test_summary_backoff_schedule_caps_and_resets_after_success(tmp_path):
     s.generator.summarize_chat_history = MagicMock(side_effect=RuntimeError("offline"))
 
     async def run():
-        with patch("app.ai.chat_context.time", SimpleNamespace(monotonic=lambda: 10000)):
+        with patch("app.ai.chat_context.time", SimpleNamespace(monotonic=lambda: 10000, time=lambda: 50000)):
             for delay in (300, 900, 3600, 3600):
                 await agent.refresh(GROUP, force=True)
-                assert agent.retry_after[GROUP] == 10000 + delay
+                assert agent.retry_after[GROUP] == 50000 + delay
             s.generator.summarize_chat_history.side_effect = None
             s.generator.summarize_chat_history.return_value = "Release details"
             await agent.refresh(GROUP, force=True)
             assert GROUP not in agent.failures and GROUP not in agent.retry_after
+            assert s.db.get_state(f"chat_summary_retry_{GROUP}") == ""
         await agent.close()
+
+    asyncio.run(run())
+
+
+def test_summary_backoff_survives_context_agent_restart(tmp_path):
+    s = make_stack(tmp_path)
+    for number in range(1, 10):
+        s.db.record_chat_message(GROUP, number, 222, "Alice", f"message number {number}")
+    s.generator.summarize_chat_history = MagicMock(side_effect=RuntimeError("model down"))
+    first = s.manager.context_agent
+
+    async def run():
+        with patch("app.ai.chat_context.time", SimpleNamespace(monotonic=lambda: 10000, time=lambda: 50000)):
+            await first.refresh(GROUP, force=True)
+            assert first.failures[GROUP] == 1
+            saved = s.db.get_state(f"chat_summary_retry_{GROUP}")
+            assert '"retry_after":50300.0' in saved
+
+            from app.ai.chat_context import ContextAgent
+            from app.storage.database import Database
+            restarted_db = Database(s.db.db_path)
+            restarted = ContextAgent(restarted_db, s.privacy, s.generator)
+            await restarted.refresh(GROUP)
+            s.generator.summarize_chat_history.assert_called_once()
+            assert restarted.failures[GROUP] == 1
+            assert restarted.retry_after[GROUP] == 50300
+
+            with patch("app.ai.chat_context.time", SimpleNamespace(monotonic=lambda: 10001, time=lambda: 50301)):
+                s.generator.summarize_chat_history.side_effect = None
+                s.generator.summarize_chat_history.return_value = "Release details"
+                await restarted.refresh(GROUP)
+            assert s.generator.summarize_chat_history.call_count == 2
+            assert restarted_db.get_state(f"chat_summary_retry_{GROUP}") == ""
+            await restarted.close()
+        await first.close()
 
     asyncio.run(run())
 
