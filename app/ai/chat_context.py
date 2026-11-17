@@ -89,6 +89,7 @@ class ContextAgent:
         if not self.allowed(chat_id) or chat_id in self.busy or len(self.busy) >= 2:
             return
         self.busy.add(chat_id)
+        epoch = None
         try:
             retry_key = f"chat_summary_retry_{chat_id}"
             retry_state = self.db.get_state(retry_key)
@@ -142,6 +143,16 @@ class ContextAgent:
             self.retry_after.pop(chat_id, None)
             self.db.set_chat_summary_retry_state(chat_id, "")
         except Exception:
+            # Clearing memory, revoking access, or shutting down while the model call is
+            # in flight makes this failure belong to an obsolete context. Do not recreate
+            # retry state after the clear operation removed it.
+            if (not self.allowed(chat_id)
+                    or (epoch is not None
+                        and self.db.get_state(f"chat_memory_epoch_{chat_id}") != epoch)):
+                self.failures.pop(chat_id, None)
+                self.retry_after.pop(chat_id, None)
+                self.last_attempt.pop(chat_id, None)
+                return
             # A failing model must not be asked again every minute: wait 5 min, then 15, then up to an hour.
             count = self.failures[chat_id] = self.failures.get(chat_id, 0) + 1
             retry_after = time.time() + (300.0, 900.0, 3600.0)[min(count - 1, 2)]

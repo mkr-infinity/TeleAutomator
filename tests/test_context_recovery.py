@@ -11,6 +11,8 @@ import pytest
 
 from app.ai.chat_context import ContextAgent
 from app.ai.provider import IntentionalSilence
+from app.ai.reply_generator import ReplyGenerator
+from app.config import AppConfig
 from app.storage.database import Database
 
 
@@ -241,6 +243,47 @@ def test_memory_clear_during_summary_prevents_late_result_resurrection(tmp_path)
     assert restarted.get_state("chat_summary_marker_123") == "0"
     assert restarted.get_permanent_context(123)["notes"] == "Owner notes"
     assert json.loads((db.contexts_dir / "123.json").read_text())["ai_memory"] == ""
+
+
+def test_memory_clear_during_failed_summary_does_not_restore_retry_state(tmp_path):
+    db = Database(tmp_path / "state.db")
+    db.record_chat_message(123, 1, 2, "Contact", "Old detail")
+    agent = agent_for(db)
+
+    def summarize(*_args, **_kwargs):
+        db.clear_chat_context(123)
+        raise RuntimeError("provider failed after clear")
+
+    agent.generator.summarize_chat_history.side_effect = summarize
+
+    async def run():
+        await agent.refresh(123, force=True)
+        await agent.close()
+
+    asyncio.run(run())
+    assert db.get_chat_summary(123) == ""
+    assert db.get_state("chat_summary_marker_123") == "0"
+    assert db.get_state("chat_summary_retry_123") == ""
+    assert not db.list_actions("failed")
+    assert 123 not in agent.failures and 123 not in agent.retry_after
+    assert 123 not in agent.last_attempt
+
+
+def test_unconfigured_provider_treats_summary_as_intentional_silence(tmp_path):
+    db = Database(tmp_path / "state.db")
+    db.record_chat_message(123, 1, 2, "Contact", "New detail")
+    generator = ReplyGenerator(AppConfig(api_id=1, api_hash="fake", ai_enabled=False))
+    agent = ContextAgent(db, SimpleNamespace(is_chat_allowed=lambda *_: True), generator)
+
+    async def run():
+        await agent.refresh(123, force=True)
+        await agent.close()
+
+    asyncio.run(run())
+    assert db.get_chat_summary(123) == ""
+    assert db.get_state("chat_summary_marker_123", "0") == "0"
+    assert db.get_state("chat_summary_retry_123") == ""
+    assert not db.list_actions("failed")
 
 
 def test_failed_summary_keeps_marker_for_retry(tmp_path):

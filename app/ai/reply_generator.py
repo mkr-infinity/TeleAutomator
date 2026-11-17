@@ -205,7 +205,9 @@ class ReplyGenerator:
             return ""
         from app.ai.provider import LocalRuleProvider
         if isinstance(self.provider, LocalRuleProvider):
-            return ""
+            # No configured provider is intentional silence, not a failed summary.
+            # Keep the message marker for a later run when an AI provider is enabled.
+            return IntentionalSilence()
         chat_type_label = "Telegram group chat" if is_group else "Telegram private chat"
         prompt = (
             f"You are building permanent memory for a {chat_type_label} '{chat_title}'.\n\n"
