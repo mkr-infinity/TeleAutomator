@@ -828,6 +828,7 @@ class Database:
                 conn.executemany(
                     "INSERT INTO runtime_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                     [(f"chat_summary_{chat_id}", ""), (f"chat_summary_marker_{chat_id}", "0"),
+                     (f"chat_summary_retry_{chat_id}", ""),
                      (f"chat_memory_epoch_{chat_id}", str(time.time_ns()))],
                 )
             self.sync_chat_context_file(chat_id)

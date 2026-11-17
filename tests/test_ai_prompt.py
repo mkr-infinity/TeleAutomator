@@ -542,6 +542,19 @@ def test_custom_prompt_language_adherence():
     assert "English Only" in user_prompt_def
 
 
+def test_empty_chat_summary_is_reported_as_a_model_failure():
+    from unittest.mock import MagicMock
+
+    generator = ReplyGenerator(config=MagicMock(), provider=MagicMock(generate_reply=MagicMock(return_value="")))
+    errors = []
+    generator.on_model_error = lambda task, error: errors.append((task, error))
+    with pytest.raises(RuntimeError, match="empty chat summary"):
+        generator.summarize_chat_history("Group", "", "Member: Fresh detail")
+    assert len(errors) == 1
+    assert errors[0][0] == "chat summary"
+    assert isinstance(errors[0][1], RuntimeError)
+
+
 def test_clean_reply_never_writes_usernames_or_names():
     """Verify clean_reply strips all @usernames and user names from text."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")

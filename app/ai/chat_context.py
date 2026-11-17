@@ -101,6 +101,11 @@ class ContextAgent:
                     self.db.set_chat_summary_retry_state(chat_id, "")
                     self.failures.pop(chat_id, None)
                     self.retry_after.pop(chat_id, None)
+            else:
+                # A cleared memory context also clears its persisted retry state. Do not let
+                # an older in-memory delay block summaries for the newly initialized context.
+                self.failures.pop(chat_id, None)
+                self.retry_after.pop(chat_id, None)
             if self.db.get_state(f"chat_context_file_pending_{chat_id}") == "1":
                 await asyncio.to_thread(self._sync_file, chat_id)
                 if not self.allowed(chat_id):
@@ -120,15 +125,19 @@ class ContextAgent:
             title = (self.db.get_chat_metadata(chat_id) or {}).get("title") or "This chat"
             summary = await asyncio.to_thread(self.generator.summarize_chat_history, title,
                                              self.db.get_chat_summary(chat_id), raw, is_group=chat_id < 0)
-            if summary and self.allowed(chat_id) and self.db.set_chat_summary(chat_id, summary, epoch=epoch, marker=latest):
-                detail = ("Summary saved in database; context file sync pending"
-                          if self.db.get_state(f"chat_context_file_pending_{chat_id}") == "1"
-                          else "Chat memory updated and saved to context file")
-                self.db.record_action("context", "summary", "success", detail, chat_id=chat_id)
+            if not isinstance(summary, str) or not summary.strip():
+                raise RuntimeError("Summary model returned no content")
+            if not self.allowed(chat_id):
+                return
+            if not self.db.set_chat_summary(chat_id, summary, epoch=epoch, marker=latest):
+                return
+            detail = ("Summary saved in database; context file sync pending"
+                      if self.db.get_state(f"chat_context_file_pending_{chat_id}") == "1"
+                      else "Chat memory updated and saved to context file")
+            self.db.record_action("context", "summary", "success", detail, chat_id=chat_id)
             self.failures.pop(chat_id, None)
             self.retry_after.pop(chat_id, None)
-            if retry_state:
-                self.db.set_chat_summary_retry_state(chat_id, "")
+            self.db.set_chat_summary_retry_state(chat_id, "")
         except Exception:
             # A failing model must not be asked again every minute: wait 5 min, then 15, then up to an hour.
             count = self.failures[chat_id] = self.failures.get(chat_id, 0) + 1

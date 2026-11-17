@@ -260,6 +260,40 @@ def test_failed_summary_keeps_marker_for_retry(tmp_path):
     assert db.list_actions("failed")[0]["action"] == "summary"
 
 
+def test_empty_summary_backs_off_and_clearing_memory_resets_retry(tmp_path):
+    db = Database(tmp_path / "state.db")
+    db.record_chat_message(123, 1, 2, "Contact", "First project detail")
+    agent = agent_for(db)
+    agent.generator.summarize_chat_history.side_effect = ["", "Updated project recap"]
+    clock = {"monotonic": 10000.0, "time": 50000.0}
+    fake_time = SimpleNamespace(monotonic=lambda: clock["monotonic"], time=lambda: clock["time"])
+
+    async def run():
+        with pytest.MonkeyPatch.context() as patcher:
+            patcher.setattr("app.ai.chat_context.time", fake_time)
+            await agent.refresh(123, force=True)
+            retry = json.loads(db.get_state("chat_summary_retry_123"))
+            assert retry["failures"] == 1 and retry["retry_after"] == 50300.0
+            assert agent.failures[123] == 1
+            assert db.get_state("chat_summary_marker_123", "0") == "0"
+            assert db.list_actions("failed")[0]["action"] == "summary"
+
+            db.clear_chat_context(123)
+            assert db.get_state("chat_summary_retry_123") == ""
+            db.record_chat_message(123, 2, 2, "Contact", "Fresh project detail")
+            clock["monotonic"] += 61.0
+            await agent.refresh(123, min_new_messages=1)
+
+        assert agent.generator.summarize_chat_history.call_count == 2
+        assert db.get_chat_summary(123) == "Updated project recap"
+        assert db.get_state("chat_summary_marker_123") == "2"
+        assert db.get_state("chat_summary_retry_123") == ""
+        assert 123 not in agent.failures and 123 not in agent.retry_after
+        await agent.close()
+
+    asyncio.run(run())
+
+
 def test_close_does_not_flush_after_allowlist_revocation(tmp_path):
     db = Database(tmp_path / "state.db")
     db.record_chat_message(123, 1, 2, "Contact", "Private detail")

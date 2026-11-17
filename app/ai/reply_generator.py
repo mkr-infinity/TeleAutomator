@@ -122,7 +122,10 @@ class ReplyGenerator:
             else redact_secrets(line) for line in prompt.splitlines()
         )
         try:
-            return self.provider.generate_reply(prompt, redact_secrets(instructions))
+            result = self.provider.generate_reply(prompt, redact_secrets(instructions))
+            if task == "chat summary" and (not isinstance(result, str) or not result.strip()):
+                raise RuntimeError("Model returned an empty chat summary")
+            return result
         except Exception as exc:
             callback = self.on_model_error
             if callback is not None:
