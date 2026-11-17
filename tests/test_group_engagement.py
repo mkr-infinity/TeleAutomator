@@ -246,6 +246,22 @@ def test_pending_group_reply_keeps_final_authorization_guards(tmp_path, change):
     assert not s.manager._context_current(context)
 
 
+def test_other_group_send_does_not_cancel_pending_reply(tmp_path):
+    s = make_stack(tmp_path)
+
+    async def run():
+        release = asyncio.Event()
+        pending = asyncio.create_task(release.wait())
+        s.manager._pending_deferred_replies[GROUP] = pending
+        await s.manager._send_reply(GROUP, 0, "A separate message", adaptive_delay=False)
+        assert not pending.done()
+        release.set()
+        await pending
+        await s.manager.close()
+
+    asyncio.run(run())
+
+
 def test_pending_group_reply_sends_before_later_messages_and_uses_current_context(tmp_path):
     s = make_stack(tmp_path)
     s.db.set_state("chat_chatty_-100111", "1")

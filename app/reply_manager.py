@@ -2020,10 +2020,10 @@ class ReplyManager(CommandRouterMixin):
 
         async with self._get_chat_send_lock(chat_id):
             self._last_delivery_parts[chat_id] = 0
-            # Cancel any pending deferred reply task for this chat to avoid double-sends
+            # Private drafts are superseded; group replies remain queued behind this send.
             curr_task = asyncio.current_task()
             old_task = self._pending_deferred_replies.get(chat_id)
-            if old_task and old_task is not curr_task and not old_task.done():
+            if chat_id > 0 and old_task and old_task is not curr_task and not old_task.done():
                 old_task.cancel()
                 self._pending_deferred_replies.pop(chat_id, None)
 
