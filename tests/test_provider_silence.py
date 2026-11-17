@@ -4,7 +4,7 @@ import io
 import json
 import logging
 import urllib.error
-from unittest.mock import Mock, call
+from unittest.mock import MagicMock, Mock, call
 
 import pytest
 
@@ -116,7 +116,7 @@ def test_non_marker_reply_is_preserved(provider, monkeypatch, text):
 
 def test_all_empty_responses_still_fail(provider, monkeypatch):
     urlopen = mock_requests(monkeypatch, response(provider, None), response(provider, ""))
-    with pytest.raises(RuntimeError, match="reply generation failed"):
+    with pytest.raises(RuntimeError, match="reply generation failed|returned empty content"):
         provider.generate_reply("prompt", "instructions")
     assert urlopen.call_count == 2
     kind = "custom" if isinstance(provider, OpenAIProvider) else "gemini"
@@ -125,3 +125,75 @@ def test_all_empty_responses_still_fail(provider, monkeypatch):
     ]
     if isinstance(provider, OpenAIProvider):
         assert provider.active_model == ""
+
+
+INCEPTION = "https://api.inceptionlabs.ai/v1"
+
+
+def mercury(max_tokens, effort="default", base=INCEPTION):
+    return OpenAIProvider(api_key="k", model="mercury-3", base_url=base, max_tokens=max_tokens, reasoning_effort=effort)
+
+
+@pytest.mark.parametrize("configured,effort,expected", [
+    (512, "default", 3000), (256, "low", 3000), (2999, "high", 3000), (3000, "default", 3000), (8000, "default", 8000),
+    (512, "instant", 512), (100, "instant", 256), (None, "default", None),
+])
+def test_reasoning_models_never_get_a_token_limit_that_starves_the_answer(configured, effort, expected):
+    assert mercury(configured, effort).effective_max_tokens() == expected
+
+
+def test_other_openai_compatible_endpoints_keep_the_owners_limit():
+    assert mercury(512, base="https://api.groq.com/openai/v1").effective_max_tokens() == 512
+
+
+def test_request_sends_the_raised_limit_and_a_user_agent(monkeypatch):
+    provider = mercury(512, "instant")
+    captured = []
+
+    def fake_urlopen(req, timeout=0):
+        captured.append(req)
+        raise urllib.error.URLError("stop")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(Exception):
+        provider.generate_reply("hi", "be brief")
+    body = json.loads(captured[0].data)
+    assert body["max_tokens"] == 512 and body["reasoning_effort"] == "instant"
+    assert captured[0].get_header("User-agent").startswith("TeleAutomator")
+
+
+def test_custom_base_url_without_v1_is_retried_under_v1_and_remembered(monkeypatch):
+    provider = OpenAIProvider(api_key="k", model="m", base_url="https://llm.example.com")
+    seen = []
+
+    def fake_urlopen(req, timeout=0):
+        seen.append(req.full_url)
+        if req.full_url == "https://llm.example.com/chat/completions":
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+        reply = MagicMock()
+        reply.read.return_value = json.dumps({"choices": [{"message": {"content": "hey there"}}]}).encode()
+        reply.__enter__.return_value = reply
+        return reply
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    assert provider.generate_reply("hi", "x") == "hey there"
+    assert seen == ["https://llm.example.com/chat/completions", "https://llm.example.com/v1/chat/completions"]
+    assert provider.generate_reply("hi", "x") == "hey there"
+    assert seen[-1] == "https://llm.example.com/v1/chat/completions" and len(seen) == 3
+
+
+@pytest.mark.parametrize("typed", ["https://api.example.com/v1/chat/completions", "https://api.example.com/v1/", "api.example.com/v1"])
+def test_pasted_endpoint_forms_all_resolve_to_one_chat_endpoint(typed):
+    assert OpenAIProvider(api_key="k", model="m", base_url=typed).endpoint_url == "https://api.example.com/v1/chat/completions"
+
+
+def test_empty_answer_logs_why(monkeypatch, caplog):
+    provider = mercury(512)
+    reply = MagicMock()
+    reply.read.return_value = json.dumps({"choices": [{"message": {"content": None}, "finish_reason": "length"}],
+                                          "usage": {"completion_tokens": 3000}}).encode()
+    reply.__enter__.return_value = reply
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_a, **_k: reply)
+    with caplog.at_level("WARNING"), pytest.raises(RuntimeError, match="empty content"):
+        provider.generate_reply("hi", "x")
+    assert "finish_reason=length" in caplog.text and "max_tokens=3000" in caplog.text

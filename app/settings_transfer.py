@@ -109,7 +109,7 @@ def validate_preferences(payload, db):
             raise ValueError("Owner names must contain 1–200 characters")
         if key in ("quiet_hours_start", "quiet_hours_end") and not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value):
             raise ValueError("Quiet hours must use HH:MM")
-        if key == "ai_reasoning_effort" and value not in ("default", "off", "none", "low", "medium", "high"):
+        if key == "ai_reasoning_effort" and value not in ("default", "off", "none", "instant", "low", "medium", "high"):
             raise ValueError("Invalid reasoning setting")
         if key == "ai_max_tokens" and value:
             value = _number(value, key, 1, 1000000, integer=True)

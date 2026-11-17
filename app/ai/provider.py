@@ -238,10 +238,47 @@ class OpenAIProvider(AIProvider):
 
         return candidates or [self.model]
 
+    # Mercury is a reasoning model: thinking tokens share max_tokens, so a small limit leaves no room
+    # for the answer and the API returns HTTP 200 with empty content. Inception recommends >= 3000.
+    REASONING_TOKEN_FLOOR = 3000
+    INSTANT_TOKEN_FLOOR = 256
+
+    def _is_inception(self) -> bool:
+        return "inceptionlabs" in self.endpoint_url.lower()
+
+    def effective_max_tokens(self) -> Optional[int]:
+        """The limit actually sent: the owner's value, raised when it would starve a reasoning model."""
+        if self.max_tokens is None or self.max_tokens <= 0:
+            return None
+        if not self._is_inception():
+            return self.max_tokens
+        floor = self.INSTANT_TOKEN_FLOOR if self.reasoning_effort == "instant" else self.REASONING_TOKEN_FLOOR
+        return max(self.max_tokens, floor)
+
+    def _request_headers(self) -> Dict[str, str]:
+        # Some gateways (Cloudflare-fronted APIs) reject urllib's default User-Agent with HTTP 403.
+        return {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+            "User-Agent": "TeleAutomator/3 (+https://github.com/mkr-infinity/TeleAutomator)",
+            "Accept": "application/json",
+        }
+
+    def _build_request(self, url: str, data: bytes) -> urllib.request.Request:
+        return urllib.request.Request(url, data=data, headers=self._request_headers(), method="POST")
+
+    def _fallback_endpoint(self) -> str:
+        """Many OpenAI-compatible hosts only serve /v1; a base URL typed without it is retried once."""
+        parts = urllib.parse.urlsplit(self.endpoint_url)
+        if parts.path.rstrip("/") == "/chat/completions":
+            return urllib.parse.urlunsplit((parts.scheme, parts.netloc, "/v1/chat/completions", "", ""))
+        return ""
+
     def generate_reply(self, prompt: str, system_instructions: str) -> str:
         candidates = self.get_candidate_models()
         last_error: Optional[Exception] = None
-        is_inception = "inceptionlabs" in self.endpoint_url.lower()
+        is_inception = self._is_inception()
+        token_limit = self.effective_max_tokens()
 
         for m in candidates:
             payload: Dict[str, Any] = {
@@ -252,49 +289,59 @@ class OpenAIProvider(AIProvider):
                 ],
                 "temperature": self.temperature,
             }
-            if self.max_tokens is not None and self.max_tokens > 0:
-                payload["max_tokens"] = self.max_tokens
+            if token_limit:
+                payload["max_tokens"] = token_limit
             if is_inception and self.reasoning_effort not in ("off", "none", "", "default"):
                 payload["reasoning_effort"] = self.reasoning_effort
 
             data = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(
-                self.endpoint_url,
-                data=data,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.api_key}",
-                },
-                method="POST",
-            )
 
             try:
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    body = json.loads(resp.read().decode("utf-8"))
-                    usage = body.get("usage", {})
-                    if self.usage_callback and usage:
-                        try:
-                            pt = int(usage.get("prompt_tokens", 0))
-                            ct = int(usage.get("completion_tokens", 0))
-                            tt = int(usage.get("total_tokens", pt + ct))
-                            self.usage_callback("custom", m, pt, ct, tt)
-                        except Exception as ue:
-                            logger.debug(f"Failed to record token usage: {ue}")
+                try:
+                    with urllib.request.urlopen(self._build_request(self.endpoint_url, data), timeout=20) as resp:
+                        body = json.loads(resp.read().decode("utf-8"))
+                except urllib.error.HTTPError as http_error:
+                    alternate = self._fallback_endpoint() if http_error.code == 404 else ""
+                    if not alternate:
+                        raise
+                    with urllib.request.urlopen(self._build_request(alternate, data), timeout=20) as resp:
+                        body = json.loads(resp.read().decode("utf-8"))
+                    self.endpoint_url = alternate  # remember what works
+                    logger.info("Endpoint answered only under /v1; using %s from now on.", alternate)
+                usage = body.get("usage", {})
+                if self.usage_callback and usage:
+                    try:
+                        pt = int(usage.get("prompt_tokens", 0))
+                        ct = int(usage.get("completion_tokens", 0))
+                        tt = int(usage.get("total_tokens", pt + ct))
+                        self.usage_callback("custom", m, pt, ct, tt)
+                    except Exception as ue:
+                        logger.debug(f"Failed to record token usage: {ue}")
 
-                    choices = body.get("choices", [])
-                    if choices:
-                        raw_content = choices[0].get("message", {}).get("content")
-                        marker = _reply_marker(str(raw_content)) if raw_content is not None else ""
-                        if marker in ("null", "undefined", ""):
-                            logger.warning(f"OpenAI-compatible model '{m}' returned malformed empty content. Trying next candidate...")
-                            continue
-                        content = str(raw_content).strip().strip('"')
-                        self.active_model = m
+                choices = body.get("choices", [])
+                if choices:
+                    raw_content = choices[0].get("message", {}).get("content")
+                    marker = _reply_marker(str(raw_content)) if raw_content is not None else ""
+                    if marker in ("null", "undefined", ""):
+                        message = choices[0].get("message", {}) or {}
+                        logger.warning(
+                            "OpenAI-compatible model '%s' returned malformed empty content "
+                            "(finish_reason=%s, completion_tokens=%s, max_tokens=%s, reasoning_effort=%s, has_reasoning=%s). "
+                            "Trying next candidate...",
+                            m, choices[0].get("finish_reason"), usage.get("completion_tokens"), token_limit,
+                            self.reasoning_effort, bool(message.get("reasoning_content") or message.get("reasoning")),
+                        )
+                        last_error = RuntimeError(f"{m} returned empty content (finish_reason={choices[0].get('finish_reason')})")
+                        continue
+                    content = str(raw_content).strip().strip('"')
+                    self.active_model = m
 
-                        if marker == "none":
-                            logger.info(f"OpenAI-compatible model '{m}' returned intentional silence (NONE).")
-                            return ""
-                        return content
+                    if marker == "none":
+                        logger.info(f"OpenAI-compatible model '{m}' returned intentional silence (NONE).")
+                        return ""
+                    return content
+                last_error = RuntimeError(f"{m} returned no choices")
+                logger.warning("OpenAI-compatible model '%s' returned no choices. Trying next candidate...", m)
             except Exception as e:
                 last_error = e
                 logger.warning(f"OpenAI-compatible model '{m}' request failed: {e}. Trying next candidate...")
@@ -315,18 +362,15 @@ class OpenAIProvider(AIProvider):
                 "model": m,
                 "messages": [{"role": "user", "content": "hi"}],
             }
-            if self.max_tokens is not None and self.max_tokens > 0:
-                payload["max_tokens"] = self.max_tokens
+            if self.effective_max_tokens():
+                payload["max_tokens"] = self.effective_max_tokens()
             if is_inception and self.reasoning_effort not in ("off", "none", "", "default"):
                 payload["reasoning_effort"] = self.reasoning_effort
             data = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(
                 self.endpoint_url,
                 data=data,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.api_key}",
-                },
+                headers=self._request_headers(),
                 method="POST",
             )
             try:
