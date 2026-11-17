@@ -188,6 +188,7 @@ def register_handlers(
 
         is_mention = not is_group or (is_explicitly_mentioned or is_reply_to_me)
         engagement = ""
+        group_reaction_attempted = False
         addressless_text = re.sub(r"@\w+", "", text)
         if owner_name:
             addressless_text = re.sub(r"\b" + re.escape(owner_name) + r"\b", "", addressless_text, flags=re.IGNORECASE)
@@ -293,9 +294,12 @@ def register_handlers(
                 reaction_share = 0.0 if (engagement == "open" or asked) else (0.10 if chance >= 1.0 else 0.20)
                 if random.random() < reaction_share:
                     logger.info(f"[GROUP REACTION] Chime-in with emoji reaction in group {chat_id}.")
-                    await reply_manager.maybe_send_reaction(chat_id, message_id, text)
-                    reply_manager.mark_group_activity(chat_id)
-                    return
+                    group_reaction_attempted = True
+                    reacted = await reply_manager.maybe_send_reaction(chat_id, message_id, text)
+                    if reacted:
+                        reply_manager.mark_group_activity(chat_id)
+                        return
+                    logger.info("[GROUP REACTION] Reaction unavailable in chat %s; continuing with a text reply", chat_id)
                 logger.info(f"[GROUP ENGAGEMENT] Active chime-in in group {chat_id} ({engagement or 'relevant'}, chance: {chance:.2f}). Replying as human.")
                 reply_manager.mark_group_activity(chat_id)
 
@@ -315,7 +319,7 @@ def register_handlers(
         # Open invitations and questions selected for a reply must reach the writer as text.
         text_first_group_message = is_group and (engagement == "open" or "?" in text or "？" in text)
         # Natural emoji reaction across sentiment spectrum (humor, excitement, agreement, surprise, warmth)
-        if (not is_group or not is_reply_to_other) and not text_first_group_message:
+        if (not is_group or not is_reply_to_other) and not text_first_group_message and not group_reaction_attempted:
             reacted = await reply_manager.maybe_send_reaction(chat_id, message_id, text)
             if reacted and not is_mention:
                 react_only_prob = float(reply_manager.db.get_state("react_only_probability", str(getattr(reply_manager.config, "react_only_probability", 0.25))))

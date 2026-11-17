@@ -140,6 +140,19 @@ def test_handler_at_full_chatty_replies_in_words_for_questions_and_mostly_for_st
     assert s.manager.handle_incoming_eligible_message.await_count == 2
 
 
+def test_failed_reaction_falls_back_to_text_reply(tmp_path):
+    s = make_stack(tmp_path)
+    s.db.set_state("chat_chatty_-100111", "1.0")
+    s.db.record_chat_message(GROUP, 1, 111, "Alex", "validator network discussion one")
+    s.db.record_chat_message(GROUP, 2, 222, "Sam", "validator network discussion two")
+    callback = build_handler(s)
+    s.manager.maybe_send_reaction = AsyncMock(return_value=False)
+    with patch("random.random", side_effect=[0.0, 0.05]):  # select the 10% reaction path
+        asyncio.run(callback(event("the validator rewards look great", 303)))
+    s.manager.maybe_send_reaction.assert_awaited_once()
+    s.manager.handle_incoming_eligible_message.assert_awaited_once()
+
+
 def test_short_group_question_cannot_be_consumed_by_reaction_only_path(tmp_path):
     s = make_stack(tmp_path)
     s.db.set_state("chat_chatty_-100111", "1.0")
