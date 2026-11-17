@@ -216,7 +216,7 @@ def test_failing_summaries_back_off_instead_of_retrying_every_minute(tmp_path):
         await agent.refresh(GROUP)
         assert s.generator.summarize_chat_history.call_count == 1  # still backing off
         agent.retry_after[GROUP] = 0.0
-        s.db.set_chat_summary_retry_state(GROUP, "")
+        s.db.set_chat_summary_retry_state(GROUP, '{"failures":1,"retry_after":0}')
         await agent.refresh(GROUP)
         assert s.generator.summarize_chat_history.call_count == 2
         assert agent.failures[GROUP] == 2
