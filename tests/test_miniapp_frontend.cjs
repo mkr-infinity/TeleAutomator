@@ -38,7 +38,10 @@ const context = {
 };
 vm.createContext(context);
 const file = path.join(__dirname, "../miniapp/app.js");
-const source = fs.readFileSync(file, "utf8").replace(
+const miniappSource = fs.readFileSync(file, "utf8");
+assert.match(miniappSource, /modelEl\.textContent = `Healthy models: \$\{res\.working_models\.join\(", "\)\}`;/,
+  "the health headline must list only models verified by the current request");
+const source = miniappSource.replace(
   /\n  init\(\)\.catch\([^\n]+\);\n/, "\n  globalThis.testAPI = { api, syncField, refreshMore, renderMoreControls, flushOfflineQueue, enqueueAction, loadOfflineQueue, setUser(id) { activeUserId = id; } };\n"
 );
 assert.match(source, /globalThis.testAPI/);
@@ -84,6 +87,8 @@ vm.runInContext(source, context, { filename: file });
   for (const action of ["apikey", "setai", "prompt", "setcontext", "approve", "approve_all", "stop", "resume", "mode"]) {
     assert.equal(context.testAPI.enqueueAction(action, { value: "fixture-secret" }), false, `${action} must require an online request`);
   }
+  assert.equal(context.testAPI.enqueueAction("thinking", { value: "instant" }), true);
+  assert.equal(queued().at(-1).params.value, "instant");
   storage.set(queueKey(111), '{}');
   assert.equal(context.testAPI.loadOfflineQueue().length, 0, "malformed queues must not break startup");
   storage.set(queueKey(111), JSON.stringify([{ ...item(0), time: new Date(Date.now() - 7200000).toISOString() }]));
@@ -115,7 +120,7 @@ vm.runInContext(source, context, { filename: file });
   const swContext = vm.createContext({
     URL, Response, setTimeout(callback) { callback(); },
     self: { location: { origin }, addEventListener(event, handler) { handlers[event] = handler; }, skipWaiting() {}, clients: { async claim() {} } },
-    caches: { async open() { return cache; }, async keys() { return ["teleautomator-v3.0.4", `teleautomator-v${projectVersion}`, "another-app"]; }, async delete(name) { deleted.push(name); } },
+    caches: { async open() { return cache; }, async keys() { return ["teleautomator-v3.0.4", `teleautomator-v${projectVersion}`, `teleautomator-v${projectVersion}-engagement`, `teleautomator-v${projectVersion}-thread-context`, `teleautomator-v${projectVersion}-model-health`, "another-app"]; }, async delete(name) { deleted.push(name); } },
     async fetch() { networkReads++; return new Response("temporarily unavailable", { status: 503 }); },
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../miniapp/sw.js"), "utf8"), swContext);
@@ -125,7 +130,7 @@ vm.runInContext(source, context, { filename: file });
   let activation;
   handlers.activate({ waitUntil(promise) { activation = promise; } });
   await activation;
-  assert.deepEqual(deleted, ["teleautomator-v3.0.4"], "other apps' caches must survive updates");
+  assert.deepEqual(deleted, ["teleautomator-v3.0.4", `teleautomator-v${projectVersion}`, `teleautomator-v${projectVersion}-engagement`, `teleautomator-v${projectVersion}-thread-context`], "old app caches must be replaced and other apps' caches preserved");
   for (const url of [origin + "/api/state", origin + "/api/events?initData=private", "https://telegram.org/js/telegram-web-app.js"]) {
     handlers.fetch({ request: { method: "GET", url }, respondWith() { assert.fail("private APIs and external requests must bypass this cache"); } });
   }

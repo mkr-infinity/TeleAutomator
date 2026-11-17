@@ -7,7 +7,7 @@ from contextlib import nullcontext
 from typing import Any, Dict, List, Optional
 
 from app.ai.prompt_manager import PromptManager
-from app.ai.provider import AIProvider, GeminiProvider, LocalRuleProvider, OpenAIProvider
+from app.ai.provider import AIProvider, GeminiProvider, IntentionalSilence, LocalRuleProvider, OpenAIProvider
 from app.config import AppConfig
 from app.logger import redact_secrets, register_secret, setup_logger
 from app.safety_manager import SENSITIVE_CONTENT_PATTERNS
@@ -96,7 +96,8 @@ class ReplyGenerator:
         self.db = database
         self.provider = provider or create_ai_provider(config, database=database)
         custom_p = database.get_state("custom_system_prompt", "") if database else ""
-        saved_lang = database.get_state("chat_language", "english") if database else "english"
+        default_lang = getattr(config, "default_chat_language", "english")
+        saved_lang = database.get_state("chat_language", default_lang) if database else default_lang
         saved_owner = database.get_state("owner_name", "") if database else ""
         self.prompt_manager = PromptManager(
             style=style,
@@ -121,7 +122,10 @@ class ReplyGenerator:
             else redact_secrets(line) for line in prompt.splitlines()
         )
         try:
-            return self.provider.generate_reply(prompt, redact_secrets(instructions))
+            result = self.provider.generate_reply(prompt, redact_secrets(instructions))
+            if task == "chat summary" and not isinstance(result, IntentionalSilence) and (not isinstance(result, str) or not result.strip()):
+                raise RuntimeError("Model returned an empty chat summary")
+            return result
         except Exception as exc:
             callback = self.on_model_error
             if callback is not None:
@@ -159,6 +163,7 @@ class ReplyGenerator:
         permanent_context: Optional[str] = None,
         is_group: bool = False,
         is_mention: bool = False,
+        engagement: str = "",
     ) -> str:
         """Generate a draft reply text considering conversation context when provided."""
         prompt = self.prompt_manager.build_user_prompt(
@@ -170,6 +175,7 @@ class ReplyGenerator:
             is_mention=is_mention,
             persona_override=persona_override,
             style_override=style_override,
+            engagement=engagement,
         )
         instructions = self.prompt_manager.get_system_instructions(
             style_override=style_override,
@@ -199,7 +205,9 @@ class ReplyGenerator:
             return ""
         from app.ai.provider import LocalRuleProvider
         if isinstance(self.provider, LocalRuleProvider):
-            return ""
+            # No configured provider is intentional silence, not a failed summary.
+            # Keep the message marker for a later run when an AI provider is enabled.
+            return IntentionalSilence()
         chat_type_label = "Telegram group chat" if is_group else "Telegram private chat"
         prompt = (
             f"You are building permanent memory for a {chat_type_label} '{chat_title}'.\n\n"
@@ -213,6 +221,8 @@ class ReplyGenerator:
         )
         try:
             draft = self._generate_reply(prompt, "You are a concise chat-memory system. Output only the updated recap.", task="chat summary")
+            if isinstance(draft, IntentionalSilence):
+                return draft
             return draft.strip()[:1500]
         except Exception as e:
             logger.error(f"Failed to summarize chat history: {e}")

@@ -300,16 +300,7 @@ class PromptManager:
                 )
 
             # Language check: if custom prompt does not mention language, apply default language rule
-            lower_custom = custom.lower()
-            has_lang = any(
-                re.search(rf"\b(?:in\s+|use\s+|speak\s+|talk\s+|reply\s+in\s+)?{lang}\b", lower_custom)
-                for lang in [
-                    "english", "hindi", "hinglish", "spanish", "french", "german", 
-                    "russian", "arabic", "portuguese", "japanese", "chinese", "italian",
-                    "bengali", "urdu", "punjabi", "marathi", "telugu", "tamil", "gujarati",
-                    "korean", "turkish", "vietnamese", "polish", "dutch", "indonesian"
-                ]
-            ) or any(phrase in lower_custom for phrase in ["language", "reply in", "speak in", "talk in"])
+            has_lang = self.has_language_instruction(custom)
             if not has_lang:
                 if self._language == "english":
                     lang_rule = "- DEFAULT LANGUAGE (ENGLISH): Reply ONLY in English. Do not switch languages unless explicitly told."
@@ -496,6 +487,73 @@ class PromptManager:
         text = text.strip()
         return "" if outgoing_block_reason(text, [sender_name or "", *(participant_names or [])]) else text
 
+    @staticmethod
+    def has_language_instruction(text: str) -> bool:
+        """Distinguish output-language directions from biographical facts about languages."""
+        languages = (
+            "afrikaans|albanian|amharic|arabic|armenian|assamese|azerbaijani|basque|belarusian|bengali|"
+            "bosnian|bulgarian|burmese|cambodian|cebuano|chinese|croatian|czech|danish|dutch|english|"
+            "estonian|farsi|filipino|finnish|french|georgian|german|greek|gujarati|hausa|hebrew|hindi|"
+            "hinglish|hungarian|icelandic|igbo|indonesian|irish|italian|japanese|javanese|kannada|kazakh|"
+            "khmer|korean|kurdish|kyrgyz|lao|latin|latvian|lithuanian|macedonian|malay|malayalam|maltese|"
+            "maori|marathi|mongolian|nepali|norwegian|odia|oriya|pashto|persian|polish|portuguese|punjabi|"
+            "romanian|russian|serbian|sinhala|slovak|slovenian|somali|spanish|swahili|swedish|tagalog|"
+            "tajik|tamil|telugu|thai|tibetan|turkish|ukrainian|urdu|uzbek|vietnamese|welsh|yoruba|zulu"
+        )
+        language = rf"(?:{languages})"
+        clause = r"(?:^|[.!?;,\n]|\b(?:and|but)\b)\s*(?:[-*•]\s*)?"
+        qualifier = r"(?:please\s+)?(?:(?:i\s+(?:want|would like|need)\s+you\s+to|make\s+sure\s+you)\s+)?"
+        output_objects = r"(?:(?:all|my|your|the)\s+)*(?:replies|responses|answers|messages|conversations?)"
+        patterns = (
+            # Directly say what language the replies should use; require an output-language preposition.
+            rf"{clause}{qualifier}(?:(?:always|only|you must|you should)\s+)?"
+            rf"(?:reply|respond|answer|write|speak|talk)\b[^.!?;\n]{{0,80}}\b(?:in|using)\s+{language}\b",
+            rf"{clause}{qualifier}(?:(?:always|only)\s+)?(?:speak|talk)\s+{language}\b",
+            # Direct language commands and explicit instructions about keeping all output in one language.
+            rf"{clause}{qualifier}(?:(?:always|only)\s+)?use\s+(?:only\s+)?{language}\b",
+            rf"{clause}{qualifier}keep\s+{output_objects}\s+(?:in|using)\s+{language}\b",
+            rf"{clause}(?:i\s+(?:want|would like|need)\s+)?{output_objects}\s+(?:in|using)\s+{language}\b",
+            rf"{clause}(?:my\s+)?preference\s*[:=]\s*(?:please\s+)?"
+            rf"(?:reply|respond|answer|write|speak|talk)\b[^.!?;\n]{{0,80}}\b(?:in|using)\s+{language}\b",
+            rf"{clause}{qualifier}(?:i\s+(?:want|would like|need)\s+)?{output_objects}\s+"
+            rf"(?:to be|written)\s+(?:only\s+)?in\s+{language}\b",
+            # A stated language preference is meaningful only when it refers to replies/output or ends the clause.
+            rf"{clause}(?:my\s+|your\s+)?preferred\s+(?:output\s+)?language\s+(?:is|[:=])\s*{language}\b",
+            rf"{clause}(?:my\s+)?language\s+preference\s+(?:is|[:=])\s*{language}\b",
+            rf"{clause}preference\s*[:=]\s*{language}(?=\s*(?:$|[.!?;,\n]))",
+            rf"{clause}i\s+(?:prefer|would prefer)\s+{language}\b"
+            rf"(?=\s*(?:$|[.!?;,\n]|for\s+(?:(?:all|my|your)\s+)*(?:replies|responses|answers|messages)))",
+            rf"{clause}{language}\s+only\b",
+            rf"{clause}(?:the\s+)?(?:reply|response|answer|output)\s+"
+            rf"(?:should|must|needs to)\s+be\s+(?:written\s+)?in\s+{language}\b",
+            rf"{clause}(?:reply|response|output|preferred)\s+language\s*[:=]\s*{language}\b",
+            rf"{clause}(?:the\s+)?(?:(?:default|preferred|output|reply|response)\s+)?"
+            rf"(?:reply|response|output|preferred)?\s*language\s+(?:is|should be|[:=])\s*{language}\b",
+            rf"{clause}language\s*[:=]\s*{language}\b",
+            r"\bmatch\s+(?:the\s+)?(?:sender(?:'s)?|conversation|chat)(?:\s+\w+){0,2}\s+language\b",
+            r"\b(?:match|use|reply in|respond in)\s+(?:the\s+)?same language as\s+(?:the\s+)?(?:sender|user|person|conversation|group)\b",
+        )
+        return any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns)
+
+    @staticmethod
+    def engagement_note(engagement: str) -> str:
+        """Extra guidance for unaddressed group messages the account decided to join (no sample replies)."""
+        if engagement == "open":
+            return ("Group Engagement: This message is open to everyone in the group (a hello to all, a general question, "
+                    "or someone starting a conversation). A real member would usually join in, so answer naturally using the "
+                    "pinned info, notes, voice and recent messages above, and follow the owner's persona and context. "
+                    "This overrides the general advice that greetings need no reply. Use NONE only when you truly have nothing natural to add.\n")
+        if engagement == "active":
+            return ("Group Engagement: The owner selected full participation for this group. Join naturally using the "
+                    "current conversation, notes, pins and configured persona; use NONE when no useful reply fits.\n")
+        if engagement == "thread":
+            return ("Group Engagement: This message is part of a conversation between other members. Join only because it "
+                    "concerns this group's own topics and details. Judge meaning using notes, pins, recap and recent messages, "
+                    "including paraphrases, Hindi and Hinglish; matching English keywords is not required. Use NONE for unrelated threads. "
+                    "Keep the reply in the configured output language, short and natural, "
+                    "and use NONE when you have nothing real to add.\n")
+        return ""
+
     def build_user_prompt(
         self,
         sender_name: str,
@@ -506,6 +564,7 @@ class PromptManager:
         is_mention: bool = False,
         persona_override: Optional[str] = None,
         style_override: Optional[str] = None,
+        engagement: str = "",
     ) -> str:
         """Create prompt containing message context, history, permanent chat context, language rule, and dynamic owner identity."""
         parts: List[str] = []
@@ -548,17 +607,7 @@ class PromptManager:
 
         # Language enforcement: strictly prioritize custom prompt/context language if specified
         active_custom = (persona_override or "").strip() or (self.custom_prompt if not is_group else "")
-        lower_custom = active_custom.lower() if active_custom else ""
-
-        has_custom_lang = any(
-            re.search(rf"\b(?:in\s+|use\s+|speak\s+|talk\s+|reply\s+in\s+)?{lang}\b", lower_custom)
-            for lang in [
-                "english", "hindi", "hinglish", "spanish", "french", "german", 
-                "russian", "arabic", "portuguese", "japanese", "chinese", "italian",
-                "bengali", "urdu", "punjabi", "marathi", "telugu", "tamil", "gujarati",
-                "korean", "turkish", "vietnamese", "polish", "dutch", "indonesian"
-            ]
-        ) or any(phrase in lower_custom for phrase in ["language", "reply in", "speak in", "talk in"])
+        has_custom_lang = self.has_language_instruction(active_custom)
 
         if has_custom_lang:
             lang_instruction = (
@@ -587,7 +636,7 @@ class PromptManager:
         )
 
         engagement_instruction = (
-            "First decide whether a useful reply is needed. In groups, occasionally join a relevant open conversation; ignore other people's threads. "
+            "First decide whether a useful reply is needed. In groups, occasionally join a relevant open conversation; join other people's threads only when the Group Engagement guidance below permits it. "
             "Examine recent messages to adopt the chat's actual conversational style, casing, abbreviations, and informal rhythm. "
             f"{mention_rule} "
             "NEVER send messages saying 'haha', 'lol', or 'lmao' as text; use emoji reactions or express real thoughts. "
@@ -647,10 +696,11 @@ class PromptManager:
             f"Language Rule: {lang_instruction}\n"
             f"Context Rule: {context_instruction}\n"
             f"Engagement Rule: {engagement_instruction}\n"
+            f"{self.engagement_note(engagement)}"
             f"Punctuation & Emojis: Pick ANY emoji that matches the meaning of your words. Use as many or as few as the vibe genuinely calls for — vary placement: end, mid-line, or often none (most messages have zero emojis; never end with funny emojis as filler). Only ONE emotion per message — never mix two feelings. NEVER use question marks (?).\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Output exactly NONE if a reply adds no value, addresses another participant, asks about automation, or requires an unknown personal fact. "
+            f"Output exactly NONE if a reply adds no value, {'' if engagement else 'addresses another participant, '}asks about automation, or requires an unknown personal fact. "
             f"Otherwise draft one useful message following the configured length for {self.owner_name} {lang_tail}. "
             f"Start with a capital letter; never include participant names, usernames, links, assistant introductions, or invented personal facts."
         )

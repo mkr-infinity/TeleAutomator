@@ -78,7 +78,7 @@ class ReplyManager(CommandRouterMixin):
         self.safety = safety_manager
         self.privacy = privacy_manager
         self.generator = reply_generator
-        self.context_agent = ContextAgent(database, privacy_manager, reply_generator)
+        self.context_agent = ContextAgent(database, privacy_manager, reply_generator, self.group_chatty_probability)
         self._approval_batch_task = None
         self._background_tasks = set()
         self._context_initializing = set()
@@ -110,6 +110,7 @@ class ReplyManager(CommandRouterMixin):
         self._chat_send_locks: dict[int, asyncio.Lock] = {}
         self._outgoing_lock = asyncio.Lock()
         self._pending_deferred_replies: dict[int, asyncio.Task] = {}
+        self._group_processing_locks: dict[int, asyncio.Lock] = {}
         self._alert_send_lock: asyncio.Lock = asyncio.Lock()
         self._last_alert_time: float = 0.0
         self._alert_min_cooldown: float = 4.0
@@ -219,7 +220,9 @@ class ReplyManager(CommandRouterMixin):
         if not self.context_agent.is_current(context):
             return False
         if context is not None and context.chat_id < 0 and not approved and not getattr(context, "is_mention", False):
-            return self.db.get_state("group_mention_only", "0") != "1" and self.group_chatty_probability(context.chat_id) > 0
+            probability = self.group_chatty_probability(context.chat_id)
+            return (self.db.get_state("group_mention_only", "0") != "1"
+                    and probability > 0 and probability >= context.chatty_probability)
         return True
 
     def start_background(self, coroutine):
@@ -252,6 +255,7 @@ class ReplyManager(CommandRouterMixin):
         self._debounce_first_time.clear()
         self._debounce_last_time.clear()
         self._pending_deferred_replies.clear()
+        self._group_processing_locks.clear()
         self._context_init_tasks.clear()
         await self.context_agent.close()
 
@@ -536,6 +540,7 @@ class ReplyManager(CommandRouterMixin):
         text: str,
         conversation_history: Optional[Any] = None,
         is_mention: bool = False,
+        engagement: str = "",
     ) -> None:
         """Process an incoming message that has passed initial message filters."""
         if self._closed:
@@ -562,6 +567,7 @@ class ReplyManager(CommandRouterMixin):
                 text=text,
                 conversation_history=conversation_history,
                 is_mention=is_mention,
+                engagement=engagement,
             )
             return
 
@@ -574,6 +580,7 @@ class ReplyManager(CommandRouterMixin):
             "sender_name": sender_name,
             "text": text,
             "is_mention": is_mention,
+            "engagement": engagement,
             "received_at": now,
         }
 
@@ -624,14 +631,14 @@ class ReplyManager(CommandRouterMixin):
             latest_sender_id = latest_item["sender_id"]
             chat_title = latest_item["chat_title"]
             any_mention = any(m.get("is_mention", False) for m in items)
+            engagement = next((m["engagement"] for m in reversed(items) if m.get("engagement")), "")
 
             if len(items) == 1:
                 stitched_text = items[0]["text"]
             else:
                 stitched_text = "\n".join(m["text"].strip() for m in items if m["text"].strip())
                 logger.info(
-                    f"[MESSAGE STITCHING] Stitched {len(items)} rapid burst messages in chat {chat_id} "
-                    f"into single cohesive thought: '{stitched_text[:60]}...'"
+                    "[MESSAGE STITCHING] Stitched %s rapid burst messages in chat %s", len(items), chat_id
                 )
 
             ttl_hours = float(self.db.get_state("context_ttl_hours", "4.0"))
@@ -649,6 +656,7 @@ class ReplyManager(CommandRouterMixin):
                 text=stitched_text,
                 conversation_history=fresh_history,
                 is_mention=any_mention,
+                engagement=engagement,
             )
         except asyncio.CancelledError:
             pass
@@ -665,6 +673,33 @@ class ReplyManager(CommandRouterMixin):
         text: str,
         conversation_history: Optional[Any] = None,
         is_mention: bool = False,
+        engagement: str = "",
+    ) -> None:
+        """Serialize group work so a cooldown reply is sent before later messages are handled."""
+        if chat_id >= 0:
+            await self._process_incoming_message_now(
+                chat_id, chat_title, message_id, sender_id, sender_name, text,
+                conversation_history, is_mention, engagement,
+            )
+            return
+        lock = self._group_processing_locks.setdefault(chat_id, asyncio.Lock())
+        async with lock:
+            await self._process_incoming_message_now(
+                chat_id, chat_title, message_id, sender_id, sender_name, text,
+                conversation_history, is_mention, engagement,
+            )
+
+    async def _process_incoming_message_now(
+        self,
+        chat_id: int,
+        chat_title: str,
+        message_id: int,
+        sender_id: Optional[int],
+        sender_name: str,
+        text: str,
+        conversation_history: Optional[Any] = None,
+        is_mention: bool = False,
+        engagement: str = "",
     ) -> None:
         """Process a single or stitched incoming message."""
         if self._closed or not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
@@ -675,9 +710,15 @@ class ReplyManager(CommandRouterMixin):
                 return
         if not self.privacy.is_user_allowed(sender_id):
             return
-        pending = self._pending_deferred_replies.pop(chat_id, None)
+        pending = self._pending_deferred_replies.get(chat_id)
         if pending and pending is not asyncio.current_task() and not pending.done():
-            pending.cancel()
+            if chat_id < 0:
+                # Deliver the already-written group reply first. Later work then sees the
+                # updated history and can continue the conversation with the right context.
+                await asyncio.shield(pending)
+            else:
+                self._pending_deferred_replies.pop(chat_id, None)
+                pending.cancel()
         if self.current_mode == "restricted_auto" and self.safety.action_block_reason():
             return
         if self.current_mode == "restricted_auto" and self.owner_recently_active(chat_id):
@@ -741,8 +782,10 @@ class ReplyManager(CommandRouterMixin):
             if context is None:
                 return
             permanent_context_str = context.background or None
+            if chat_id < 0:
+                permanent_context_str = f"Group title: {chat_title}\n\n{context.background}"
             if matched_rule:
-                permanent_context_str = (context.background + "\n\nOwner keyword reply intent (rewrite naturally for this conversation, never copy verbatim):\n" + matched_rule)
+                permanent_context_str = ((permanent_context_str or "") + "\n\nOwner keyword reply intent (rewrite naturally for this conversation, never copy verbatim):\n" + matched_rule)
             chat_style, chat_persona = context.style, context.persona
             conversation_history = context.history
 
@@ -759,6 +802,7 @@ class ReplyManager(CommandRouterMixin):
                     permanent_context=permanent_context_str,
                     is_group=(chat_id < 0),
                     is_mention=is_mention,
+                    engagement=engagement,
                 )
 
             # Suggestion 1: Natural Read-Receipt Delay Simulation (2–4s hesitation before marking read)
@@ -1043,8 +1087,6 @@ class ReplyManager(CommandRouterMixin):
                 # Re-read live settings so a shortened or reset cooldown takes effect promptly.
                 await asyncio.sleep(1.0)
 
-            if self._pending_deferred_replies.get(chat_id) is asyncio.current_task():
-                self._pending_deferred_replies.pop(chat_id, None)
             sent = await self._send_reply(chat_id, message_id, draft, adaptive_delay=True, is_mention=is_mention, context=context,
                                           delay_started_at=delay_started_at)
             if sent:
@@ -1752,7 +1794,7 @@ class ReplyManager(CommandRouterMixin):
 
         for past in recent:
             if clean_lower == past.lower():
-                logger.warning(f"Suppressed duplicate reply in chat {chat_id}: '{clean}' was sent recently.")
+                logger.warning("Suppressed duplicate reply in chat %s: reply was sent recently", chat_id)
                 return ""
         return clean
 
@@ -1782,7 +1824,16 @@ class ReplyManager(CommandRouterMixin):
         if self.is_group_broadcast_or_greeting(clean_text) and not re.search(r"\?|\b(?:anyone|anybody|thoughts|opinions)\b", clean_text):
             return False
 
-        # 1. Check permanent context and pinned info
+        if self._matches_group_context(chat_id, clean_text, chat_title):
+            return True
+
+        # Open questions can invite the room; message length alone never does.
+        return len(clean_text.split()) >= 4 and bool(re.search(
+            r"[?？]|\b(?:anyone|anybody|thoughts|opinions|suggestions)\b|^(?:how|what|which|why|where|when|can|could|does|has|have)\b", clean_text
+        ))
+
+    def _matches_group_context(self, chat_id: int, clean_text: str, chat_title: str = "") -> bool:
+        """True when the message shares meaningful words with the group's own notes, pins or title."""
         ctx = self.db.get_permanent_context(chat_id)
         context_corpus = ""
         if ctx:
@@ -1798,11 +1849,55 @@ class ReplyManager(CommandRouterMixin):
                 msg_words = set(re.findall(r"\b[a-zA-Z]{4,}\b", clean_text))
                 if msg_words.intersection(meaningful_kw):
                     return True
+        return False
 
-        # Open questions can invite the room; message length alone never does.
-        return len(clean_text.split()) >= 4 and bool(re.search(
-            r"[?？]|\b(?:anyone|anybody|thoughts|opinions|suggestions)\b|^(?:how|what|which|why|where|when|can|could|does|has|have)\b", clean_text
+    # A greeting to everyone, an open question or someone starting a conversation is a natural chance to
+    # join in, even with the default chatty rate: such messages get at least this chance to be answered.
+    OPEN_INVITE_MIN_CHANCE = 0.6
+
+    def is_open_group_invite(self, text: str) -> bool:
+        """The message is for the whole room: a hello to everyone or a general question."""
+        clean = text.strip().lower()
+        if not clean:
+            return False
+        if self.is_group_broadcast_or_greeting(clean):
+            return True
+        return len(clean.split()) >= 2 and bool(re.search(
+            r"[?？]|\b(?:anyone|anybody|everyone|guys|thoughts|opinions|suggestions)\b|^(?:how|what|which|why|where|when|who|can|could|does|has|have|is|are|any)\b", clean
         ))
+
+    def plan_group_engagement(self, chat_id: int, text: str, chat_title: str = "", *, is_reply_to_other: bool = False,
+                              recent_active: int = 3, idle_before: bool = False) -> tuple[float, str, str]:
+        """Decide how an unaddressed group message is treated: (chance 0..1, engagement mode, skip reason).
+
+        Modes: "open" (for the whole room), "thread" (members talking to each other about the group's own
+        topics) or "" (ordinary relevant message). A chance of 0 means skip, with the reason.
+        """
+        base = self.group_chatty_probability(chat_id)
+        if base <= 0:
+            return 0.0, "", "Chatty is off for this chat"
+        if re.match(r"\s*@\w+", text):
+            return 0.0, "", "Message is addressed to a specific member"
+        full = base >= 1.0
+        clean = text.strip().lower()
+        invite = self.is_open_group_invite(clean) or idle_before
+        if is_reply_to_other:
+            # The existing writer judges semantic relevance using this chat's context in any language.
+            context = self.db.get_permanent_context(chat_id)
+            if not (context.get("notes") or context.get("pinned_text") or self.db.get_chat_summary(chat_id)
+                    or len(self.db.get_recent_chat_messages(chat_id, limit=2, max_age_seconds=1200)) > 1):
+                return 0.0, "", "No group context available to judge a thread between other members"
+            mode, chance = "thread", base
+        elif invite:
+            mode, chance = "open", max(base, self.OPEN_INVITE_MIN_CHANCE)
+        elif full or self.is_group_message_relevant(chat_id, text, chat_title):
+            mode, chance = "active" if full else "", base
+        else:
+            return 0.0, "", "No relevant contribution requested"
+        if not full and mode != "open":
+            from app.event_handlers import adjust_engagement_for_room_heat
+            chance = adjust_engagement_for_room_heat(chance, recent_active)
+        return chance, mode, ""
 
     def check_group_20m_idle(self, chat_id: int) -> bool:
         """Check if 20 minutes (1200s) have passed without any reply or engagement in this group."""
@@ -1925,10 +2020,10 @@ class ReplyManager(CommandRouterMixin):
 
         async with self._get_chat_send_lock(chat_id):
             self._last_delivery_parts[chat_id] = 0
-            # Cancel any pending deferred reply task for this chat to avoid double-sends
+            # Private drafts are superseded; group replies remain queued behind this send.
             curr_task = asyncio.current_task()
             old_task = self._pending_deferred_replies.get(chat_id)
-            if old_task and old_task is not curr_task and not old_task.done():
+            if chat_id > 0 and old_task and old_task is not curr_task and not old_task.done():
                 old_task.cancel()
                 self._pending_deferred_replies.pop(chat_id, None)
 

@@ -298,6 +298,23 @@ class Database:
             ).fetchone()
             return str(row["value"]) if row else default
 
+    def _set_worker_state(self, key: str, value: str) -> None:
+        """Persist background-worker state without invalidating user settings edits."""
+        with self._context_lock, self._get_connection() as conn:
+            conn.execute(
+                "INSERT INTO runtime_state (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
+    def set_chat_summary_retry_state(self, chat_id: int, value: str) -> None:
+        """Persist worker retry metadata without changing the user's settings revision."""
+        self._set_worker_state(f"chat_summary_retry_{chat_id}", value)
+
+    def set_chat_context_file_pending(self, chat_id: int, pending: bool) -> None:
+        """Track a context-file repair without changing the user's settings revision."""
+        self._set_worker_state(f"chat_context_file_pending_{chat_id}", "1" if pending else "0")
+
     def get_chat_panel_data(self, chat_ids):
         """Read chat cards in one connection instead of opening a connection for every field."""
         ids = tuple(chat_ids)
@@ -339,6 +356,11 @@ class Database:
                 )
                 if row.lastrowid % 100 == 0:
                     conn.execute("DELETE FROM action_history WHERE id <= ?", (row.lastrowid - 1000,))
+            if (isinstance(chat_id, int) and chat_id < 0
+                    and source in {"automation", "humanizer"} and action == "reply"
+                    and status in {"skipped", "blocked"}):
+                safe_detail = redact_secrets(detail).replace("\r", " ").replace("\n", " ")[:300]
+                logger.info("[GROUP SKIP] chat %s: %s", chat_id, safe_detail)
         except Exception:
             logger.warning("Could not record action history")
 
@@ -582,6 +604,12 @@ class Database:
                                 (*ids, max(1, min(500, limit)))).fetchall()
             return [dict(row) for row in rows]
 
+    def count_incoming_since(self, chat_id: int, since_row_id: int) -> int:
+        """Incoming messages that arrived after the given row id."""
+        with self._get_connection() as conn:
+            return int(conn.execute("SELECT COUNT(*) FROM chat_messages WHERE chat_id=? AND is_outgoing=0 AND id>?",
+                                    (chat_id, since_row_id)).fetchone()[0])
+
     def latest_incoming_row_id(self, chat_id: int) -> int:
         with self._get_connection() as conn:
             return int(conn.execute("SELECT COALESCE(MAX(id),0) FROM chat_messages WHERE chat_id=? AND is_outgoing=0", (chat_id,)).fetchone()[0])
@@ -761,10 +789,17 @@ class Database:
                 return False
             if marker is not None and int(self.get_state(f"chat_summary_marker_{chat_id}", "0")) > marker:
                 return False
-            self.set_state(f"chat_summary_{chat_id}", (summary or "").strip())
+            states = [(f"chat_summary_{chat_id}", (summary or "").strip()),
+                      (f"chat_context_file_pending_{chat_id}", "1")]
             if marker is not None:
-                self.set_state(f"chat_summary_marker_{chat_id}", str(marker))
-            self.sync_chat_context_file(chat_id)
+                states.append((f"chat_summary_marker_{chat_id}", str(marker)))
+            with self._get_connection() as conn:
+                conn.executemany(
+                    "INSERT INTO runtime_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    states,
+                )
+            if not self.sync_chat_context_file(chat_id):
+                self.record_action("context", "file_sync", "failed", "Summary saved in database; context file sync pending", chat_id=chat_id)
             return True
 
     def prune_messages_older_than(self, max_age_seconds: float) -> int:
@@ -793,6 +828,7 @@ class Database:
                 conn.executemany(
                     "INSERT INTO runtime_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                     [(f"chat_summary_{chat_id}", ""), (f"chat_summary_marker_{chat_id}", "0"),
+                     (f"chat_summary_retry_{chat_id}", ""),
                      (f"chat_memory_epoch_{chat_id}", str(time.time_ns()))],
                 )
             self.sync_chat_context_file(chat_id)
@@ -943,7 +979,13 @@ class Database:
         """Read, recover, and write a context snapshot under the same lock."""
         with self._context_lock:
             ctx = self.get_permanent_context(chat_id)
-            return self._sync_context_to_disk(chat_id, ctx["pinned_text"], ctx["notes"])
+            self.set_chat_context_file_pending(chat_id, True)
+            saved = self._sync_context_to_disk(chat_id, ctx["pinned_text"], ctx["notes"])
+            if saved:
+                self.set_chat_context_file_pending(chat_id, False)
+            else:
+                logger.warning("Context file sync failed for chat %s; database memory remains available", chat_id)
+            return saved
 
     def set_permanent_context(
         self, chat_id: int, pinned_text: Optional[str] = None, notes: Optional[str] = None,

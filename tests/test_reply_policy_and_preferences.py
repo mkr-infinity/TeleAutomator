@@ -53,12 +53,20 @@ def test_group_participation_requires_relevance_and_respects_zero(tmp_path):
         asyncio.run(handlers[0](event))
     s.manager.handle_incoming_eligible_message.assert_not_awaited()
     s.db.set_state("chat_chatty_-100111", "1")
-    for text in ("Good morning everyone", "I have already finished all of my work for today", "@somebody what did you think?"):
+    # Tagging a specific member is never joined, even at 100%.
+    event.raw_text = "@somebody what did you think?"
+    event.id += 1
+    with patch("random.random", return_value=0):
+        asyncio.run(handlers[0](event))
+    s.manager.handle_incoming_eligible_message.assert_not_awaited()
+    # At 100% a hello to everyone and an ordinary statement are both chances to join in.
+    for text in ("Good morning everyone", "I have already finished all of my work for today"):
         event.raw_text = text
         event.id += 1
-        with patch("random.random", return_value=0):
+        with patch("random.random", side_effect=[0, 0.5, 0.5, 0.5]):  # chance roll passes, reaction roll says "reply in words"
             asyncio.run(handlers[0](event))
-    s.manager.handle_incoming_eligible_message.assert_not_awaited()
+    assert s.manager.handle_incoming_eligible_message.await_count == 2
+    s.manager.handle_incoming_eligible_message.reset_mock()
     event.raw_text = "Anyone have thoughts on this release?"
     event.is_reply = True
     event.get_reply_message = AsyncMock(return_value=None)
@@ -214,3 +222,23 @@ def test_http_history_and_private_download_expiry(http_server):
     with pytest.raises(urllib.error.HTTPError) as expired:
         urllib.request.urlopen(download)
     assert expired.value.code == 404
+
+
+def test_instant_and_max_tokens_share_the_command_engine(tmp_path):
+    from app.ai.provider import OpenAIProvider
+    s = make_stack(tmp_path)
+    s.generator.provider = OpenAIProvider("fixture", model="mercury-3", base_url="https://api.inceptionlabs.ai/v1")
+
+    async def run():
+        result = await s.manager.handle_control_command("/maxtokens 512")
+        assert "3000" in result
+        assert s.generator.provider.effective_max_tokens() == 3000
+        await s.manager.handle_control_command("/thinking instant")
+        assert s.db.get_state("ai_reasoning_effort") == "instant"
+        assert s.generator.provider.effective_max_tokens() == 512
+        await s.manager.handle_control_command("/maxtokens default")
+        assert s.generator.provider.effective_max_tokens() is None
+        assert s.db.get_state("ai_max_tokens") == ""
+        await s.manager.context_agent.close()
+
+    asyncio.run(run())

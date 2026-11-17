@@ -158,7 +158,7 @@ def test_broken_callback_cannot_change_generation_behaviour():
     assert generator.on_model_error.call_count == 2
 
 
-def test_success_and_intentional_silence_skip_callback():
+def test_success_summary_and_empty_summary_reports_model_failure():
     class Provider(AIProvider):
         model = "ok-model"
 
@@ -170,8 +170,11 @@ def test_success_and_intentional_silence_skip_callback():
 
     generator, calls = make_generator(Provider())
     assert generator.summarize_chat_history("Group", "", "new messages") == "Recap text"
-    assert generator.summarize_chat_history("Group", "", "new messages") == ""
-    assert calls == []
+    with pytest.raises(RuntimeError, match="empty chat summary"):
+        generator.summarize_chat_history("Group", "", "new messages")
+    assert len(calls) == 1
+    assert calls[0][0] == "chat summary"
+    assert isinstance(calls[0][1], RuntimeError)
 
 
 def test_goodnight_signoff_uses_group_rules_not_the_global_dm_persona():

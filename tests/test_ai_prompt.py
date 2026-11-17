@@ -1,6 +1,8 @@
 """Tests for PromptManager and ReplyGenerator."""
 
 from pathlib import Path
+
+import pytest
 from app.ai.prompt_manager import PromptManager, VALID_STYLES
 from app.ai.reply_generator import ReplyGenerator
 from app.ai.provider import LocalRuleProvider
@@ -448,7 +450,7 @@ def test_natural_emoji_rule_and_selective_group_engagement():
     assert "generic filler" in prompt
 
     assert "occasionally join a relevant open conversation" in prompt
-    assert "ignore other people's threads" in prompt
+    assert "join other people's threads only when the Group Engagement guidance below permits it" in prompt
     assert "output exactly NONE" in prompt
 
 
@@ -540,6 +542,19 @@ def test_custom_prompt_language_adherence():
     assert "English Only" in user_prompt_def
 
 
+def test_empty_chat_summary_is_reported_as_a_model_failure():
+    from unittest.mock import MagicMock
+
+    generator = ReplyGenerator(config=MagicMock(), provider=MagicMock(generate_reply=MagicMock(return_value="")))
+    errors = []
+    generator.on_model_error = lambda task, error: errors.append((task, error))
+    with pytest.raises(RuntimeError, match="empty chat summary"):
+        generator.summarize_chat_history("Group", "", "Member: Fresh detail")
+    assert len(errors) == 1
+    assert errors[0][0] == "chat summary"
+    assert isinstance(errors[0][1], RuntimeError)
+
+
 def test_clean_reply_never_writes_usernames_or_names():
     """Verify clean_reply strips all @usernames and user names from text."""
     pm = PromptManager(prompt_file=None, owner_name="Kaif")
@@ -566,4 +581,31 @@ def test_reply_generator_end_to_end_with_custom_prompt():
     assert len(reply) > 0
 
 
+@pytest.mark.parametrize("persona", ["I teach Hindi", "I speak Hindi", "I write Hindi poems", "I want to learn Hindi", "I prefer Hindi movies", "Write about Hindi literature", "Speak about Hindi cinema", "Never reply in Hindi", "Don't use Hindi", "Do not write in Hindi", "Use natural language", "Reply in 2 words", "Discuss French cinema", "Be friendly"])
+def test_persona_language_facts_do_not_disable_default_english(persona):
+    pm = PromptManager(prompt_file=None, custom_prompt=persona)
+    assert "DEFAULT LANGUAGE (ENGLISH)" in pm.get_system_instructions()
+    assert "English Only" in pm.build_user_prompt("Member", "आज क्या हुआ?")
+    group_instructions = pm.get_system_instructions(persona_override=persona, is_group=True)
+    group_prompt = pm.build_user_prompt("Member", "आज क्या हुआ?", is_group=True, persona_override=persona)
+    assert "DEFAULT LANGUAGE (ENGLISH)" in group_instructions
+    assert "English Only" in group_prompt
 
+
+@pytest.mark.parametrize("persona", ["Reply in Hindi", "Answer only in Spanish", "Reply in 2 words in English", "Use Hinglish", "Speak in French", "Speak Hindi", "Hindi only", "Reply language: Hindi", "Match the sender's language", "Use the same language as the sender", "I want you to reply in Hindi", "I want you to speak Hindi", "- Reply in Hindi", "Preference: respond in Hindi", "The reply should be written in Hindi", "Language: Spanish", "Output language is German", "The default reply language is Arabic", "Please keep all replies in Hindi", "I want all replies in Hindi", "My preferred language is Hindi", "I prefer Hindi", "I prefer Hindi for all replies", "Keep all conversations in French", "Write all messages in Arabic"])
+def test_explicit_output_language_stays_configurable(persona):
+    pm = PromptManager(prompt_file=None, custom_prompt=persona)
+    assert "Reply in that requested language" in pm.get_system_instructions()
+    assert "language requested by the custom prompt" in pm.build_user_prompt("Member", "Hello")
+    group_instructions = pm.get_system_instructions(persona_override=persona, is_group=True)
+    group_prompt = pm.build_user_prompt("Member", "Hello", is_group=True, persona_override=persona)
+    assert "Reply in that requested language" in group_instructions
+    assert "language requested by the custom prompt" in group_prompt
+
+
+def test_generator_defaults_to_english_and_honors_explicit_configuration(tmp_path):
+    cfg = AppConfig(api_id=123, api_hash="fixture", data_dir=tmp_path)
+    assert ReplyGenerator(cfg).language == "english"
+    from dataclasses import replace
+    cfg = replace(cfg, default_chat_language="hindi")
+    assert ReplyGenerator(cfg).language == "hindi"

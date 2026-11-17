@@ -109,7 +109,7 @@ def test_malformed_response_usage_is_counted_before_fallback(monkeypatch, provid
     assert usage.call_args_list == [call(kind, 'primary', 11, 2, 13), call(kind, 'fallback', 11, 2, 13)]
 
 
-def test_summary_failure_reaches_context_worker_but_silence_is_not_failure(monkeypatch):
+def test_summary_failure_and_empty_output_reach_context_worker(monkeypatch):
     async def inline_thread(function, *args, **kwargs):
         return function(*args, **kwargs)
     monkeypatch.setattr('app.ai.chat_context.asyncio.to_thread', inline_thread)
@@ -130,7 +130,8 @@ def test_summary_failure_reaches_context_worker_but_silence_is_not_failure(monke
     provider.generate_reply.side_effect = None
     provider.generate_reply.return_value = ''
     asyncio.run(agent.refresh(-123, force=True))
-    db.record_action.assert_not_called()
+    db.record_action.assert_called_once_with('context', 'summary', 'failed',
+        'Summary update failed; recent messages remain available', chat_id=-123)
     db.set_chat_summary.assert_not_called()
     assert provider.generate_reply.call_count == 2
 

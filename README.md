@@ -129,7 +129,7 @@ Manage your automation straight from your phone by texting your **Control Bot**:
 | **`/model <name>`** | Switch AI candidate model (supports comma-separated fallbacks) | `/model <model_name>` |
 | **`/usage`** | Displays 24h consumption, total token usage, and remaining free quota | `/usage` |
 | **`/checkmodels`** | Pings candidate models live and picks verified working ones | `/checkmodels` |
-| **`/reasoning <low\|medium\|high\|off>`** | Adjusts reasoning effort for reasoning-capable models | `/reasoning low` |
+| **`/reasoning <default\|instant\|low\|medium\|high\|off\|none>`** | Adjusts reasoning effort for reasoning-capable models | `/reasoning instant` |
 | **`/reaction <on\|off>`** | Toggles natural emoji reactions (pool of 26 mobile emojis) | `/reaction on` |
 | **`/reactioncooldown <min> <max>`**| Sets randomized reaction interval (default: 3s–9s) | `/reactioncooldown 3 9` |
 | **`/chatcooldown <min> <max>`** | Sets randomized per-chat reply cooldown (default: 5s–60s) | `/chatcooldown 5 60` |
@@ -141,7 +141,7 @@ Custom chat cooldowns override the default range; resetting a chat restores the 
 
 Only allowed chats are processed or cached. `/clearcontext` clears that chat's rolling history and recap while keeping its permanent notes, pins, persona, and voice profile. In-flight summaries and history fetches cannot restore cleared memory. The Mini App enforces the same command grants as the control bot.
 
-Group participation samples relevant conversations using the per-chat rate or global default (15% unless configured). Other people's reply threads and routine closers are ignored. Group messages post without quoted replies. The master prompt permits `NONE` for intentional silence; custom personas inherit the same rules. Outgoing checks block @tags, links, and known participant names, including keyword replies and approvals. Unfamiliar names still rely on the prompt. Identity and automation questions stay silent for the account owner to answer.
+Group participation samples relevant conversations using the per-chat rate or global default (15% unless configured); open greetings and questions get a higher minimum chance. It can join other members' reply threads at that participation chance when the group's notes, pins, recap, or recent conversation provide context. Messages tagging a specific member and routine closers are ignored. Group messages post without quoted replies. The master prompt permits `NONE` for intentional silence; custom personas inherit the same rules. Outgoing checks block @tags, links, and known participant names, including keyword replies and approvals. Unfamiliar names still rely on the prompt. Identity and automation questions stay silent for the account owner to answer.
 
 Reply preparation has three stages. A background context worker observes safe messages from allowed chats even in mention-only mode, coalesces updates to `data/contexts/{chat_id}.json`, and batches model recaps after new messages. Automatic recap attempts are at least 60 seconds apart per chat, with at most two recap jobs running together. The writer uses current messages, that chat’s notes/persona/voice, and recent owner feedback. A local final stage enforces text rules without another model call; stale unsolicited group drafts and drafts made before a memory reset are discarded. Feedback also applies to approved and keyword replies at delivery. Up to 500 ratings are retained, separately from the rolling message cache; clearing chat memory clears its ratings too. Model relevance still requires real-chat review.
 

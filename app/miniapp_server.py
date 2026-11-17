@@ -26,6 +26,7 @@ import secrets
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from functools import lru_cache
@@ -35,7 +36,7 @@ from typing import Any, Optional
 
 from app import __version__ as APP_VERSION
 from app.ai.prompt_manager import VALID_STYLES
-from app.ai.provider import normalize_base_url
+from app.ai.provider import OpenAIProvider, normalize_base_url
 from app.ai.reply_generator import create_ai_provider
 from app.bot_control import authorized_user_ids, can_run_command
 from app.logger import setup_logger
@@ -1073,7 +1074,7 @@ class MiniAppAPI:
                 return {"ok": False, "error": str(e)}
 
         if effective_base:
-            is_gemini = "googleapis.com" in effective_base
+            is_gemini = urllib.parse.urlsplit(effective_base).hostname == "generativelanguage.googleapis.com"
         else:
             is_gemini = (provider == "gemini" or key.startswith("AIzaSy") or not provider)
 
@@ -1148,49 +1149,56 @@ class MiniAppAPI:
             except Exception as e:
                 return {"ok": False, "error": str(e), "url": "https://generativelanguage.googleapis.com/v1beta/models"}
 
-        raw_url = (effective_base or "https://api.openai.com/v1").rstrip("/")
-        if not raw_url.startswith(("http://", "https://")):
-            raw_url = f"https://{raw_url}"
-        if raw_url.endswith("/chat/completions"):
-            raw_url = raw_url[:-len("/chat/completions")].rstrip("/")
-        models_url = raw_url if raw_url.endswith("/models") else f"{raw_url}/models"
+        raw_url = effective_base or "https://api.openai.com/v1"
+        models_url = f"{raw_url}/models"
 
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": "application/json", "User-Agent": "TeleAutomator/3 (+https://github.com/mkr-infinity/TeleAutomator)"}
         if key:
             headers["Authorization"] = f"Bearer {key}"
 
         req = urllib.request.Request(models_url, headers=headers, method="GET")
         try:
-            with urllib.request.urlopen(req, timeout=10.0) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
-                raw_data = body.get("data") if isinstance(body, dict) else (body if isinstance(body, list) else [])
-                if raw_data is None and isinstance(body, dict):
-                    raw_data = body.get("models") or []
-                models = []
-                is_inception = "inceptionlabs" in (effective_base or "").lower()
-                if isinstance(raw_data, list):
-                    for item in raw_data:
-                        if isinstance(item, dict):
-                            supported = item.get("supported_endpoints") or []
-                            if supported and not any("chat" in ep for ep in supported):
-                                continue
-                            mid = str(item.get("id", "")).strip()
-                            if is_inception and mid in ("mercury-2", "mercury-2.5", "mercury-small"):
-                                continue
-                            if mid:
-                                models.append(mid)
-                        elif isinstance(item, str):
-                            mid = item.strip()
-                            if is_inception and mid in ("mercury-2", "mercury-2.5", "mercury-small"):
-                                continue
-                            if mid:
-                                models.append(mid)
-                if is_inception:
-                    for extra in ("mercury-3", "mercury-3-preview-1014", "mercury-3-preview-1002"):
-                        if extra not in models:
-                            models.append(extra)
-                models = sorted(list(dict.fromkeys(models)))
-                return {"ok": True, "models": models, "url": models_url}
+            try:
+                with urllib.request.urlopen(req, timeout=10.0) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as error:
+                parts = urllib.parse.urlsplit(models_url)
+                prefix = parts.path.removesuffix("/models").rstrip("/")
+                if error.code != 404 or prefix.endswith("/v1"):
+                    raise
+                models_url = urllib.parse.urlunsplit((parts.scheme, parts.netloc, prefix + "/v1/models", "", ""))
+                req = urllib.request.Request(models_url, headers=headers, method="GET")
+                with urllib.request.urlopen(req, timeout=10.0) as resp:
+                    body = json.loads(resp.read().decode("utf-8"))
+            raw_data = body.get("data") if isinstance(body, dict) else (body if isinstance(body, list) else [])
+            if raw_data is None and isinstance(body, dict):
+                raw_data = body.get("models") or []
+            models = []
+            host = urllib.parse.urlsplit(raw_url).hostname or ""
+            is_inception = host == "inceptionlabs.ai" or host.endswith(".inceptionlabs.ai")
+            if isinstance(raw_data, list):
+                for item in raw_data:
+                    if isinstance(item, dict):
+                        supported = item.get("supported_endpoints") or []
+                        if supported and not any("chat" in ep for ep in supported):
+                            continue
+                        mid = str(item.get("id", "")).strip()
+                        if is_inception and mid in ("mercury-2", "mercury-2.5", "mercury-small"):
+                            continue
+                        if mid:
+                            models.append(mid)
+                    elif isinstance(item, str):
+                        mid = item.strip()
+                        if is_inception and mid in ("mercury-2", "mercury-2.5", "mercury-small"):
+                            continue
+                        if mid:
+                            models.append(mid)
+            if is_inception:
+                for extra in ("mercury-3", "mercury-3-preview-1014", "mercury-3-preview-1002"):
+                    if extra not in models:
+                        models.append(extra)
+            models = sorted(list(dict.fromkeys(models)))
+            return {"ok": True, "models": models, "url": models_url}
         except urllib.error.HTTPError as e:
             err_msg = f"HTTP {e.code}"
             try:
@@ -1259,7 +1267,7 @@ class MiniAppAPI:
                 return {"ok": False, "error": str(e)}
 
         if effective_base:
-            is_gemini = "googleapis.com" in effective_base
+            is_gemini = urllib.parse.urlsplit(effective_base).hostname == "generativelanguage.googleapis.com"
         else:
             is_gemini = (provider == "gemini" or key.startswith("AIzaSy") or not provider)
 
@@ -1307,11 +1315,11 @@ class MiniAppAPI:
                             parts = choices[0].get("content", {}).get("parts", [])
                             if parts:
                                 raw_text = parts[0].get("text")
-                                if raw_text is not None and str(raw_text).strip().lower() not in ("none", "null", "undefined", ""):
+                                if isinstance(raw_text, str) and raw_text.strip().lower() not in ("none", "null", "undefined", ""):
                                     working_models.append(clean_m)
                                     results.append({"model": clean_m, "ok": True, "detail": "Working"})
                                     if not reply_text:
-                                        reply_text = str(raw_text).strip().strip('"')
+                                        reply_text = raw_text.strip().strip('"')
                                         first_working_model = clean_m
                                     continue
                         results.append({"model": clean_m, "ok": False, "detail": "Empty response from Gemini"})
@@ -1335,13 +1343,10 @@ class MiniAppAPI:
                 except Exception as e:
                     results.append({"model": clean_m, "ok": False, "detail": str(e)[:120]})
         else:
-            raw_endpoint = (effective_base or "https://api.openai.com/v1").rstrip("/")
-            if raw_endpoint.endswith("/models"):
-                raw_endpoint = raw_endpoint[:-len("/models")].rstrip("/")
-            if not raw_endpoint.endswith("/chat/completions"):
-                endpoint = f"{raw_endpoint}/chat/completions"
-            else:
-                endpoint = raw_endpoint
+            probe = OpenAIProvider(key, base_url=effective_base,
+                                   max_tokens=getattr(expected_provider, "max_tokens", None),
+                                   reasoning_effort=self.ctx.db.get_state("ai_reasoning_effort", "default"))
+            endpoint = probe.endpoint_url
 
             for m in candidates:
                 remaining = deadline - time.monotonic()
@@ -1351,31 +1356,43 @@ class MiniAppAPI:
                 payload = {
                     "model": m,
                     "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 300,
                     "temperature": 0.7,
                 }
+                if probe.effective_max_tokens() is not None:
+                    payload["max_tokens"] = probe.effective_max_tokens()
+                if probe._is_inception() and probe.reasoning_effort not in ("default", "off", "none", ""):
+                    payload["reasoning_effort"] = probe.reasoning_effort
                 data = json.dumps(payload).encode("utf-8")
                 req = urllib.request.Request(
                     endpoint,
                     data=data,
-                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}", "User-Agent": "TeleAutomator/3 (+https://github.com/mkr-infinity/TeleAutomator)"},
                     method="POST",
                 )
                 try:
-                    with urllib.request.urlopen(req, timeout=min(12.0, remaining)) as resp:
-                        body = json.loads(resp.read().decode("utf-8"))
-                        choices = body.get("choices", [])
-                        if choices:
-                            content = choices[0].get("message", {}).get("content") or ""
-                            content = str(content).strip()
-                            if content and content.lower() not in ("none", "null", "undefined"):
-                                working_models.append(m)
-                                results.append({"model": m, "ok": True, "detail": "Working"})
-                                if not reply_text:
-                                    reply_text = content
-                                    first_working_model = m
-                                continue
-                        results.append({"model": m, "ok": False, "detail": "Empty choices response"})
+                    try:
+                        with urllib.request.urlopen(req, timeout=min(12.0, remaining)) as resp:
+                            body = json.loads(resp.read().decode("utf-8"))
+                    except urllib.error.HTTPError as error:
+                        alternate = probe._fallback_endpoint() if error.code == 404 else ""
+                        remaining = deadline - time.monotonic()
+                        if not alternate or remaining <= 0:
+                            raise
+                        with urllib.request.urlopen(probe._build_request(alternate, data), timeout=min(12.0, remaining)) as resp:
+                            body = json.loads(resp.read().decode("utf-8"))
+                        endpoint = probe.endpoint_url = alternate
+                    choices = body.get("choices", [])
+                    if choices:
+                        content = choices[0].get("message", {}).get("content")
+                        content = content.strip() if isinstance(content, str) else ""
+                        if content and content.lower() not in ("none", "null", "undefined"):
+                            working_models.append(m)
+                            results.append({"model": m, "ok": True, "detail": "Working"})
+                            if not reply_text:
+                                reply_text = content
+                                first_working_model = m
+                            continue
+                    results.append({"model": m, "ok": False, "detail": "Empty choices response"})
                 except urllib.error.HTTPError as e:
                     detail = f"HTTP {e.code}"
                     try:

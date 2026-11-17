@@ -167,7 +167,7 @@ class CommandRouterMixin:
                 "• `/apikey <key>` - Set/update AI API key directly from Telegram\n"
                 "• `/usage` - Live token tracker & remaining free 100M quota\n"
                 "• `/checkmodels` - Ping and verify candidate models in real time\n"
-                "• `/thinking <default|low|medium|high|off>` - Adjust AI thinking/reasoning effort\n"
+                "• `/thinking <default|instant|low|medium|high|off|none>` - Adjust AI thinking/reasoning effort\n"
                 "• `/temp <0.0-1.0>` - Adjust AI randomness/creativity\n"
                 "• `/maxtokens <tokens>` - Maximum output tokens per response\n"
                 "• `/model <name>` - Set model name or comma-separated fallback chain\n"
@@ -1730,17 +1730,18 @@ class CommandRouterMixin:
                     f"🧠 *Current AI Thinking/Reasoning Effort:* `{curr}` (Default: `default`)\n\n"
                     f"*Options:*\n"
                     f"• `/thinking default` - Model's native default thinking (Default, no forced low/high)\n"
-                    f"• `/thinking low` - Ultra-fast discrete generation\n"
+                    f"• `/thinking instant` - No thinking, fastest replies (Inception Mercury; best for casual chat)\n"
+                    f"• `/thinking low` - Fast, light thinking\n"
                     f"• `/thinking medium` - Balanced reasoning depth\n"
                     f"• `/thinking high` - In-depth logical analysis\n"
-                    f"• `/thinking off` - Disable explicit reasoning effort parameter"
+                    f"• `/thinking off|none` - Disable explicit reasoning effort parameter"
                 )
             target = cmd_parts[1].lower().strip()
-            if target not in ("default", "low", "medium", "high", "off", "none"):
+            if target not in ("default", "instant", "low", "medium", "high", "off", "none"):
                 return (
                     "❌ /thinking failed\n"
                     "Missing: Valid reasoning effort option\n"
-                    "Fix: /thinking <default|low|medium|high|off> (e.g. /thinking medium)"
+                    "Fix: /thinking <default|instant|low|medium|high|off|none> (e.g. /thinking instant)"
                 )
             self.db.set_state("ai_reasoning_effort", target)
             if hasattr(self.generator.provider, "reasoning_effort"):
@@ -1780,7 +1781,10 @@ class CommandRouterMixin:
                 self.db.set_state("ai_max_tokens", str(val))
                 if hasattr(self.generator.provider, "max_tokens"):
                     self.generator.provider.max_tokens = val
-                return f"📝 AI max output tokens set to *{val}*."
+                provider = self.generator.provider
+                floor = provider.effective_max_tokens() if hasattr(provider, "effective_max_tokens") else val
+                note = f" Raised to *{floor}* when sending: reasoning models spend tokens thinking and return nothing if the limit is too small." if floor and floor > val else ""
+                return f"📝 AI max output tokens set to *{val}*.{note}"
             except ValueError:
                 return (
                     "❌ /maxtokens failed\n"
@@ -1796,6 +1800,9 @@ class CommandRouterMixin:
             temp = self.db.get_state("ai_temperature", "0.6")
             raw_mtok = self.db.get_state("ai_max_tokens", "")
             mtok = raw_mtok if raw_mtok else "default (provider decided)"
+            sent_limit = self.generator.provider.effective_max_tokens() if hasattr(self.generator.provider, "effective_max_tokens") else None
+            if raw_mtok and sent_limit and str(sent_limit) != raw_mtok:
+                mtok = f"{raw_mtok} (sent as {sent_limit}: thinking models need room to think)"
             curr_key = self.db.get_state("ai_api_key", self.config.ai_api_key or "")
             masked_key = f"`{curr_key[:7]}...{curr_key[-4:]}`" if len(curr_key) > 11 else ("`Configured`" if curr_key else "`Missing`")
             cands = []

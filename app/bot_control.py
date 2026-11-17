@@ -111,7 +111,7 @@ BOT_COMMAND_MENU: list[dict] = [
     {"command": "model", "description": "🧠 Set model or fallback chain — /model <name[,name2]>"},
     {"command": "baseurl", "description": "🔗 Custom API endpoint — /baseurl <url>"},
     {"command": "checkmodels", "description": "📡 Ping candidate models live & pick working ones"},
-    {"command": "thinking", "description": "🧩 Reasoning effort — /thinking default|low|medium|high|off"},
+    {"command": "thinking", "description": "🧩 Reasoning effort — /thinking default|instant|low|medium|high|off|none"},
     {"command": "temp", "description": "🌡️ AI creativity — /temp <0.0-1.0>"},
     {"command": "maxtokens", "description": "📏 Max output tokens — /maxtokens <tokens>"},
     {"command": "usage", "description": "📈 Token tracker — daily use & free-quota remaining"},
