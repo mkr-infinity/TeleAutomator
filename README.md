@@ -129,7 +129,7 @@ Manage your automation straight from your phone by texting your **Control Bot**:
 | **`/model <name>`** | Switch AI candidate model (supports comma-separated fallbacks) | `/model <model_name>` |
 | **`/usage`** | Displays 24h consumption, total token usage, and remaining free quota | `/usage` |
 | **`/checkmodels`** | Pings candidate models live and picks verified working ones | `/checkmodels` |
-| **`/reasoning <low\|medium\|high\|off>`** | Adjusts reasoning effort for reasoning-capable models | `/reasoning low` |
+| **`/reasoning <default\|instant\|low\|medium\|high\|off\|none>`** | Adjusts reasoning effort for reasoning-capable models | `/reasoning instant` |
 | **`/reaction <on\|off>`** | Toggles natural emoji reactions (pool of 26 mobile emojis) | `/reaction on` |
 | **`/reactioncooldown <min> <max>`**| Sets randomized reaction interval (default: 3s–9s) | `/reactioncooldown 3 9` |
 | **`/chatcooldown <min> <max>`** | Sets randomized per-chat reply cooldown (default: 5s–60s) | `/chatcooldown 5 60` |
