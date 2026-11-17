@@ -7,7 +7,7 @@ from contextlib import nullcontext
 from typing import Any, Dict, List, Optional
 
 from app.ai.prompt_manager import PromptManager
-from app.ai.provider import AIProvider, GeminiProvider, LocalRuleProvider, OpenAIProvider
+from app.ai.provider import AIProvider, GeminiProvider, IntentionalSilence, LocalRuleProvider, OpenAIProvider
 from app.config import AppConfig
 from app.logger import redact_secrets, register_secret, setup_logger
 from app.safety_manager import SENSITIVE_CONTENT_PATTERNS
@@ -123,7 +123,7 @@ class ReplyGenerator:
         )
         try:
             result = self.provider.generate_reply(prompt, redact_secrets(instructions))
-            if task == "chat summary" and (not isinstance(result, str) or not result.strip()):
+            if task == "chat summary" and not isinstance(result, IntentionalSilence) and (not isinstance(result, str) or not result.strip()):
                 raise RuntimeError("Model returned an empty chat summary")
             return result
         except Exception as exc:
@@ -219,6 +219,8 @@ class ReplyGenerator:
         )
         try:
             draft = self._generate_reply(prompt, "You are a concise chat-memory system. Output only the updated recap.", task="chat summary")
+            if isinstance(draft, IntentionalSilence):
+                return draft
             return draft.strip()[:1500]
         except Exception as e:
             logger.error(f"Failed to summarize chat history: {e}")

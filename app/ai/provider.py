@@ -16,6 +16,10 @@ from app.logger import setup_logger
 logger = setup_logger(__name__)
 
 
+class IntentionalSilence(str):
+    """An empty reply explicitly selected by the model."""
+
+
 def _reply_marker(text: str) -> str:
     """Recognize standalone output markers through quotes and light formatting."""
     return text.strip().strip("\"'`.*_?! \t\r\n").lower()
@@ -177,7 +181,7 @@ class GeminiProvider(AIProvider):
                                 continue
                             if marker == "none":
                                 logger.info(f"Gemini model '{m}' returned intentional silence (NONE).")
-                                return ""
+                                return IntentionalSilence()
                             return raw_text.strip().strip('"')
             except urllib.error.HTTPError as e:
                 last_error = e
@@ -340,7 +344,7 @@ class OpenAIProvider(AIProvider):
 
                     if marker == "none":
                         logger.info(f"OpenAI-compatible model '{m}' returned intentional silence (NONE).")
-                        return ""
+                        return IntentionalSilence()
                     return content
                 last_error = RuntimeError(f"{m} returned no choices")
                 logger.warning("OpenAI-compatible model '%s' returned no choices. Trying next candidate...", m)

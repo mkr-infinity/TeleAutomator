@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.ai.chat_context import ContextAgent
+from app.ai.provider import IntentionalSilence
 from app.storage.database import Database
 
 
@@ -292,6 +293,19 @@ def test_empty_summary_backs_off_and_clearing_memory_resets_retry(tmp_path):
         await agent.close()
 
     asyncio.run(run())
+
+
+def test_intentional_summary_silence_preserves_memory_without_failure(tmp_path):
+    db = Database(tmp_path / "state.db")
+    db.set_chat_summary(123, "Existing recap")
+    db.record_chat_message(123, 1, 2, "Contact", "Project detail")
+    agent = agent_for(db)
+    agent.generator.summarize_chat_history.return_value = IntentionalSilence()
+    asyncio.run(agent.refresh(123, force=True))
+    assert db.get_chat_summary(123) == "Existing recap"
+    assert db.get_state("chat_summary_marker_123", "0") == "0"
+    assert db.get_state("chat_summary_retry_123") == ""
+    assert not db.list_actions("failed")
 
 
 def test_close_does_not_flush_after_allowlist_revocation(tmp_path):

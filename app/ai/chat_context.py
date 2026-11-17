@@ -7,6 +7,7 @@ import json
 import time
 from dataclasses import dataclass
 
+from app.ai.provider import IntentionalSilence
 from app.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -125,6 +126,8 @@ class ContextAgent:
             title = (self.db.get_chat_metadata(chat_id) or {}).get("title") or "This chat"
             summary = await asyncio.to_thread(self.generator.summarize_chat_history, title,
                                              self.db.get_chat_summary(chat_id), raw, is_group=chat_id < 0)
+            if isinstance(summary, IntentionalSilence):
+                return
             if not isinstance(summary, str) or not summary.strip():
                 raise RuntimeError("Summary model returned no content")
             if not self.allowed(chat_id):
