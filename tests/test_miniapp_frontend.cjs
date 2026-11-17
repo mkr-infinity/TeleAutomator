@@ -38,7 +38,10 @@ const context = {
 };
 vm.createContext(context);
 const file = path.join(__dirname, "../miniapp/app.js");
-const source = fs.readFileSync(file, "utf8").replace(
+const miniappSource = fs.readFileSync(file, "utf8");
+assert.match(miniappSource, /modelEl\.textContent = `Healthy models: \$\{res\.working_models\.join\(", "\)\}`;/,
+  "the health headline must list only models verified by the current request");
+const source = miniappSource.replace(
   /\n  init\(\)\.catch\([^\n]+\);\n/, "\n  globalThis.testAPI = { api, syncField, refreshMore, renderMoreControls, flushOfflineQueue, enqueueAction, loadOfflineQueue, setUser(id) { activeUserId = id; } };\n"
 );
 assert.match(source, /globalThis.testAPI/);
