@@ -312,8 +312,10 @@ def register_handlers(
                 logger.info(f"[THREAD END] Left on read — conversation closed naturally in chat {chat_id}.")
                 return
 
+        # Open invitations and questions selected for a reply must reach the writer as text.
+        text_first_group_message = is_group and (engagement == "open" or "?" in text or "？" in text)
         # Natural emoji reaction across sentiment spectrum (humor, excitement, agreement, surprise, warmth)
-        if not is_group or not is_reply_to_other:
+        if (not is_group or not is_reply_to_other) and not text_first_group_message:
             reacted = await reply_manager.maybe_send_reaction(chat_id, message_id, text)
             if reacted and not is_mention:
                 react_only_prob = float(reply_manager.db.get_state("react_only_probability", str(getattr(reply_manager.config, "react_only_probability", 0.25))))

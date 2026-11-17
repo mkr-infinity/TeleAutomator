@@ -132,6 +132,17 @@ def test_handler_at_full_chatty_replies_in_words_for_questions_and_mostly_for_st
     assert s.manager.handle_incoming_eligible_message.await_count == 2
 
 
+def test_short_group_question_cannot_be_consumed_by_reaction_only_path(tmp_path):
+    s = make_stack(tmp_path)
+    s.db.set_state("chat_chatty_-100111", "1.0")
+    callback = build_handler(s)
+    s.manager.maybe_send_reaction = AsyncMock(return_value=True)
+    with patch("random.random", side_effect=[0.0, 0.5]):
+        asyncio.run(callback(event("Anyone?", 304)))
+    s.manager.handle_incoming_eligible_message.assert_awaited_once()
+    s.manager.maybe_send_reaction.assert_not_awaited()
+
+
 def test_skips_are_logged_with_a_reason(tmp_path, caplog):
     s = make_stack(tmp_path)
     callback = build_handler(s)
