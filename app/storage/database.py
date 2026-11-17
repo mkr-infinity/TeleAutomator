@@ -582,6 +582,12 @@ class Database:
                                 (*ids, max(1, min(500, limit)))).fetchall()
             return [dict(row) for row in rows]
 
+    def count_incoming_since(self, chat_id: int, since_row_id: int) -> int:
+        """Incoming messages that arrived after the given row id."""
+        with self._get_connection() as conn:
+            return int(conn.execute("SELECT COUNT(*) FROM chat_messages WHERE chat_id=? AND is_outgoing=0 AND id>?",
+                                    (chat_id, since_row_id)).fetchone()[0])
+
     def latest_incoming_row_id(self, chat_id: int) -> int:
         with self._get_connection() as conn:
             return int(conn.execute("SELECT COALESCE(MAX(id),0) FROM chat_messages WHERE chat_id=? AND is_outgoing=0", (chat_id,)).fetchone()[0])

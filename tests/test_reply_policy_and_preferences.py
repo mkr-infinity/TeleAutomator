@@ -53,12 +53,20 @@ def test_group_participation_requires_relevance_and_respects_zero(tmp_path):
         asyncio.run(handlers[0](event))
     s.manager.handle_incoming_eligible_message.assert_not_awaited()
     s.db.set_state("chat_chatty_-100111", "1")
-    for text in ("Good morning everyone", "I have already finished all of my work for today", "@somebody what did you think?"):
+    # Tagging a specific member is never joined, even at 100%.
+    event.raw_text = "@somebody what did you think?"
+    event.id += 1
+    with patch("random.random", return_value=0):
+        asyncio.run(handlers[0](event))
+    s.manager.handle_incoming_eligible_message.assert_not_awaited()
+    # At 100% a hello to everyone and an ordinary statement are both chances to join in.
+    for text in ("Good morning everyone", "I have already finished all of my work for today"):
         event.raw_text = text
         event.id += 1
-        with patch("random.random", return_value=0):
+        with patch("random.random", side_effect=[0, 0.5, 0.5, 0.5]):  # chance roll passes, reaction roll says "reply in words"
             asyncio.run(handlers[0](event))
-    s.manager.handle_incoming_eligible_message.assert_not_awaited()
+    assert s.manager.handle_incoming_eligible_message.await_count == 2
+    s.manager.handle_incoming_eligible_message.reset_mock()
     event.raw_text = "Anyone have thoughts on this release?"
     event.is_reply = True
     event.get_reply_message = AsyncMock(return_value=None)

@@ -187,6 +187,7 @@ def register_handlers(
                     pass
 
         is_mention = not is_group or (is_explicitly_mentioned or is_reply_to_me)
+        engagement = ""
         addressless_text = re.sub(r"@\w+", "", text)
         if owner_name:
             addressless_text = re.sub(r"\b" + re.escape(owner_name) + r"\b", "", addressless_text, flags=re.IGNORECASE)
@@ -251,47 +252,48 @@ def register_handlers(
                 logger.debug(f"Group message in {chat_id} ignored: strict mention-only active.")
                 return
 
-            if not is_mention and (is_reply_to_other or re.search(r"@\w+", text)):
-                reply_manager.db.record_action("automation", "reply", "skipped", "Message addresses another participant", chat_id=chat_id)
+            def skip(reason):
+                reply_manager.db.record_action("automation", "reply", "skipped", reason, chat_id=chat_id)
+                logger.info("[GROUP SKIP] chat %s: %s", chat_id, reason)
+
+            if not is_mention and re.match(r"\s*@\w+", text):
+                skip("Message is addressed to a specific member")
                 return
 
             if is_thread_ender(addressless_text):
-                reply_manager.db.record_action("automation", "reply", "skipped", "Conversation already ended", chat_id=chat_id)
+                skip("Conversation already ended")
                 return
 
             if is_mention:
                 # Addressed messages can proceed; the model may still choose NONE.
                 reply_manager.mark_group_activity(chat_id)
             else:
-                if not reply_manager.is_group_message_relevant(chat_id, text, chat_title):
-                    reply_manager.db.record_action("automation", "reply", "skipped", "No relevant contribution requested", chat_id=chat_id)
-                    return
-                # Frequencies are ceilings for relevant messages, not permission to interrupt other threads.
-                effective_prob = reply_manager.group_chatty_probability(chat_id)
-
-                # Quiet rooms can reduce the configured chance, never increase it.
                 try:
-                    recent_active = len(reply_manager.db.get_recent_chat_messages(
-                        chat_id, limit=6, max_age_seconds=300
-                    ))
+                    recent_active = len(reply_manager.db.get_recent_chat_messages(chat_id, limit=6, max_age_seconds=300))
+                    idle_before = len(reply_manager.db.get_recent_chat_messages(chat_id, limit=3, max_age_seconds=1200)) <= 1
                 except Exception:
-                    recent_active = 0
-                effective_prob = adjust_engagement_for_room_heat(effective_prob, recent_active)
-
-                if effective_prob > 0.0 and random.random() < effective_prob:
-                    # Decide between text reply (~80%) and emoji reaction (~20%)
-                    if random.random() < 0.80:
-                        logger.info(f"[GROUP ENGAGEMENT] Active chime-in in group {chat_id} (prob: {effective_prob:.2f}). Replying as human.")
-                        reply_manager.mark_group_activity(chat_id)
-                    else:
-                        logger.info(f"[GROUP REACTION] Chime-in with emoji reaction in group {chat_id}.")
-                        await reply_manager.maybe_send_reaction(chat_id, message_id, text)
-                        reply_manager.mark_group_activity(chat_id)
-                        return
-                else:
-                    reply_manager.db.record_action("automation", "reply", "skipped", "Occasional participation limit", chat_id=chat_id)
-                    logger.debug(f"Group message in {chat_id} read silently (prob: {effective_prob:.2f}).")
+                    recent_active, idle_before = 0, False
+                chance, engagement, reason = reply_manager.plan_group_engagement(
+                    chat_id, text, chat_title, is_reply_to_other=is_reply_to_other,
+                    recent_active=recent_active, idle_before=idle_before)
+                if chance <= 0.0:
+                    skip(reason)
                     return
+                if random.random() >= chance:
+                    skip("Occasional participation limit")
+                    logger.debug(f"Group message in {chat_id} read silently (chance: {chance:.2f}).")
+                    return
+                # Like a person: questions and invitations get words; news, jokes and statements often just
+                # get a reaction. A fully chatty chat (100%) answers in words most of the time.
+                asked = "?" in text or "？" in text
+                reaction_share = 0.0 if (engagement == "open" or asked) else (0.10 if chance >= 1.0 else 0.20)
+                if random.random() < reaction_share:
+                    logger.info(f"[GROUP REACTION] Chime-in with emoji reaction in group {chat_id}.")
+                    await reply_manager.maybe_send_reaction(chat_id, message_id, text)
+                    reply_manager.mark_group_activity(chat_id)
+                    return
+                logger.info(f"[GROUP ENGAGEMENT] Active chime-in in group {chat_id} ({engagement or 'relevant'}, chance: {chance:.2f}). Replying as human.")
+                reply_manager.mark_group_activity(chat_id)
 
         # Natural conversation endings (DMs & direct replies): when the other person closes the
         # loop ("gn", "ok cool", "thanks bro", laughter, emoji-only), a real human mostly reacts
@@ -385,4 +387,5 @@ def register_handlers(
             text=text,
             conversation_history=conversation_history,
             is_mention=is_mention,
+            engagement=engagement,
         )

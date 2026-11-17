@@ -167,7 +167,16 @@ def test_new_incoming_supersedes_snapshot_but_own_bubbles_do_not(tmp_path, cid, 
         db.record_chat_message(cid, mid, 1, "Owner", "Own bubble", is_outgoing=True, is_automated=True)
         assert agent.is_current(snapshot)
     db.record_chat_message(cid, 4, 2, "Contact", "New topic")
-    assert not agent.is_current(snapshot)
+    if cid > 0:
+        assert not agent.is_current(snapshot)  # a private chat: a newer message always supersedes
+    else:
+        # A busy group keeps talking: a waiting reply survives a few messages, then the room has moved on.
+        assert agent.is_current(snapshot)
+        for mid in (5, 6):
+            db.record_chat_message(cid, mid, 3, "Other", "More chatter")
+        assert agent.is_current(snapshot)
+        db.record_chat_message(cid, 7, 3, "Other", "Even more")
+        assert not agent.is_current(snapshot)
     assert agent.is_current(agent.snapshot(cid, is_mention=mention))
 
 

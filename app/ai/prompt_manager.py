@@ -496,6 +496,20 @@ class PromptManager:
         text = text.strip()
         return "" if outgoing_block_reason(text, [sender_name or "", *(participant_names or [])]) else text
 
+    @staticmethod
+    def engagement_note(engagement: str) -> str:
+        """Extra guidance for unaddressed group messages the account decided to join (no sample replies)."""
+        if engagement == "open":
+            return ("Group Engagement: This message is open to everyone in the group (a hello to all, a general question, "
+                    "or someone starting a conversation). A real member would usually join in, so answer naturally using the "
+                    "pinned info, notes, voice and recent messages above, and follow the owner's persona and context. "
+                    "This overrides the general advice that greetings need no reply. Use NONE only when you truly have nothing natural to add.\n")
+        if engagement == "thread":
+            return ("Group Engagement: This message is part of a conversation between other members. Join only because it "
+                    "concerns this group's own topics and details from the notes and pins above; keep it short and natural, "
+                    "and use NONE when you have nothing real to add.\n")
+        return ""
+
     def build_user_prompt(
         self,
         sender_name: str,
@@ -506,6 +520,7 @@ class PromptManager:
         is_mention: bool = False,
         persona_override: Optional[str] = None,
         style_override: Optional[str] = None,
+        engagement: str = "",
     ) -> str:
         """Create prompt containing message context, history, permanent chat context, language rule, and dynamic owner identity."""
         parts: List[str] = []
@@ -647,10 +662,11 @@ class PromptManager:
             f"Language Rule: {lang_instruction}\n"
             f"Context Rule: {context_instruction}\n"
             f"Engagement Rule: {engagement_instruction}\n"
+            f"{self.engagement_note(engagement)}"
             f"Punctuation & Emojis: Pick ANY emoji that matches the meaning of your words. Use as many or as few as the vibe genuinely calls for — vary placement: end, mid-line, or often none (most messages have zero emojis; never end with funny emojis as filler). Only ONE emotion per message — never mix two feelings. NEVER use question marks (?).\n"
             f"Latest incoming message from {sender_name}:\n"
             f'"{incoming_text}"\n\n'
-            f"Output exactly NONE if a reply adds no value, addresses another participant, asks about automation, or requires an unknown personal fact. "
+            f"Output exactly NONE if a reply adds no value, {'' if engagement else 'addresses another participant, '}asks about automation, or requires an unknown personal fact. "
             f"Otherwise draft one useful message following the configured length for {self.owner_name} {lang_tail}. "
             f"Start with a capital letter; never include participant names, usernames, links, assistant introductions, or invented personal facts."
         )

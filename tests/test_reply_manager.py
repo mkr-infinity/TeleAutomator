@@ -2368,10 +2368,13 @@ def test_event_handler_group_broadcast_engagement(tmp_path: Path):
         event.get_sender = AsyncMock(return_value=mock_sender)
 
         # Execute event handler with deterministic roll
+        mgr.handle_incoming_eligible_message = AsyncMock()
         with patch("random.random", return_value=0.1):
             await callback(event)
 
-        # A generic room greeting does not demand a text reply.
+        # A hello to everyone is an open invitation: it goes to the reply writer, which may still choose NONE.
+        mgr.handle_incoming_eligible_message.assert_awaited_once()
+        assert mgr.handle_incoming_eligible_message.await_args.kwargs["engagement"] == "open"
         mock_client.send_message.assert_not_awaited()
 
     asyncio.run(_run())

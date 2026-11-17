@@ -536,6 +536,7 @@ class ReplyManager(CommandRouterMixin):
         text: str,
         conversation_history: Optional[Any] = None,
         is_mention: bool = False,
+        engagement: str = "",
     ) -> None:
         """Process an incoming message that has passed initial message filters."""
         if self._closed:
@@ -562,6 +563,7 @@ class ReplyManager(CommandRouterMixin):
                 text=text,
                 conversation_history=conversation_history,
                 is_mention=is_mention,
+                engagement=engagement,
             )
             return
 
@@ -574,6 +576,7 @@ class ReplyManager(CommandRouterMixin):
             "sender_name": sender_name,
             "text": text,
             "is_mention": is_mention,
+            "engagement": engagement,
             "received_at": now,
         }
 
@@ -624,6 +627,7 @@ class ReplyManager(CommandRouterMixin):
             latest_sender_id = latest_item["sender_id"]
             chat_title = latest_item["chat_title"]
             any_mention = any(m.get("is_mention", False) for m in items)
+            engagement = next((m["engagement"] for m in reversed(items) if m.get("engagement")), "")
 
             if len(items) == 1:
                 stitched_text = items[0]["text"]
@@ -649,6 +653,7 @@ class ReplyManager(CommandRouterMixin):
                 text=stitched_text,
                 conversation_history=fresh_history,
                 is_mention=any_mention,
+                engagement=engagement,
             )
         except asyncio.CancelledError:
             pass
@@ -665,6 +670,7 @@ class ReplyManager(CommandRouterMixin):
         text: str,
         conversation_history: Optional[Any] = None,
         is_mention: bool = False,
+        engagement: str = "",
     ) -> None:
         """Process a single or stitched incoming message."""
         if self._closed or not self.privacy.is_chat_allowed(chat_id, chat_id < 0):
@@ -759,6 +765,7 @@ class ReplyManager(CommandRouterMixin):
                     permanent_context=permanent_context_str,
                     is_group=(chat_id < 0),
                     is_mention=is_mention,
+                    engagement=engagement,
                 )
 
             # Suggestion 1: Natural Read-Receipt Delay Simulation (2–4s hesitation before marking read)
@@ -1782,7 +1789,16 @@ class ReplyManager(CommandRouterMixin):
         if self.is_group_broadcast_or_greeting(clean_text) and not re.search(r"\?|\b(?:anyone|anybody|thoughts|opinions)\b", clean_text):
             return False
 
-        # 1. Check permanent context and pinned info
+        if self._matches_group_context(chat_id, clean_text, chat_title):
+            return True
+
+        # Open questions can invite the room; message length alone never does.
+        return len(clean_text.split()) >= 4 and bool(re.search(
+            r"[?？]|\b(?:anyone|anybody|thoughts|opinions|suggestions)\b|^(?:how|what|which|why|where|when|can|could|does|has|have)\b", clean_text
+        ))
+
+    def _matches_group_context(self, chat_id: int, clean_text: str, chat_title: str = "") -> bool:
+        """True when the message shares meaningful words with the group's own notes, pins or title."""
         ctx = self.db.get_permanent_context(chat_id)
         context_corpus = ""
         if ctx:
@@ -1798,11 +1814,53 @@ class ReplyManager(CommandRouterMixin):
                 msg_words = set(re.findall(r"\b[a-zA-Z]{4,}\b", clean_text))
                 if msg_words.intersection(meaningful_kw):
                     return True
+        return False
 
-        # Open questions can invite the room; message length alone never does.
-        return len(clean_text.split()) >= 4 and bool(re.search(
-            r"[?？]|\b(?:anyone|anybody|thoughts|opinions|suggestions)\b|^(?:how|what|which|why|where|when|can|could|does|has|have)\b", clean_text
+    # A greeting to everyone, an open question or someone starting a conversation is a natural chance to
+    # join in, even with the default chatty rate: such messages get at least this chance to be answered.
+    OPEN_INVITE_MIN_CHANCE = 0.6
+
+    def is_open_group_invite(self, text: str) -> bool:
+        """The message is for the whole room: a hello to everyone or a general question."""
+        clean = text.strip().lower()
+        if not clean:
+            return False
+        if self.is_group_broadcast_or_greeting(clean):
+            return True
+        return len(clean.split()) >= 3 and bool(re.search(
+            r"[?？]|\b(?:anyone|anybody|everyone|guys|thoughts|opinions|suggestions)\b|^(?:how|what|which|why|where|when|who|can|could|does|has|have|is|are|any)\b", clean
         ))
+
+    def plan_group_engagement(self, chat_id: int, text: str, chat_title: str = "", *, is_reply_to_other: bool = False,
+                              recent_active: int = 3, idle_before: bool = False) -> tuple[float, str, str]:
+        """Decide how an unaddressed group message is treated: (chance 0..1, engagement mode, skip reason).
+
+        Modes: "open" (for the whole room), "thread" (members talking to each other about the group's own
+        topics) or "" (ordinary relevant message). A chance of 0 means skip, with the reason.
+        """
+        base = self.group_chatty_probability(chat_id)
+        if base <= 0:
+            return 0.0, "", "Chatty is off for this chat"
+        if re.match(r"\s*@\w+", text):
+            return 0.0, "", "Message is addressed to a specific member"
+        full = base >= 1.0
+        clean = text.strip().lower()
+        invite = self.is_open_group_invite(clean) or idle_before
+        if is_reply_to_other:
+            # Joining other people's thread is fine only when it is about this group's own details.
+            if not self._matches_group_context(chat_id, clean, chat_title):
+                return 0.0, "", "Thread between other members, unrelated to this group's topics"
+            mode, chance = "thread", base
+        elif invite:
+            mode, chance = "open", max(base, self.OPEN_INVITE_MIN_CHANCE)
+        elif full or self.is_group_message_relevant(chat_id, text, chat_title):
+            mode, chance = "", base
+        else:
+            return 0.0, "", "No relevant contribution requested"
+        if not full and mode != "open":
+            from app.event_handlers import adjust_engagement_for_room_heat
+            chance = adjust_engagement_for_room_heat(chance, recent_active)
+        return chance, mode, ""
 
     def check_group_20m_idle(self, chat_id: int) -> bool:
         """Check if 20 minutes (1200s) have passed without any reply or engagement in this group."""

@@ -155,7 +155,8 @@ def test_reply_is_discarded_if_its_context_changes_during_generation(tmp_path, c
 
     def generate(**_):
         if change == "new_topic":
-            s.db.record_chat_message(-100111, 2, 333, "Bob", "Let's discuss the next meetup instead")
+            for number in range(2, 6):  # the room moved on: more messages than a pending group reply tolerates
+                s.db.record_chat_message(-100111, number, 333, "Bob", f"Let's discuss the next meetup instead {number}")
         else:
             s.db.clear_chat_context(-100111)
         return "The release is due Friday"
@@ -169,7 +170,8 @@ def test_reply_is_discarded_if_its_context_changes_during_generation(tmp_path, c
 def test_deferred_and_transport_paths_also_reject_stale_context(tmp_path):
     s = make_stack(tmp_path)
     context = s.manager.context_agent.snapshot(-100111)
-    s.db.record_chat_message(-100111, 2, 333, "Bob", "New topic")
+    for number in range(2, 6):
+        s.db.record_chat_message(-100111, number, 333, "Bob", f"New topic {number}")
 
     async def run():
         await s.manager._schedule_deferred_reply(-100111, 1, "Old reply", context=context)
