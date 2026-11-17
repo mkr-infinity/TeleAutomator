@@ -511,6 +511,7 @@
         <label>Reasoning Effort (Thinking)</label>
         <div class="segrow" id="seg-thinking">
           <button type="button" class="seg active" data-param="thinking" data-val="default">Default</button>
+          <button type="button" class="seg" data-param="thinking" data-val="instant">Instant</button>
           <button type="button" class="seg" data-param="thinking" data-val="low">Low</button>
           <button type="button" class="seg" data-param="thinking" data-val="medium">Medium</button>
           <button type="button" class="seg" data-param="thinking" data-val="high">High</button>
@@ -541,6 +542,7 @@
           <button type="button" class="seg" data-param="maxtokens" data-val="1024">1024 Detailed</button>
           <button type="button" class="seg" data-param="maxtokens" data-val="2048">2048 Long</button>
         </div>
+        <p class="field-hint">Mercury and other thinking models spend part of this limit on reasoning, so Inception endpoints raise anything under 3000 automatically. Chat replies stay short either way.</p>
       </div>
 
       <!-- Keyword Auto-Reply Rules -->
