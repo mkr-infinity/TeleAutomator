@@ -950,8 +950,9 @@ def test_custom_playground_does_not_route_googleapis_path_to_google(tmp_path, mo
     assert seen == ["https://custom.example/googleapis.com/v1/chat/completions"]
 
 
+@pytest.mark.parametrize("base", ["https://custom.example", "https://custom.example/openai"])
 @pytest.mark.parametrize("status", [404, 401, 429])
-def test_root_model_discovery_only_retries_missing_v1_path(tmp_path, monkeypatch, status):
+def test_model_discovery_only_retries_missing_v1_path(tmp_path, monkeypatch, status, base):
     from unittest.mock import MagicMock
     ctx, _ = make_ctx(tmp_path)
     seen = []
@@ -959,7 +960,7 @@ def test_root_model_discovery_only_retries_missing_v1_path(tmp_path, monkeypatch
     def request(req, timeout):
         seen.append(req.full_url)
         assert req.get_header("Authorization") == "Bearer fixture-key"
-        if req.full_url == "https://custom.example/models":
+        if req.full_url == base + "/models":
             raise urllib.error.HTTPError(req.full_url, status, "Unavailable", {}, None)
         response = MagicMock()
         response.__enter__.return_value = response
@@ -967,14 +968,14 @@ def test_root_model_discovery_only_retries_missing_v1_path(tmp_path, monkeypatch
         return response
 
     monkeypatch.setattr(urllib.request, "urlopen", request)
-    result = MiniAppAPI(ctx).handle_fetch_models("https://custom.example", "fixture-key")
+    result = MiniAppAPI(ctx).handle_fetch_models(base, "fixture-key")
     if status == 404:
         assert result["ok"] and result["models"] == ["custom-model"]
-        assert seen == ["https://custom.example/models", "https://custom.example/v1/models"]
+        assert seen == [base + "/models", base + "/v1/models"]
         assert result["url"] == seen[-1]
     else:
         assert not result["ok"]
-        assert seen == ["https://custom.example/models"]
+        assert seen == [base + "/models"]
 
 
 @pytest.mark.parametrize("kind", ["gemini", "custom"])

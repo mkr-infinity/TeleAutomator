@@ -233,6 +233,24 @@ def test_custom_provider_does_not_inherit_vendor_models_or_limits(base):
     assert provider.effective_max_tokens() == 512
 
 
+def test_custom_prefix_is_preserved_when_retrying_v1(monkeypatch):
+    provider = OpenAIProvider("fixture", model="custom-model", base_url="https://custom.example/openai")
+    requests = []
+
+    def request(req, timeout):
+        requests.append(req.full_url)
+        if len(requests) == 1:
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+        reply = MagicMock()
+        reply.read.return_value = json.dumps({"choices": [{"message": {"content": "Ready"}}]}).encode()
+        reply.__enter__.return_value = reply
+        return reply
+
+    monkeypatch.setattr("urllib.request.urlopen", request)
+    assert provider.generate_reply("hi", "instructions") == "Ready"
+    assert requests == ["https://custom.example/openai/chat/completions", "https://custom.example/openai/v1/chat/completions"]
+
+
 @pytest.mark.parametrize("content,working", [("Ready", True), (None, False), ("", False), ("NONE", True), ({"text": "unexpected"}, False), (["unexpected"], False), (123, False), (False, False)])
 def test_model_check_uses_custom_endpoint_fallback_and_rejects_empty_answers(monkeypatch, content, working):
     provider = OpenAIProvider("fixture", model="custom-model", base_url="https://custom.example")

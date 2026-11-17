@@ -1163,9 +1163,10 @@ class MiniAppAPI:
                     body = json.loads(resp.read().decode("utf-8"))
             except urllib.error.HTTPError as error:
                 parts = urllib.parse.urlsplit(models_url)
-                if error.code != 404 or parts.path != "/models":
+                prefix = parts.path.removesuffix("/models").rstrip("/")
+                if error.code != 404 or prefix.endswith("/v1"):
                     raise
-                models_url = urllib.parse.urlunsplit((parts.scheme, parts.netloc, "/v1/models", "", ""))
+                models_url = urllib.parse.urlunsplit((parts.scheme, parts.netloc, prefix + "/v1/models", "", ""))
                 req = urllib.request.Request(models_url, headers=headers, method="GET")
                 with urllib.request.urlopen(req, timeout=10.0) as resp:
                     body = json.loads(resp.read().decode("utf-8"))

@@ -271,8 +271,9 @@ class OpenAIProvider(AIProvider):
     def _fallback_endpoint(self) -> str:
         """Many OpenAI-compatible hosts only serve /v1; a base URL typed without it is retried once."""
         parts = urllib.parse.urlsplit(self.endpoint_url)
-        if parts.path.rstrip("/") == "/chat/completions":
-            return urllib.parse.urlunsplit((parts.scheme, parts.netloc, "/v1/chat/completions", "", ""))
+        prefix = parts.path.removesuffix("/chat/completions").rstrip("/")
+        if not prefix.endswith("/v1"):
+            return urllib.parse.urlunsplit((parts.scheme, parts.netloc, prefix + "/v1/chat/completions", "", ""))
         return ""
 
     def generate_reply(self, prompt: str, system_instructions: str) -> str:
