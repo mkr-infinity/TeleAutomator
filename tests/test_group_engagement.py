@@ -169,9 +169,23 @@ def test_skips_are_logged_with_a_reason(tmp_path, caplog):
     callback = build_handler(s)
     with caplog.at_level("INFO"):
         asyncio.run(callback(event("@alex did you send it", 303)))
-    assert "[GROUP SKIP]" in caplog.text and "specific member" in caplog.text
+    assert caplog.text.count("[GROUP SKIP]") == 1
+    assert "chat -100111" in caplog.text and "specific member" in caplog.text
+    assert "@alex did you send it" not in caplog.text
     s.manager.handle_incoming_eligible_message.assert_not_awaited()
     assert s.db.list_actions("skipped")[0]["detail"].startswith("Message is addressed")
+
+
+def test_later_group_skip_is_logged_from_action_history_without_message_text(tmp_path, caplog):
+    s = make_stack(tmp_path)
+    s.manager.owner_recently_active = lambda _: True
+    sensitive_detail = "private words from this group message"
+    with caplog.at_level("INFO"):
+        asyncio.run(s.manager._process_incoming_message(
+            GROUP, "Crypto Builders", 304, 222, "Member", sensitive_detail))
+    assert caplog.text.count("[GROUP SKIP]") == 1
+    assert "chat -100111" in caplog.text and "Owner replied by hand recently" in caplog.text
+    assert sensitive_detail not in caplog.text
 
 
 def test_pending_group_reply_survives_chatter_but_not_memory_clear(tmp_path):

@@ -141,7 +141,10 @@ def register_handlers(
         # Regular incoming message handling
         is_eligible, reason = message_filter.evaluate_context(event)
         if not is_eligible:
-            logger.debug(f"Message ignored: {reason}")
+            if getattr(event, "is_group", False):
+                logger.info("[GROUP SKIP] chat %s: %s", chat_id, reason)
+            else:
+                logger.debug(f"Message ignored: {reason}")
             return
 
         is_group = getattr(event, "is_group", False)
@@ -247,15 +250,14 @@ def register_handlers(
 
         # Group smart engagement decision
         if is_group and reply_manager.db:
+            def skip(reason):
+                reply_manager.db.record_action("automation", "reply", "skipped", reason, chat_id=chat_id)
+
             # Mention-only filter (default: OFF / "0" so account actively engages in group)
             strict_mention = reply_manager.db.get_state("group_mention_only", "0") == "1"
             if strict_mention and not is_mention:
-                logger.info("[GROUP SKIP] chat %s: strict mention-only active", chat_id)
+                skip("Strict mention-only mode is enabled for groups")
                 return
-
-            def skip(reason):
-                reply_manager.db.record_action("automation", "reply", "skipped", reason, chat_id=chat_id)
-                logger.info("[GROUP SKIP] chat %s: %s", chat_id, reason)
 
             if is_reply_to_other and reply_msg is None and not is_mention:
                 skip("Reply target could not be resolved")

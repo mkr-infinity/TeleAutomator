@@ -356,6 +356,11 @@ class Database:
                 )
                 if row.lastrowid % 100 == 0:
                     conn.execute("DELETE FROM action_history WHERE id <= ?", (row.lastrowid - 1000,))
+            if (isinstance(chat_id, int) and chat_id < 0
+                    and source in {"automation", "humanizer"} and action == "reply"
+                    and status in {"skipped", "blocked"}):
+                safe_detail = redact_secrets(detail).replace("\r", " ").replace("\n", " ")[:300]
+                logger.info("[GROUP SKIP] chat %s: %s", chat_id, safe_detail)
         except Exception:
             logger.warning("Could not record action history")
 
