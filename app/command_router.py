@@ -167,7 +167,7 @@ class CommandRouterMixin:
                 "• `/apikey <key>` - Set/update AI API key directly from Telegram\n"
                 "• `/usage` - Live token tracker & remaining free 100M quota\n"
                 "• `/checkmodels` - Ping and verify candidate models in real time\n"
-                "• `/thinking <default|low|medium|high|off>` - Adjust AI thinking/reasoning effort\n"
+                "• `/thinking <default|instant|low|medium|high|off|none>` - Adjust AI thinking/reasoning effort\n"
                 "• `/temp <0.0-1.0>` - Adjust AI randomness/creativity\n"
                 "• `/maxtokens <tokens>` - Maximum output tokens per response\n"
                 "• `/model <name>` - Set model name or comma-separated fallback chain\n"
@@ -1734,14 +1734,14 @@ class CommandRouterMixin:
                     f"• `/thinking low` - Fast, light thinking\n"
                     f"• `/thinking medium` - Balanced reasoning depth\n"
                     f"• `/thinking high` - In-depth logical analysis\n"
-                    f"• `/thinking off` - Disable explicit reasoning effort parameter"
+                    f"• `/thinking off|none` - Disable explicit reasoning effort parameter"
                 )
             target = cmd_parts[1].lower().strip()
             if target not in ("default", "instant", "low", "medium", "high", "off", "none"):
                 return (
                     "❌ /thinking failed\n"
                     "Missing: Valid reasoning effort option\n"
-                    "Fix: /thinking <default|instant|low|medium|high|off> (e.g. /thinking instant)"
+                    "Fix: /thinking <default|instant|low|medium|high|off|none> (e.g. /thinking instant)"
                 )
             self.db.set_state("ai_reasoning_effort", target)
             if hasattr(self.generator.provider, "reasoning_effort"):

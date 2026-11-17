@@ -39,6 +39,19 @@ def test_command_menu_entries_are_valid_and_unique():
         assert desc and len(desc) <= 256  # Telegram description limit
 
 
+def test_thinking_options_are_discoverable_in_bot_help_and_menu(tmp_path):
+    import asyncio
+    from app.bot_control import BOT_COMMAND_MENU
+
+    manager = _make_manager(tmp_path)
+    usage = "<default|instant|low|medium|high|off|none>"
+    thinking_menu = next(item for item in BOT_COMMAND_MENU if item["command"] == "thinking")
+    assert "instant" in thinking_menu["description"] and "none" in thinking_menu["description"]
+    assert usage in asyncio.run(manager.handle_control_command("/help"))
+    details = asyncio.run(manager.handle_control_command("/thinking"))
+    assert "/thinking instant" in details and "/thinking off|none" in details
+
+
 def test_quick_menu_markup_structure():
     markup = quick_menu_markup()
     rows = markup["inline_keyboard"]
