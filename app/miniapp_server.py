@@ -1155,7 +1155,7 @@ class MiniAppAPI:
             raw_url = raw_url[:-len("/chat/completions")].rstrip("/")
         models_url = raw_url if raw_url.endswith("/models") else f"{raw_url}/models"
 
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": "application/json", "User-Agent": "TeleAutomator/3 (+https://github.com/mkr-infinity/TeleAutomator)"}
         if key:
             headers["Authorization"] = f"Bearer {key}"
 
@@ -1358,7 +1358,7 @@ class MiniAppAPI:
                 req = urllib.request.Request(
                     endpoint,
                     data=data,
-                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}", "User-Agent": "TeleAutomator/3 (+https://github.com/mkr-infinity/TeleAutomator)"},
                     method="POST",
                 )
                 try:

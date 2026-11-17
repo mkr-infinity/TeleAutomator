@@ -168,6 +168,7 @@ Paths below are repository-relative. Read actual code before using this map as a
 | `tests/test_deferred_delay_budget.py` | Queue/lock time credited toward reading without skipping typing or Stop. |
 | `tests/test_delivery_integrity.py` | Delivery retry guards, stale drafts, chatty parsing, approval batches, and sleep pauses. |
 | `tests/test_frontend.py` | Pytest wrappers for Node and browser workflow tests. |
+| `tests/test_group_engagement.py` | Open invitations, thread joining, 100% chatty, reaction share, skip logs, pending-reply tolerance, and summary back-off. |
 | `tests/test_human_text_policy.py` | Two-line limit, code and instruction guards, and human-text cleaning. |
 | `tests/test_launchers.py` | Launcher and container entrypoint behavior (ownership, privilege drop, storage checks). |
 | `tests/test_logger.py` | Log redaction. |
