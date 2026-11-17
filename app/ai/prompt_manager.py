@@ -494,10 +494,16 @@ class PromptManager:
                      "chinese|italian|bengali|urdu|punjabi|marathi|telugu|tamil|gujarati|korean|turkish|"
                      "vietnamese|polish|dutch|indonesian")
         return bool(re.search(
-            rf"(?:^|[.!?;,\n]|\band\b)\s*(?:please\s+)?(?:(?:always|only|you must|you should)\s+)?"
+            rf"(?:^|[.!?;,\n]|\band\b)\s*(?:[-*•]\s*)?(?:please\s+)?"
+            rf"(?:(?:i\s+(?:want|would like|need)\s+you\s+to|make\s+sure\s+you|"
+            rf"(?:my\s+)?preference\s*:\s*|language\s*:\s*)\s*)?"
+            rf"(?:(?:always|only|you must|you should)\s+)?"
             rf"(?:reply|respond|answer|write|speak|talk|use)\b[^.!?;\n]{{0,80}}\b(?:{languages})\b"
+            rf"|(?:^|[.!?;,\n])\s*(?:[-*•]\s*)?(?:the\s+)?(?:reply|response|answer|output)\s+"
+            rf"(?:should|must|needs to)\s+be\s+(?:written\s+)?in\s+(?:{languages})\b"
             rf"|(?:^|[.;\n])\s*(?:{languages})\s+only\b"
             r"|\b(?:reply|response|output)\s+language\s*[:=]"
+            rf"|(?:^|[.;\n])\s*(?:preferred\s+)?language\s*[:=]\s*(?:{languages})\b"
             r"|\bmatch\s+(?:the\s+)?(?:sender(?:'s)?|conversation|chat)(?:\s+\w+){0,2}\s+language\b",
             text, re.IGNORECASE,
         ))
